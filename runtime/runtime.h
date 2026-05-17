@@ -142,4 +142,63 @@ static inline void topaz_console_log_number(topaz_number n) {
   putchar('\n');
 }
 
+// Phase 1.3: monomorphized growable arrays. Reference semantics — variables
+// hold `topaz_array_<elem> *` and share storage on assignment. Bounds-checked
+// with abort on violation; no GC, malloc/leak until Phase 1.5.
+#define TOPAZ_ARRAY_DEFINE(name, elem_t)                                              \
+typedef struct {                                                                       \
+  elem_t *data;                                                                        \
+  size_t len;                                                                          \
+  size_t cap;                                                                          \
+} topaz_array_##name;                                                                  \
+                                                                                       \
+static inline topaz_array_##name *topaz_array_##name##_new(void) {                     \
+  topaz_array_##name *a = (topaz_array_##name *)malloc(sizeof(*a));                    \
+  if (!a) { fputs("topaz: out of memory\n", stderr); abort(); }                        \
+  a->data = NULL;                                                                      \
+  a->len = 0;                                                                          \
+  a->cap = 0;                                                                          \
+  return a;                                                                            \
+}                                                                                      \
+                                                                                       \
+static inline void topaz_array_##name##_reserve(topaz_array_##name *a, size_t want) {  \
+  if (a->cap >= want) return;                                                          \
+  size_t new_cap = a->cap == 0 ? 4 : a->cap * 2;                                       \
+  while (new_cap < want) new_cap *= 2;                                                 \
+  elem_t *new_data = (elem_t *)realloc(a->data, new_cap * sizeof(elem_t));             \
+  if (!new_data) { fputs("topaz: out of memory\n", stderr); abort(); }                 \
+  a->data = new_data;                                                                  \
+  a->cap = new_cap;                                                                    \
+}                                                                                      \
+                                                                                       \
+static inline void topaz_array_##name##_push(topaz_array_##name *a, elem_t v) {        \
+  topaz_array_##name##_reserve(a, a->len + 1);                                         \
+  a->data[a->len++] = v;                                                               \
+}                                                                                      \
+                                                                                       \
+static inline elem_t topaz_array_##name##_pop(topaz_array_##name *a) {                 \
+  if (a->len == 0) { fputs("topaz: pop from empty array\n", stderr); abort(); }        \
+  return a->data[--a->len];                                                            \
+}                                                                                      \
+                                                                                       \
+static inline elem_t topaz_array_##name##_at(topaz_array_##name *a, topaz_number i) {  \
+  if (!(i >= 0) || i >= (topaz_number)a->len) {                                        \
+    fputs("topaz: array index out of bounds\n", stderr); abort();                      \
+  }                                                                                    \
+  return a->data[(size_t)i];                                                           \
+}                                                                                      \
+                                                                                       \
+static inline elem_t topaz_array_##name##_set(                                         \
+    topaz_array_##name *a, topaz_number i, elem_t v) {                                 \
+  if (!(i >= 0) || i >= (topaz_number)a->len) {                                        \
+    fputs("topaz: array index out of bounds\n", stderr); abort();                      \
+  }                                                                                    \
+  a->data[(size_t)i] = v;                                                              \
+  return v;                                                                            \
+}
+
+TOPAZ_ARRAY_DEFINE(number, topaz_number)
+TOPAZ_ARRAY_DEFINE(boolean, topaz_boolean)
+TOPAZ_ARRAY_DEFINE(string, topaz_string)
+
 #endif

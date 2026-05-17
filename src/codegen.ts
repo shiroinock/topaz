@@ -1,6 +1,46 @@
 import * as ts from "typescript";
 
-type TopazType = "topaz_number" | "topaz_boolean" | "topaz_string";
+type TopazType =
+  | "topaz_number"
+  | "topaz_boolean"
+  | "topaz_string"
+  | "topaz_array_number"
+  | "topaz_array_boolean"
+  | "topaz_array_string";
+
+const ARRAY_ELEM: Partial<Record<TopazType, TopazType>> = {
+  topaz_array_number: "topaz_number",
+  topaz_array_boolean: "topaz_boolean",
+  topaz_array_string: "topaz_string",
+};
+
+const ARRAY_OF: Partial<Record<TopazType, TopazType>> = {
+  topaz_number: "topaz_array_number",
+  topaz_boolean: "topaz_array_boolean",
+  topaz_string: "topaz_array_string",
+};
+
+function arrayElem(t: TopazType): TopazType | undefined {
+  return ARRAY_ELEM[t];
+}
+
+function arrayOf(elem: TopazType): TopazType | undefined {
+  return ARRAY_OF[elem];
+}
+
+function isArrayType(t: TopazType): boolean {
+  return arrayElem(t) !== undefined;
+}
+
+// e.g. "topaz_array_number" -> "number"
+function arrayShortName(t: TopazType): string {
+  return t.slice("topaz_array_".length);
+}
+
+// C type used in declarations and signatures (arrays are pointers).
+function cTypeName(t: TopazType): string {
+  return isArrayType(t) ? `${t} *` : t;
+}
 
 type Binding = { type: TopazType; isConst: boolean };
 
@@ -52,6 +92,7 @@ class Emitter {
   private scope = new Scope();
   private functionReturns = new Map<string, TopazType>();
   private switchCounter = 0;
+  private tmpCounter = 0;
 
   emit(sf: ts.SourceFile): string {
     const functions: ts.FunctionDeclaration[] = [];
@@ -101,6 +142,29 @@ class Emitter {
     if (node.kind === ts.SyntaxKind.NumberKeyword) return "topaz_number";
     if (node.kind === ts.SyntaxKind.BooleanKeyword) return "topaz_boolean";
     if (node.kind === ts.SyntaxKind.StringKeyword) return "topaz_string";
+    if (ts.isArrayTypeNode(node)) {
+      const elem = this.typeFromAnnotation(node.elementType, node);
+      const arr = arrayOf(elem);
+      if (!arr) {
+        throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
+      }
+      return arr;
+    }
+    if (
+      ts.isTypeReferenceNode(node) &&
+      ts.isIdentifier(node.typeName) &&
+      node.typeName.text === "Array"
+    ) {
+      if (!node.typeArguments || node.typeArguments.length !== 1) {
+        throw new CodegenError(node, "Array<T> requires exactly one type argument");
+      }
+      const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
+      const arr = arrayOf(elem);
+      if (!arr) {
+        throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
+      }
+      return arr;
+    }
     unsupported(node, "type");
   }
 
@@ -115,10 +179,10 @@ class Emitter {
           throw new CodegenError(p, "optional/default/rest parameters are unsupported");
         }
         const t = this.typeFromAnnotation(p.type, p);
-        return `${t} ${p.name.text}`;
+        return `${cTypeName(t)} ${p.name.text}`;
       })
       .join(", ");
-    return `static ${ret} ${fn.name!.text}(${params || "void"})`;
+    return `static ${cTypeName(ret)} ${fn.name!.text}(${params || "void"})`;
   }
 
   private emitFunctionDefinition(fn: ts.FunctionDeclaration): string {
@@ -236,7 +300,7 @@ class Emitter {
     const lines: string[] = [];
     for (const d of list.declarations) {
       const { type, cName, initStr } = this.declareVar(d, isConst);
-      lines.push(`${pad}${type} ${cName}${initStr};`);
+      lines.push(`${pad}${cTypeName(type)} ${cName}${initStr};`);
     }
     return lines.join("\n");
   }
@@ -255,12 +319,26 @@ class Emitter {
     let type: TopazType;
     if (decl.type) {
       type = this.typeFromAnnotation(decl.type, decl);
-      this.expectType(decl.initializer, type);
+      // Empty `[]` literals can only be typed from context, so thread the
+      // declared type into the literal instead of running inferType on it.
+      if (
+        !(
+          ts.isArrayLiteralExpression(decl.initializer) &&
+          decl.initializer.elements.length === 0
+        )
+      ) {
+        this.expectType(decl.initializer, type);
+      } else if (!isArrayType(type)) {
+        throw new CodegenError(decl.initializer, `type mismatch: expected ${type}, got an empty array literal`);
+      }
     } else {
       type = this.inferType(decl.initializer);
     }
     this.scope.declare(name, type, isConst, decl);
-    const initStr = ` = ${this.emitExpression(decl.initializer)}`;
+    const initExpr = ts.isArrayLiteralExpression(decl.initializer)
+      ? this.emitArrayLiteral(decl.initializer, type)
+      : this.emitExpression(decl.initializer);
+    const initStr = ` = ${initExpr}`;
     return { type, cName: name, initStr };
   }
 
@@ -281,7 +359,7 @@ class Emitter {
             throw new CodegenError(init, "var is unsupported; use let or const");
           }
           const { type, cName, initStr: vInit } = this.declareVar(init.declarations[0]!, isConst);
-          initStr = `${type} ${cName}${vInit}`;
+          initStr = `${cTypeName(type)} ${cName}${vInit}`;
         } else {
           initStr = this.emitExpression(stmt.initializer as ts.Expression);
         }
@@ -363,7 +441,7 @@ class Emitter {
 
     const out: string[] = [];
     out.push(`${pad}{`);
-    out.push(`${pad}  ${discType} ${tmp} = ${discExpr};`);
+    out.push(`${pad}  ${cTypeName(discType)} ${tmp} = ${discExpr};`);
     out.push(`${pad}  do {`);
 
     this.scope.push();
@@ -457,10 +535,26 @@ class Emitter {
       if (baseType === "topaz_string" && expr.name.text === "length") {
         return `((topaz_number)(${this.emitExpression(expr.expression)}).len)`;
       }
+      if (isArrayType(baseType) && expr.name.text === "length") {
+        return `((topaz_number)(${this.emitExpression(expr.expression)})->len)`;
+      }
       throw new CodegenError(
         expr,
         `unsupported property access '.${expr.name.text}' on ${baseType}`,
       );
+    }
+    if (ts.isElementAccessExpression(expr)) {
+      const baseType = this.inferType(expr.expression);
+      const elem = arrayElem(baseType);
+      if (!elem) {
+        throw new CodegenError(expr, `index access is only supported on Array (got ${baseType})`);
+      }
+      this.expectType(expr.argumentExpression, "topaz_number");
+      const name = arrayShortName(baseType);
+      return `topaz_array_${name}_at(${this.emitExpression(expr.expression)}, ${this.emitExpression(expr.argumentExpression)})`;
+    }
+    if (ts.isArrayLiteralExpression(expr)) {
+      return this.emitArrayLiteral(expr, /* expected */ undefined);
     }
     if (ts.isPrefixUnaryExpression(expr)) {
       this.inferType(expr); // type-check
@@ -475,6 +569,27 @@ class Emitter {
     if (ts.isBinaryExpression(expr)) {
       this.inferType(expr); // type-check + const-check
       const tok = expr.operatorToken.kind;
+      // Element-access assignment lowers to topaz_array_X_set; compound
+      // assignment on a[i] is unsupported because we'd evaluate the index twice.
+      if (
+        ts.isElementAccessExpression(expr.left) &&
+        (tok === ts.SyntaxKind.EqualsToken ||
+          tok === ts.SyntaxKind.PlusEqualsToken ||
+          tok === ts.SyntaxKind.MinusEqualsToken ||
+          tok === ts.SyntaxKind.AsteriskEqualsToken ||
+          tok === ts.SyntaxKind.SlashEqualsToken ||
+          tok === ts.SyntaxKind.PercentEqualsToken)
+      ) {
+        if (tok !== ts.SyntaxKind.EqualsToken) {
+          throw new CodegenError(expr, "compound assignment on array element is unsupported; use a[i] = ...");
+        }
+        const baseType = this.inferType(expr.left.expression);
+        const name = arrayShortName(baseType);
+        const base = this.emitExpression(expr.left.expression);
+        const idx = this.emitExpression(expr.left.argumentExpression);
+        const val = this.emitExpression(expr.right);
+        return `topaz_array_${name}_set(${base}, ${idx}, ${val})`;
+      }
       // JS `%` is fmod for number; C's `%` rejects double, so always lower.
       if (tok === ts.SyntaxKind.PercentToken) {
         return `topaz_fmod(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
@@ -508,6 +623,56 @@ class Emitter {
       return this.emitCall(expr);
     }
     unsupported(expr, "expression");
+  }
+
+  private emitArrayLiteral(
+    expr: ts.ArrayLiteralExpression,
+    expected: TopazType | undefined,
+  ): string {
+    for (const e of expr.elements) {
+      if (ts.isSpreadElement(e) || e.kind === ts.SyntaxKind.OmittedExpression) {
+        throw new CodegenError(e, "spread / holes in array literals are unsupported");
+      }
+    }
+    let arrType: TopazType;
+    if (expr.elements.length === 0) {
+      if (!expected || !isArrayType(expected)) {
+        throw new CodegenError(
+          expr,
+          "cannot infer element type of empty array literal; add an `Array<T>` annotation",
+        );
+      }
+      arrType = expected;
+    } else {
+      const elem = this.inferType(expr.elements[0]!);
+      for (let i = 1; i < expr.elements.length; i++) {
+        this.expectType(expr.elements[i]!, elem);
+      }
+      const arr = arrayOf(elem);
+      if (!arr) {
+        throw new CodegenError(expr, `no Array monomorph for element type ${elem}`);
+      }
+      arrType = arr;
+      if (expected && expected !== arrType) {
+        throw new CodegenError(
+          expr,
+          `type mismatch: expected ${expected}, got ${arrType}`,
+        );
+      }
+    }
+    const name = arrayShortName(arrType);
+    const id = this.tmpCounter++;
+    const tmp = `__topaz_arr_${id}`;
+    // GCC/clang statement-expression: build, fill, yield the pointer.
+    const parts: string[] = [];
+    parts.push(`topaz_array_${name} *${tmp} = topaz_array_${name}_new();`);
+    if (expr.elements.length > 0) {
+      parts.push(`topaz_array_${name}_reserve(${tmp}, ${expr.elements.length});`);
+    }
+    for (const e of expr.elements) {
+      parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitExpression(e as ts.Expression)});`);
+    }
+    return `({ ${parts.join(" ")} ${tmp}; })`;
   }
 
   private emitStringLiteral(expr: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral): string {
@@ -601,11 +766,22 @@ class Emitter {
       }
       const arg = expr.arguments[0]!;
       const t = this.inferType(arg);
+      if (isArrayType(t)) {
+        throw new CodegenError(arg, "console.log on Array is unsupported");
+      }
       const fn =
         t === "topaz_boolean" ? "topaz_console_log_boolean"
         : t === "topaz_string" ? "topaz_console_log_string"
         : "topaz_console_log_number";
       return `${fn}(${this.emitExpression(arg)})`;
+    }
+
+    if (ts.isPropertyAccessExpression(callee)) {
+      const baseType = this.inferType(callee.expression);
+      if (isArrayType(baseType)) {
+        return this.emitArrayMethodCall(expr, callee, baseType);
+      }
+      throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
     }
 
     if (ts.isIdentifier(callee)) {
@@ -618,6 +794,31 @@ class Emitter {
     }
 
     unsupported(callee, "call target");
+  }
+
+  private emitArrayMethodCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+    baseType: TopazType,
+  ): string {
+    const name = arrayShortName(baseType);
+    const elem = arrayElem(baseType)!;
+    const method = callee.name.text;
+    const base = this.emitExpression(callee.expression);
+    if (method === "push") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Array.push expects exactly one argument");
+      }
+      this.expectType(expr.arguments[0]!, elem);
+      return `topaz_array_${name}_push(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+    }
+    if (method === "pop") {
+      if (expr.arguments.length !== 0) {
+        throw new CodegenError(expr, "Array.pop expects no arguments");
+      }
+      return `topaz_array_${name}_pop(${base})`;
+    }
+    throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
   }
 
   private inferType(expr: ts.Expression): TopazType {
@@ -639,10 +840,40 @@ class Emitter {
       if (baseType === "topaz_string" && expr.name.text === "length") {
         return "topaz_number";
       }
+      if (isArrayType(baseType) && expr.name.text === "length") {
+        return "topaz_number";
+      }
       throw new CodegenError(
         expr,
         `unsupported property access '.${expr.name.text}' on ${baseType}`,
       );
+    }
+    if (ts.isElementAccessExpression(expr)) {
+      const baseType = this.inferType(expr.expression);
+      const elem = arrayElem(baseType);
+      if (!elem) {
+        throw new CodegenError(expr, `index access is only supported on Array (got ${baseType})`);
+      }
+      this.expectType(expr.argumentExpression, "topaz_number");
+      return elem;
+    }
+    if (ts.isArrayLiteralExpression(expr)) {
+      if (expr.elements.length === 0) {
+        throw new CodegenError(
+          expr,
+          "cannot infer element type of empty array literal; add an `Array<T>` annotation",
+        );
+      }
+      const first = expr.elements[0]!;
+      const elem = this.inferType(first);
+      for (let i = 1; i < expr.elements.length; i++) {
+        this.expectType(expr.elements[i]!, elem);
+      }
+      const arr = arrayOf(elem);
+      if (!arr) {
+        throw new CodegenError(expr, `no Array monomorph for element type ${elem}`);
+      }
+      return arr;
     }
     if (ts.isPrefixUnaryExpression(expr)) {
       switch (expr.operator) {
@@ -750,6 +981,20 @@ class Emitter {
       ) {
         throw new CodegenError(expr, "console.log returns void and cannot be used as a value");
       }
+      if (ts.isPropertyAccessExpression(callee)) {
+        const baseType = this.inferType(callee.expression);
+        if (isArrayType(baseType)) {
+          const elem = arrayElem(baseType)!;
+          if (callee.name.text === "push") {
+            throw new CodegenError(expr, "Array.push returns void in this dialect and cannot be used as a value");
+          }
+          if (callee.name.text === "pop") {
+            return elem;
+          }
+          throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
+        }
+        throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
+      }
       if (ts.isIdentifier(callee)) {
         const ret = this.functionReturns.get(callee.text);
         if (!ret) throw new CodegenError(callee, `unknown function '${callee.text}'`);
@@ -761,16 +1006,26 @@ class Emitter {
   }
 
   private checkAssignTarget(target: ts.Expression, anchor: ts.Node): void {
-    if (!ts.isIdentifier(target)) {
-      throw new CodegenError(anchor, "assignment target must be a simple identifier");
+    if (ts.isIdentifier(target)) {
+      const b = this.scope.lookup(target.text);
+      if (!b) {
+        throw new CodegenError(target, `unknown identifier '${target.text}'`);
+      }
+      if (b.isConst) {
+        throw new CodegenError(anchor, `cannot assign to const '${target.text}'`);
+      }
+      return;
     }
-    const b = this.scope.lookup(target.text);
-    if (!b) {
-      throw new CodegenError(target, `unknown identifier '${target.text}'`);
+    if (ts.isElementAccessExpression(target)) {
+      // `const arr = [...]` rebinds the binding, not the storage — element
+      // assignment mutates through the pointer and is always allowed.
+      const baseType = this.inferType(target.expression);
+      if (!isArrayType(baseType)) {
+        throw new CodegenError(target, `index assignment is only supported on Array (got ${baseType})`);
+      }
+      return;
     }
-    if (b.isConst) {
-      throw new CodegenError(anchor, `cannot assign to const '${target.text}'`);
-    }
+    throw new CodegenError(anchor, "assignment target must be an identifier or array index");
   }
 
   private expectType(expr: ts.Expression, expected: TopazType): void {

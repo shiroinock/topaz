@@ -32,5 +32,6 @@ run_case mod_check $'1\n1\n-1\n1.5'
 run_case switch_check $'1699\n22'
 run_case number_format $'3.14\n0.30000000000000004\n1.5\n-1.5\n1e+21\n1e-7\n0.000001\n100000000000000000'
 run_case string_basic $'hello, topaz!\n13\nabcdef\ntrue\ntrue\nwoof'
+run_case array_basic $'3\n10\n30\n5\n40\n50\n99\n50\n4\n189\ntrue\nfalse\nalpha\ngamma\n3\n1\n7'
 
 echo "all tests passed"

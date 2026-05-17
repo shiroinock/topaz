@@ -215,7 +215,7 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 - [x] **1.1**: 制御フロー(`let`/`const`/`while`/`for`/`do-while`/`break`/`continue`)、`boolean` 型、論理・単項・複合代入・`++`/`--`、軽量な式レベル型推論(codegen 内に同居)。サンプル: `loop_sum.ts` (= 5050)、`while_count.ts` (= 10)、`boolean_print.ts`。
 - [x] **1.2**: `%` の `fmod` 化、ECMA-262 ToString 準拠 shortest による `number → string`(Ryu 差し替えは perf 課題として Phase 2 のベンチ整備時に回す)、`switch`(do/while(0) ラダー)、`string` 型と最小文字列操作。サンプル: `mod_check.ts`、`switch_check.ts`、`number_format.ts`、`string_basic.ts`。
-- [ ] **1.3**: `Array<T>` (monomorphize)、`Map`、`Set`。
+- [~] **1.3**: `Array<T>` (monomorphize、done)、`Map`、`Set`(未着手)。
 - [ ] **1.4**: class、interface、ジェネリクス(monomorphize、構造的型は同 shape で nominal 統合)。
 - [ ] **1.5**: 例外、ES module 静的解決、全プログラム型検証(多態検出 → エラー)、ヒープ管理(GC/arena)、self-hosting 通過。
 
@@ -310,6 +310,17 @@ Phase 0 を実装する過程で確定した、設計検討時点で開いてい
 - **`string` の表現**: `{ const char *data; size_t len; }` を値渡しで運ぶ。リテラルは C99 compound literal `((topaz_string){"abc", 3})` として埋め込み、`data` は string literal(静的寿命)を指す。連結は `topaz_string_concat` が `malloc` して詰める。Phase 1.5 まで GC/arena を持たないので連結結果はリーク前提。文字列リテラルは ASCII 限定で codegen 段で reject(JS の `.length` は UTF-16 code units、C 側のバイト長との divergence を回避するため)。
 - **`+` の型分岐**: `inferType` で左辺を見て `topaz_string` なら右辺も `topaz_string` を要求して string 連結、それ以外は両辺 `topaz_number` を要求して数値加算。`+=` も同じ分岐。実装上は `inferType` を一度走らせて codegen 側で再度型を見るので少しもったいないが、Phase 1.3 以降の型推論層分離で解消する想定。
 - **`.length` の扱い**: `PropertyAccessExpression` を `inferType` / `emitExpression` の両方で扱う最初のケース。今は `topaz_string.length` だけだが、Phase 1.3 以降 `Array<T>.length` でも同じ枠組みに乗せられるよう、`baseType + propertyName` で dispatch する形にしてある(現状は `if` 1 本だが)。
+
+## 14. Phase 1.3 実装決定ログ(Array<T> 着地時点)
+
+- **Array<T> は monomorphize + reference 型**。`runtime.h` の `TOPAZ_ARRAY_DEFINE(name, elem_t)` マクロで要素型ごとに `topaz_array_<name>` struct(`data` / `len` / `cap`)と `_new` / `_reserve` / `_push` / `_pop` / `_at` / `_set` 関数群を生成。codegen からは `number` / `boolean` / `string` の 3 monomorph に対して `topaz_array_number *` 等のポインタ型として扱う。代入で storage を共有する JS の semantics に揃えるため value 型(struct そのまま)ではなくポインタにした。
+- **TopazType の拡張方法**。`type TopazType` を `topaz_number | topaz_boolean | topaz_string | topaz_array_number | topaz_array_boolean | topaz_array_string` の文字列ユニオンに増やし、`arrayElem` / `arrayOf` / `isArrayType` / `arrayShortName` / `cTypeName` のヘルパを足した。Phase 1.4 で nested array(`number[][]`)や任意要素型のジェネリクスを入れる時に、この文字列ユニオン表現は破綻するので、その時点で structured な型表現(`{ kind: "array", elem: ... }` 等)へ移行する。今は monomorph 数が小さく事前列挙できるので文字列で十分。
+- **空 `[]` の型解決**。`inferType` 単独では要素型が決まらないので、`declareVar` から annotation 由来の expected 型を `emitArrayLiteral` に thread する。`expectType` を回避して直接 `emitArrayLiteral(initializer, type)` を呼ぶ経路を declareVar に作った。non-empty な配列リテラルは従来通り inferType でいける。
+- **GCC statement-expression を活用**。`[1,2,3]` を `({ topaz_array_number *t = topaz_array_number_new(); ...push... t; })` の statement-expression に下ろす。compound literal で初期化リストを書けば一発で済ませたいところだが、`malloc`+`push` の手続きが要るので statement-expression が必要。`tmpCounter` で `__topaz_arr_<n>` を生成して衝突回避。
+- **`[i] = v` の lowering**。`checkAssignTarget` を `ElementAccessExpression` も受理するよう緩め、`emitExpression` の `BinaryExpression` 分岐の冒頭で「LHS が ElementAccessExpression」かつ「単純代入」のときは `topaz_array_<name>_set(a, i, v)` を吐く特殊ケースを置いた。複合代入(`a[i] += v` 等)はインデックスを 2 回評価する書き下しが必要なので、Phase 1.3 では未対応エラーで明示的に弾いている(temporary を導入する lowering は Phase 1.4 以降)。
+- **`.length` / `.push` / `.pop` の dispatch**。`PropertyAccessExpression` の `.length` は string と Array で別 C 式(`.len` vs `->len`)に展開。method call は `emitCall` から `emitArrayMethodCall` に分岐させた。`push` は void を返すので `inferType` 側で「式として使えない」エラーを出し、`pop` は要素型を返す。`console.log` も配列引数を整形ポリシー未定として明示的にエラー化。
+- **bounds check の `!(i >= 0)` イディオム**。`NaN` を弾くために `i >= 0` の否定で書いている(`NaN < 0` も `NaN >= 0` も false)。`size_t` への変換時に負値が wrap して巨大値になる事故も同時に防げる。
+- **Map/Set は次チャンクに分離**。実装には `new Map()` 構文サポート、key 型ごとの hash 関数、open-addressing マクロ、K×V monomorph 列挙、複数メソッド dispatch(`.set` / `.get` / `.has` / `.delete` / `.size`)が必要で、Array<T> と一塊にすると粒度が大きすぎる。「刻む」方針で 1.3 を 1.3a(Array)・1.3b(Map/Set)に分割した。
 
 ---
 
