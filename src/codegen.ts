@@ -6,7 +6,10 @@ type TopazType =
   | `topaz_${ScalarShortName}`
   | `topaz_array_${ScalarShortName}`
   | `topaz_map_${ScalarShortName}_${ScalarShortName}`
-  | `topaz_set_${ScalarShortName}`;
+  | `topaz_set_${ScalarShortName}`
+  | `topaz_class_${string}`;
+
+const TOPAZ_THIS = "__topaz_this";
 
 function isScalarType(t: TopazType): boolean {
   return t === "topaz_number" || t === "topaz_boolean" || t === "topaz_string";
@@ -24,8 +27,21 @@ function isSetType(t: TopazType): boolean {
   return t.startsWith("topaz_set_");
 }
 
+function isClassType(t: TopazType): boolean {
+  return t.startsWith("topaz_class_");
+}
+
+function classNameOf(t: TopazType): string | undefined {
+  if (!isClassType(t)) return undefined;
+  return t.slice("topaz_class_".length);
+}
+
+function classOf(name: string): TopazType {
+  return `topaz_class_${name}` as TopazType;
+}
+
 function isReferenceType(t: TopazType): boolean {
-  return isArrayType(t) || isMapType(t) || isSetType(t);
+  return isArrayType(t) || isMapType(t) || isSetType(t) || isClassType(t);
 }
 
 function arrayElem(t: TopazType): TopazType | undefined {
@@ -131,18 +147,66 @@ class Scope {
   }
 }
 
+type ParamInfo = { name: string; type: TopazType };
+
+type MethodInfo = {
+  params: ParamInfo[];
+  returnType: TopazType;
+  decl: ts.MethodDeclaration;
+};
+
+type ClassInfo = {
+  name: string;
+  fields: Map<string, TopazType>;
+  fieldOrder: string[];
+  ctor: { params: ParamInfo[]; decl: ts.ConstructorDeclaration } | undefined;
+  methods: Map<string, MethodInfo>;
+  decl: ts.ClassDeclaration;
+};
+
 class Emitter {
   private scope = new Scope();
   private functionReturns = new Map<string, TopazType>();
+  private classes = new Map<string, ClassInfo>();
+  private currentClass: string | undefined;
   private switchCounter = 0;
   private tmpCounter = 0;
 
   emit(sf: ts.SourceFile): string {
     const functions: ts.FunctionDeclaration[] = [];
+    const classes: ts.ClassDeclaration[] = [];
     const topLevel: ts.Statement[] = [];
     for (const stmt of sf.statements) {
       if (ts.isFunctionDeclaration(stmt)) functions.push(stmt);
+      else if (ts.isClassDeclaration(stmt)) classes.push(stmt);
       else topLevel.push(stmt);
+    }
+
+    // Pass 1: register class names so field/method types can refer to each
+    // other regardless of source order.
+    for (const cls of classes) {
+      if (!cls.name) throw new CodegenError(cls, "class must be named");
+      const name = cls.name.text;
+      if (name === "Array" || name === "Map" || name === "Set") {
+        throw new CodegenError(cls, `cannot redefine built-in '${name}'`);
+      }
+      if (this.classes.has(name)) {
+        throw new CodegenError(cls, `redeclaration of class '${name}'`);
+      }
+      this.classes.set(name, {
+        name,
+        fields: new Map(),
+        fieldOrder: [],
+        ctor: undefined,
+        methods: new Map(),
+        decl: cls,
+      });
+    }
+
+    // Pass 2: parse class members (now all class types resolve via
+    // typeFromAnnotation).
+    for (const cls of classes) {
+      this.collectClassMembers(cls);
     }
 
     for (const fn of functions) {
@@ -158,14 +222,40 @@ class Emitter {
     out.push('#include "runtime.h"');
     out.push("");
 
+    // Forward-declare class structs so fields referencing other classes work
+    // regardless of order.
+    if (classes.length > 0) {
+      for (const cls of classes) {
+        const n = cls.name!.text;
+        out.push(`typedef struct topaz_class_${n} topaz_class_${n};`);
+      }
+      out.push("");
+      for (const cls of classes) {
+        out.push(this.emitClassStruct(this.classes.get(cls.name!.text)!));
+      }
+      out.push("");
+    }
+
     for (const fn of functions) {
       out.push(`${this.formatSignature(fn)};`);
     }
-    if (functions.length > 0) out.push("");
+    for (const cls of classes) {
+      const info = this.classes.get(cls.name!.text)!;
+      for (const line of this.classMemberSignatures(info)) out.push(`${line};`);
+    }
+    if (functions.length > 0 || classes.length > 0) out.push("");
 
     for (const fn of functions) {
       out.push(this.emitFunctionDefinition(fn));
       out.push("");
+    }
+
+    for (const cls of classes) {
+      const info = this.classes.get(cls.name!.text)!;
+      for (const def of this.emitClassMemberDefinitions(info)) {
+        out.push(def);
+        out.push("");
+      }
     }
 
     out.push("int main(void) {");
@@ -178,6 +268,224 @@ class Emitter {
     out.push("}");
 
     return out.join("\n") + "\n";
+  }
+
+  private collectClassMembers(cls: ts.ClassDeclaration): void {
+    const info = this.classes.get(cls.name!.text)!;
+    if (cls.typeParameters && cls.typeParameters.length > 0) {
+      throw new CodegenError(cls, "generic classes are unsupported (Phase 1.4c)");
+    }
+    if (cls.heritageClauses && cls.heritageClauses.length > 0) {
+      throw new CodegenError(cls, "`extends` / `implements` are unsupported");
+    }
+    if (cls.modifiers && cls.modifiers.length > 0) {
+      throw new CodegenError(cls, "class modifiers (export/default/abstract) are unsupported");
+    }
+    for (const m of cls.members) {
+      if (m.kind === ts.SyntaxKind.SemicolonClassElement) continue;
+      if ((ts as any).canHaveModifiers?.(m) && ts.getModifiers && ts.getModifiers(m as any)) {
+        const mods = ts.getModifiers(m as any);
+        if (mods && mods.length > 0) {
+          throw new CodegenError(m, "member modifiers (static/public/private/protected/readonly/abstract/override) are unsupported");
+        }
+      }
+      if (ts.isPropertyDeclaration(m)) {
+        this.collectField(info, m);
+      } else if (ts.isConstructorDeclaration(m)) {
+        this.collectConstructor(info, m);
+      } else if (ts.isMethodDeclaration(m)) {
+        this.collectMethod(info, m);
+      } else if (ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) {
+        throw new CodegenError(m, "get/set accessors are unsupported");
+      } else if (ts.isClassStaticBlockDeclaration(m)) {
+        throw new CodegenError(m, "static blocks are unsupported");
+      } else {
+        unsupported(m, "class member");
+      }
+    }
+    if (info.fields.size > 0 && !info.ctor) {
+      throw new CodegenError(
+        cls,
+        `class '${info.name}' has fields but no constructor; add an explicit constructor`,
+      );
+    }
+  }
+
+  private collectField(info: ClassInfo, m: ts.PropertyDeclaration): void {
+    if (!ts.isIdentifier(m.name)) {
+      throw new CodegenError(m, "field name must be a simple identifier");
+    }
+    const fname = m.name.text;
+    if (info.fields.has(fname)) {
+      throw new CodegenError(m, `redeclaration of field '${fname}'`);
+    }
+    if (info.methods.has(fname)) {
+      throw new CodegenError(m, `field '${fname}' conflicts with a method of the same name`);
+    }
+    if (m.questionToken) {
+      throw new CodegenError(m, "optional fields are unsupported");
+    }
+    if (m.exclamationToken) {
+      throw new CodegenError(m, "definite-assignment assertion `!` is unsupported");
+    }
+    if (m.initializer) {
+      throw new CodegenError(m, "field initializers are unsupported; assign in the constructor");
+    }
+    const t = this.typeFromAnnotation(m.type, m);
+    info.fields.set(fname, t);
+    info.fieldOrder.push(fname);
+  }
+
+  private collectConstructor(info: ClassInfo, m: ts.ConstructorDeclaration): void {
+    if (info.ctor) {
+      throw new CodegenError(m, `class '${info.name}' has multiple constructors`);
+    }
+    if (m.typeParameters && m.typeParameters.length > 0) {
+      throw new CodegenError(m, "generic constructors are unsupported");
+    }
+    if (!m.body) throw new CodegenError(m, "constructor must have a body");
+    const params = this.collectParams(m.parameters);
+    info.ctor = { params, decl: m };
+  }
+
+  private collectMethod(info: ClassInfo, m: ts.MethodDeclaration): void {
+    if (!ts.isIdentifier(m.name)) {
+      throw new CodegenError(m, "method name must be a simple identifier");
+    }
+    const mname = m.name.text;
+    if (info.methods.has(mname)) {
+      throw new CodegenError(m, `redeclaration of method '${mname}'`);
+    }
+    if (info.fields.has(mname)) {
+      throw new CodegenError(m, `method '${mname}' conflicts with a field of the same name`);
+    }
+    if (m.typeParameters && m.typeParameters.length > 0) {
+      throw new CodegenError(m, "generic methods are unsupported (Phase 1.4c)");
+    }
+    if (m.questionToken) {
+      throw new CodegenError(m, "optional methods are unsupported");
+    }
+    if (m.asteriskToken) {
+      throw new CodegenError(m, "generator methods are unsupported");
+    }
+    if (!m.body) throw new CodegenError(m, "method must have a body");
+    const params = this.collectParams(m.parameters);
+    const returnType = this.typeFromAnnotation(m.type, m);
+    info.methods.set(mname, { params, returnType, decl: m });
+  }
+
+  private collectParams(parameters: ts.NodeArray<ts.ParameterDeclaration>): ParamInfo[] {
+    const out: ParamInfo[] = [];
+    for (const p of parameters) {
+      if (!ts.isIdentifier(p.name)) {
+        throw new CodegenError(p, "parameter must be a simple identifier");
+      }
+      if (p.questionToken || p.initializer || p.dotDotDotToken) {
+        throw new CodegenError(p, "optional/default/rest parameters are unsupported");
+      }
+      if (p.modifiers && p.modifiers.length > 0) {
+        throw new CodegenError(p, "parameter property shorthand is unsupported; declare the field explicitly");
+      }
+      const t = this.typeFromAnnotation(p.type, p);
+      out.push({ name: p.name.text, type: t });
+    }
+    return out;
+  }
+
+  private emitClassStruct(info: ClassInfo): string {
+    const lines: string[] = [];
+    lines.push(`struct topaz_class_${info.name} {`);
+    if (info.fieldOrder.length === 0) {
+      // Empty struct (no fields). C requires at least one member in a struct,
+      // and zero-field classes are corner cases (tag types). Add a dummy.
+      lines.push("  char __topaz_empty;");
+    } else {
+      for (const f of info.fieldOrder) {
+        const t = info.fields.get(f)!;
+        lines.push(`  ${cTypeName(t)} ${f};`);
+      }
+    }
+    lines.push("};");
+    return lines.join("\n");
+  }
+
+  private classMemberSignatures(info: ClassInfo): string[] {
+    const lines: string[] = [];
+    if (info.ctor) {
+      lines.push(this.constructorSignature(info));
+    }
+    for (const [, method] of info.methods) {
+      lines.push(this.methodSignature(info, method));
+    }
+    return lines;
+  }
+
+  private emitClassMemberDefinitions(info: ClassInfo): string[] {
+    const out: string[] = [];
+    if (info.ctor) out.push(this.emitConstructorDefinition(info));
+    for (const [, method] of info.methods) {
+      out.push(this.emitMethodDefinition(info, method));
+    }
+    return out;
+  }
+
+  private constructorSignature(info: ClassInfo): string {
+    const params = info.ctor!.params
+      .map((p) => `${cTypeName(p.type)} ${p.name}`)
+      .join(", ");
+    return `static topaz_class_${info.name} *topaz_class_${info.name}_new(${params || "void"})`;
+  }
+
+  private methodSignature(info: ClassInfo, method: MethodInfo): string {
+    const name = (method.decl.name as ts.Identifier).text;
+    const ownerArg = `topaz_class_${info.name} *${TOPAZ_THIS}`;
+    const tail = method.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
+    const params = tail ? `${ownerArg}, ${tail}` : ownerArg;
+    return `static ${cTypeName(method.returnType)} topaz_class_${info.name}_method_${name}(${params})`;
+  }
+
+  private emitConstructorDefinition(info: ClassInfo): string {
+    const ctor = info.ctor!;
+    this.currentClass = info.name;
+    this.scope.push();
+    try {
+      for (const p of ctor.params) {
+        this.scope.declare(p.name, p.type, /* isConst */ false, ctor.decl);
+      }
+      const bodyLines: string[] = [];
+      bodyLines.push("{");
+      bodyLines.push(
+        `  topaz_class_${info.name} *${TOPAZ_THIS} = (topaz_class_${info.name} *)calloc(1, sizeof(*${TOPAZ_THIS}));`,
+      );
+      bodyLines.push(`  if (!${TOPAZ_THIS}) { fputs("topaz: out of memory\\n", stderr); abort(); }`);
+      for (const s of ctor.decl.body!.statements) {
+        if (ts.isReturnStatement(s)) {
+          throw new CodegenError(s, "`return` inside a constructor is unsupported");
+        }
+        bodyLines.push(this.emitStatement(s, 1));
+      }
+      bodyLines.push(`  return ${TOPAZ_THIS};`);
+      bodyLines.push("}");
+      return `${this.constructorSignature(info)} ${bodyLines.join("\n")}`;
+    } finally {
+      this.scope.pop();
+      this.currentClass = undefined;
+    }
+  }
+
+  private emitMethodDefinition(info: ClassInfo, method: MethodInfo): string {
+    this.currentClass = info.name;
+    this.scope.push();
+    try {
+      for (const p of method.params) {
+        this.scope.declare(p.name, p.type, /* isConst */ false, method.decl);
+      }
+      const body = this.emitBlock(method.decl.body!, 0);
+      return `${this.methodSignature(info, method)} ${body}`;
+    } finally {
+      this.scope.pop();
+      this.currentClass = undefined;
+    }
   }
 
   private typeFromAnnotation(node: ts.TypeNode | undefined, anchor: ts.Node): TopazType {
@@ -228,6 +536,12 @@ class Emitter {
           throw new CodegenError(node, `no Set monomorph for element type ${elem}`);
         }
         return s;
+      }
+      if (this.classes.has(refName)) {
+        if (node.typeArguments && node.typeArguments.length > 0) {
+          throw new CodegenError(node, `class '${refName}' takes no type arguments`);
+        }
+        return classOf(refName);
       }
     }
     unsupported(node, "type");
@@ -383,8 +697,14 @@ class Emitter {
     const name = decl.name.text;
     const initIsEmptyArrayLit =
       ts.isArrayLiteralExpression(decl.initializer) && decl.initializer.elements.length === 0;
+    // Only `new Map()` / `new Set()` without type arguments need a binding-side
+    // annotation to fix K/V; user-class instantiation has all info in the
+    // identifier itself.
     const initIsBareNew =
       ts.isNewExpression(decl.initializer) &&
+      ts.isIdentifier(decl.initializer.expression) &&
+      (decl.initializer.expression.text === "Map" ||
+        decl.initializer.expression.text === "Set") &&
       (!decl.initializer.typeArguments || decl.initializer.typeArguments.length === 0);
 
     let type: TopazType;
@@ -602,6 +922,12 @@ class Emitter {
     }
     if (expr.kind === ts.SyntaxKind.TrueKeyword) return "true";
     if (expr.kind === ts.SyntaxKind.FalseKeyword) return "false";
+    if (expr.kind === ts.SyntaxKind.ThisKeyword) {
+      if (!this.currentClass) {
+        throw new CodegenError(expr, "`this` is only valid inside class methods or constructors");
+      }
+      return TOPAZ_THIS;
+    }
     if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
       return this.emitStringLiteral(expr);
     }
@@ -624,6 +950,22 @@ class Emitter {
       }
       if ((isMapType(baseType) || isSetType(baseType)) && expr.name.text === "size") {
         return `((topaz_number)(${this.emitExpression(expr.expression)})->size)`;
+      }
+      if (isClassType(baseType)) {
+        const cls = this.classes.get(classNameOf(baseType)!)!;
+        if (cls.fields.has(expr.name.text)) {
+          return `((${this.emitExpression(expr.expression)})->${expr.name.text})`;
+        }
+        if (cls.methods.has(expr.name.text)) {
+          throw new CodegenError(
+            expr,
+            `method '${expr.name.text}' cannot be used as a value (call it instead)`,
+          );
+        }
+        throw new CodegenError(
+          expr,
+          `class '${cls.name}' has no member '${expr.name.text}'`,
+        );
       }
       throw new CodegenError(
         expr,
@@ -770,19 +1112,19 @@ class Emitter {
     expected: TopazType | undefined,
   ): string {
     if (!ts.isIdentifier(expr.expression)) {
-      throw new CodegenError(expr, "only `new Map<K, V>()` and `new Set<T>()` are supported");
+      throw new CodegenError(expr, "only `new Map<K, V>()`, `new Set<T>()`, and class instantiation are supported");
     }
     const name = expr.expression.text;
-    if (expr.arguments && expr.arguments.length > 0) {
-      throw new CodegenError(
-        expr,
-        `${name}() constructor arguments are unsupported (initialize via .set/.add)`,
-      );
-    }
     if (name === "Array") {
       throw new CodegenError(
         expr,
         "use array literal syntax (`[...]` or `[]`) instead of `new Array()`",
+      );
+    }
+    if ((name === "Map" || name === "Set") && expr.arguments && expr.arguments.length > 0) {
+      throw new CodegenError(
+        expr,
+        `${name}() constructor arguments are unsupported (initialize via .set/.add)`,
       );
     }
     if (name === "Map") {
@@ -835,6 +1177,37 @@ class Emitter {
         setType = expected;
       }
       return `topaz_set_${setShortName(setType)}_new()`;
+    }
+    if (this.classes.has(name)) {
+      if (expr.typeArguments && expr.typeArguments.length > 0) {
+        throw new CodegenError(expr, `class '${name}' takes no type arguments`);
+      }
+      const cls = this.classes.get(name)!;
+      const args = expr.arguments ?? ([] as readonly ts.Expression[]);
+      if (!cls.ctor) {
+        // Reachable only when a class has no fields (we require a ctor when
+        // fields exist), so this is a structurally empty class.
+        if (args.length !== 0) {
+          throw new CodegenError(expr, `${cls.name}() takes no arguments`);
+        }
+      } else {
+        const params = cls.ctor.params;
+        if (args.length !== params.length) {
+          throw new CodegenError(
+            expr,
+            `${cls.name}() expects ${params.length} argument(s), got ${args.length}`,
+          );
+        }
+        for (let i = 0; i < params.length; i++) {
+          this.expectType(args[i]!, params[i]!.type);
+        }
+      }
+      const t = classOf(name);
+      if (expected && expected !== t) {
+        throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+      }
+      const argStr = args.map((a) => this.emitExpression(a)).join(", ");
+      return `topaz_class_${name}_new(${argStr})`;
     }
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
   }
@@ -951,6 +1324,9 @@ class Emitter {
       if (isSetType(baseType)) {
         return this.emitSetMethodCall(expr, callee, baseType);
       }
+      if (isClassType(baseType)) {
+        return this.emitClassMethodCall(expr, callee, baseType);
+      }
       throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
     }
 
@@ -1033,6 +1409,34 @@ class Emitter {
     throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
   }
 
+  private emitClassMethodCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+    baseType: TopazType,
+  ): string {
+    const cls = this.classes.get(classNameOf(baseType)!)!;
+    const mname = callee.name.text;
+    const method = cls.methods.get(mname);
+    if (!method) {
+      if (cls.fields.has(mname)) {
+        throw new CodegenError(callee, `'${mname}' is a field, not a method, on class '${cls.name}'`);
+      }
+      throw new CodegenError(callee, `class '${cls.name}' has no method '${mname}'`);
+    }
+    if (expr.arguments.length !== method.params.length) {
+      throw new CodegenError(
+        expr,
+        `${cls.name}.${mname} expects ${method.params.length} argument(s), got ${expr.arguments.length}`,
+      );
+    }
+    for (let i = 0; i < method.params.length; i++) {
+      this.expectType(expr.arguments[i]!, method.params[i]!.type);
+    }
+    const base = this.emitExpression(callee.expression);
+    const argParts = [base, ...expr.arguments.map((a) => this.emitExpression(a))];
+    return `topaz_class_${cls.name}_method_${mname}(${argParts.join(", ")})`;
+  }
+
   private emitSetMethodCall(
     expr: ts.CallExpression,
     callee: ts.PropertyAccessExpression,
@@ -1071,6 +1475,12 @@ class Emitter {
     if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
       return "topaz_boolean";
     }
+    if (expr.kind === ts.SyntaxKind.ThisKeyword) {
+      if (!this.currentClass) {
+        throw new CodegenError(expr, "`this` is only valid inside class methods or constructors");
+      }
+      return classOf(this.currentClass);
+    }
     if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
       return "topaz_string";
     }
@@ -1090,6 +1500,21 @@ class Emitter {
       }
       if ((isMapType(baseType) || isSetType(baseType)) && expr.name.text === "size") {
         return "topaz_number";
+      }
+      if (isClassType(baseType)) {
+        const cls = this.classes.get(classNameOf(baseType)!)!;
+        const fieldType = cls.fields.get(expr.name.text);
+        if (fieldType) return fieldType;
+        if (cls.methods.has(expr.name.text)) {
+          throw new CodegenError(
+            expr,
+            `method '${expr.name.text}' cannot be used as a value (call it instead)`,
+          );
+        }
+        throw new CodegenError(
+          expr,
+          `class '${cls.name}' has no member '${expr.name.text}'`,
+        );
       }
       throw new CodegenError(
         expr,
@@ -1259,6 +1684,14 @@ class Emitter {
           if (m === "has" || m === "delete") return "topaz_boolean";
           throw new CodegenError(callee, `unsupported method '.${m}' on ${baseType}`);
         }
+        if (isClassType(baseType)) {
+          const cls = this.classes.get(classNameOf(baseType)!)!;
+          const method = cls.methods.get(callee.name.text);
+          if (!method) {
+            throw new CodegenError(callee, `class '${cls.name}' has no method '${callee.name.text}'`);
+          }
+          return method.returnType;
+        }
         throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
       }
       if (ts.isIdentifier(callee)) {
@@ -1292,6 +1725,12 @@ class Emitter {
         if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${elem}`);
         return t;
       }
+      if (this.classes.has(name)) {
+        if (expr.typeArguments && expr.typeArguments.length > 0) {
+          throw new CodegenError(expr, `class '${name}' takes no type arguments`);
+        }
+        return classOf(name);
+      }
       throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
     }
     unsupported(expr, "expression");
@@ -1317,7 +1756,35 @@ class Emitter {
       }
       return;
     }
-    throw new CodegenError(anchor, "assignment target must be an identifier or array index");
+    if (ts.isPropertyAccessExpression(target)) {
+      // Compound assignment lowers to `(base)->field op= rhs`, which evaluates
+      // `base` once in C. We still restrict the base to side-effect-free forms
+      // so that a future lowering swap doesn't surprise anyone.
+      if (!this.isSafeLvalueBase(target.expression)) {
+        throw new CodegenError(target, "property assignment requires a simple base (identifier, `this`, or chained property access)");
+      }
+      const baseType = this.inferType(target.expression);
+      if (!isClassType(baseType)) {
+        throw new CodegenError(target, `property assignment is only supported on class instances (got ${baseType})`);
+      }
+      const cls = this.classes.get(classNameOf(baseType)!)!;
+      if (!cls.fields.has(target.name.text)) {
+        if (cls.methods.has(target.name.text)) {
+          throw new CodegenError(target, `cannot assign to method '${target.name.text}'`);
+        }
+        throw new CodegenError(target, `class '${cls.name}' has no field '${target.name.text}'`);
+      }
+      return;
+    }
+    throw new CodegenError(anchor, "assignment target must be an identifier, array index, or property access");
+  }
+
+  private isSafeLvalueBase(expr: ts.Expression): boolean {
+    if (ts.isIdentifier(expr)) return true;
+    if (expr.kind === ts.SyntaxKind.ThisKeyword) return true;
+    if (ts.isParenthesizedExpression(expr)) return this.isSafeLvalueBase(expr.expression);
+    if (ts.isPropertyAccessExpression(expr)) return this.isSafeLvalueBase(expr.expression);
+    return false;
   }
 
   private expectType(expr: ts.Expression, expected: TopazType): void {
