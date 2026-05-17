@@ -5,6 +5,8 @@ type ScalarShortName = "number" | "boolean" | "string";
 type TopazType =
   | `topaz_${ScalarShortName}`
   | `topaz_array_${ScalarShortName}`
+  | `topaz_array_class_${string}`
+  | `topaz_array_iface_${string}`
   | `topaz_map_${ScalarShortName}_${ScalarShortName}`
   | `topaz_set_${ScalarShortName}`
   | `topaz_class_${string}`
@@ -64,14 +66,28 @@ function isReferenceType(t: TopazType): boolean {
 
 function arrayElem(t: TopazType): TopazType | undefined {
   if (!isArrayType(t)) return undefined;
-  return `topaz_${t.slice("topaz_array_".length) as ScalarShortName}`;
+  // tag is "number"/"boolean"/"string" or "class_<Name>"/"iface_<Name>"; the
+  // element type is always `topaz_${tag}` regardless of which branch.
+  return `topaz_${t.slice("topaz_array_".length)}` as TopazType;
 }
 
 function arrayOf(elem: TopazType): TopazType | undefined {
-  if (!isScalarType(elem)) return undefined;
-  return `topaz_array_${elem.slice("topaz_".length) as ScalarShortName}`;
+  if (isScalarType(elem)) {
+    return `topaz_array_${elem.slice("topaz_".length) as ScalarShortName}`;
+  }
+  if (isClassType(elem)) {
+    return `topaz_array_class_${classNameOf(elem)!}` as TopazType;
+  }
+  if (isInterfaceType(elem)) {
+    return `topaz_array_iface_${interfaceNameOf(elem)!}` as TopazType;
+  }
+  return undefined;
 }
 
+// The monomorph tag used in C identifiers (e.g. `topaz_array_<tag>`,
+// `topaz_array_<tag>_push`). For scalars it's the short name; for class/iface
+// it carries the `class_`/`iface_` prefix so we never collide with scalars or
+// with each other.
 function arrayShortName(t: TopazType): string {
   return t.slice("topaz_array_".length);
 }
@@ -211,6 +227,16 @@ class Emitter {
   private currentReturnType: TopazType | undefined;
   private switchCounter = 0;
   private tmpCounter = 0;
+  // Phase 1.4c-1a: each Array<class>/Array<interface> referenced in user code
+  // gets a TOPAZ_ARRAY_DEFINE() expansion in the generated C, since the runtime
+  // header only preexpands the scalar monomorphs.
+  private arrayMonomorphs = new Set<TopazType>();
+
+  private recordArrayMonomorph(t: TopazType): void {
+    if (!isArrayType(t)) return;
+    if (isScalarType(arrayElem(t)!)) return; // runtime.h preexpands these
+    this.arrayMonomorphs.add(t);
+  }
 
   emit(sf: ts.SourceFile): string {
     const functions: ts.FunctionDeclaration[] = [];
@@ -325,6 +351,12 @@ class Emitter {
       out.push("");
     }
 
+    // Placeholder for TOPAZ_ARRAY_DEFINE expansions for Array<class>/
+    // Array<interface> monomorphs. We don't know the full set until we've
+    // walked every expression, so splice the real entries in at the very end.
+    const containerMonomorphSlot = out.length;
+    out.push("");
+
     for (const fn of functions) {
       out.push(`${this.formatSignature(fn)};`);
     }
@@ -372,7 +404,39 @@ class Emitter {
     out.push("  return 0;");
     out.push("}");
 
+    if (this.arrayMonomorphs.size > 0) {
+      const sections: string[] = [];
+      for (const t of this.arrayMonomorphs) {
+        sections.push(this.emitArrayMonomorphMacro(t));
+      }
+
+      // TOPAZ_ARRAY_DEFINE expands several static-inline helpers (notably
+      // _pop) that the user program may not call. Suppress the warning so
+      // emit stays monomorph-driven instead of usage-driven.
+      out[containerMonomorphSlot] =
+        `#pragma GCC diagnostic push\n` +
+        `#pragma GCC diagnostic ignored "-Wunused-function"\n` +
+        `${sections.join("\n")}\n` +
+        `#pragma GCC diagnostic pop\n`;
+    }
+
     return out.join("\n") + "\n";
+  }
+
+  // Phase 1.4c-1a: expand TOPAZ_ARRAY_DEFINE for class/interface element types.
+  // Scalar monomorphs (number/boolean/string) are pre-expanded in runtime.h.
+  private emitArrayMonomorphMacro(t: TopazType): string {
+    const tag = arrayShortName(t);
+    const elem = arrayElem(t)!;
+    let cElem: string;
+    if (isClassType(elem)) {
+      cElem = `topaz_class_${classNameOf(elem)!} *`;
+    } else if (isInterfaceType(elem)) {
+      cElem = `topaz_iface_${interfaceNameOf(elem)!}`;
+    } else {
+      throw new Error(`unexpected array element type ${elem} for monomorph emission`);
+    }
+    return `TOPAZ_ARRAY_DEFINE(${tag}, ${cElem})`;
   }
 
   private collectInterfaceMembers(iface: ts.InterfaceDeclaration): void {
@@ -819,6 +883,7 @@ class Emitter {
       if (!arr) {
         throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
       }
+      this.recordArrayMonomorph(arr);
       return arr;
     }
     if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
@@ -832,6 +897,7 @@ class Emitter {
         if (!arr) {
           throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
         }
+        this.recordArrayMonomorph(arr);
         return arr;
       }
       if (refName === "Map") {
@@ -1352,9 +1418,12 @@ class Emitter {
         }
         const baseType = this.inferType(expr.left.expression);
         const name = arrayShortName(baseType);
+        const elem = arrayElem(baseType)!;
         const base = this.emitExpression(expr.left.expression);
         const idx = this.emitExpression(expr.left.argumentExpression);
-        const val = this.emitExpression(expr.right);
+        // Use emitWithExpected so class -> interface coercion fires when the
+        // array is Array<Interface> and the RHS is a class instance.
+        const val = this.emitWithExpected(expr.right, elem);
         return `topaz_array_${name}_set(${base}, ${idx}, ${val})`;
       }
       // Interface property assignment goes through the vtable's setter; no
@@ -1458,6 +1527,12 @@ class Emitter {
         );
       }
       arrType = expected;
+    } else if (expected && isArrayType(expected)) {
+      // With a known expected Array<T>, use T as the element type so each
+      // element can coerce to it (class -> interface). This is required for
+      // mixed-class Array<Interface> literals, where elements can have
+      // different concrete types as long as they all implement T.
+      arrType = expected;
     } else {
       const elem = this.inferType(expr.elements[0]!);
       for (let i = 1; i < expr.elements.length; i++) {
@@ -1468,13 +1543,9 @@ class Emitter {
         throw new CodegenError(expr, `no Array monomorph for element type ${elem}`);
       }
       arrType = arr;
-      if (expected && expected !== arrType) {
-        throw new CodegenError(
-          expr,
-          `type mismatch: expected ${expected}, got ${arrType}`,
-        );
-      }
+      this.recordArrayMonomorph(arrType);
     }
+    const elemType = arrayElem(arrType)!;
     const name = arrayShortName(arrType);
     const id = this.tmpCounter++;
     const tmp = `__topaz_arr_${id}`;
@@ -1485,7 +1556,7 @@ class Emitter {
       parts.push(`topaz_array_${name}_reserve(${tmp}, ${expr.elements.length});`);
     }
     for (const e of expr.elements) {
-      parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitExpression(e as ts.Expression)});`);
+      parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e as ts.Expression, elemType)});`);
     }
     return `({ ${parts.join(" ")} ${tmp}; })`;
   }
@@ -1754,8 +1825,7 @@ class Emitter {
       if (expr.arguments.length !== 1) {
         throw new CodegenError(expr, "Array.push expects exactly one argument");
       }
-      this.expectType(expr.arguments[0]!, elem);
-      return `topaz_array_${name}_push(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+      return `topaz_array_${name}_push(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
     }
     if (method === "pop") {
       if (expr.arguments.length !== 0) {
@@ -1990,6 +2060,7 @@ class Emitter {
       if (!arr) {
         throw new CodegenError(expr, `no Array monomorph for element type ${elem}`);
       }
+      this.recordArrayMonomorph(arr);
       return arr;
     }
     if (ts.isPrefixUnaryExpression(expr)) {
