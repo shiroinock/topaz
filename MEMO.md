@@ -211,13 +211,13 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 ### Phase 1: Self-hosting 可能なサブセット(3–4 ヶ月)
 
-- クラス、interface、ジェネリクス(monomorphize)
-- 配列、文字列、`Map`、`Set`
-- 制御フロー全部
-- 例外
-- ES module 静的解決
-- 全プログラム型検証(多態検出 → エラー)
-- 自身がコンパイル可能になるところまで
+実装サイズが大きすぎるので 1.1〜1.5 に細分化して進める。各小段階の done 定義は CLAUDE.md の「Phase 0 から先」セクションを参照。
+
+- [x] **1.1**: 制御フロー(`let`/`const`/`while`/`for`/`do-while`/`break`/`continue`)、`boolean` 型、論理・単項・複合代入・`++`/`--`、軽量な式レベル型推論(codegen 内に同居)。サンプル: `loop_sum.ts` (= 5050)、`while_count.ts` (= 10)、`boolean_print.ts`。
+- [ ] **1.2**: `%` の `fmod` 化、Ryu による `number → string`、`switch`、`string` 型と最小文字列操作。
+- [ ] **1.3**: `Array<T>` (monomorphize)、`Map`、`Set`。
+- [ ] **1.4**: class、interface、ジェネリクス(monomorphize、構造的型は同 shape で nominal 統合)。
+- [ ] **1.5**: 例外、ES module 静的解決、全プログラム型検証(多態検出 → エラー)、self-hosting 通過。
 
 ### Phase 2: 実用性(6 ヶ月〜)
 
@@ -290,6 +290,17 @@ Phase 0 を実装する過程で確定した、設計検討時点で開いてい
 - **未対応構文の扱い**: codegen 中に `CodegenError` を `file:line:col` 付きで投げて停止(`§3.1` の方針を実装に落とした形)。
 - **number → 文字列**: Phase 0 は `printf("%.17g", n)`。`3.14` が `"3.1400000000000001"` になる divergence あり。Phase 1 で **Ryu**(Ulf Adams, PLDI 2018, Apache-2.0 / Boost)を `runtime/` に取り込んで差し替える。shortest round-trip 系として実装サイズ・C 単体での扱いやすさで採用。
 - **CLI のデフォルト出力**: `<input>.ts` の隣にバイナリと `.c` を落とす。`--emit-c-only` で cc をスキップして生成 C を残せる。`.gitignore` で `examples/` の生成物は無視。
+
+## 12. Phase 1.1 実装決定ログ
+
+- **`boolean` の C 表現**: `<stdbool.h>` の `bool` を `topaz_boolean` に typedef。`int` を直接使うのではなく `bool` にすることで、生成 C 側で「真偽値」と「数値」が混ざる事故を C コンパイラの警告層でも捕まえやすくする。
+- **条件式は strict boolean**: `if`/`while`/`for`/`do-while` の条件に数値を渡すとコンパイルエラー。`if (n !== 0)` のように明示させる。JS の truthy/falsy を持ち込まないことで、後段で `number` 以外の型(`null`/`undefined`/オブジェクト)を入れた時の意味論ブレを未然に防ぐ。
+- **`==`/`!=` は未対応エラー**: `===`/`!==` を使えとメッセージで誘導。Phase 1.1 時点で `Number(x) == "1"` のような暗黙変換を実装する利得がないため、最初から切る(`§3.1` 「禁止じゃなく未対応」の応用)。
+- **`let`/`const` は初期化必須**: 未初期化の局所変数を C にそのまま落とすと不定値の読み出し UB を踏む。JS の `undefined` セマンティクスを Phase 1 では実装しないので、「明示初期化を要求する」方が単純で安全。
+- **型推論の置き場所**: 専用の TypedAST 層を切る前段として、Phase 1.1 では `Emitter.inferType` が AST を式単位で歩く軽量実装で済ませる。`MEMO §5` の流れ図でいう「TypedAST」「全プログラム型推論」を 1.2〜1.5 の中で切り出していく。
+- **for-init は単一宣言**: `for (let i = 0, j = 0; ...)` を許すと、型が混じった場合に C の for 構文に乗らない。単一宣言だけ受理し、複数変数を回したい場合は外で `let` しておくスタイルに統一。
+- **scope と関数シグネチャ**: 関数の前方宣言が全関数ぶん最初に出るのを利用して、本体 emit より先に全関数の戻り値型を `functionReturns` に登録する。これで相互再帰しても型解決できる。
+- **`%` は C の `%` でとりあえず出している**: 浮動小数では JS の `%` (= `fmod`) とずれる。整数領域では一致するので Phase 1.1 のサンプル(`loop_sum`/`while_count`)に影響しないが、Phase 1.2 で Ryu と一緒に `topaz_fmod` 経由に差し替える宿題。
 
 ---
 

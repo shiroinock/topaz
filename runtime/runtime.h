@@ -2,10 +2,16 @@
 #define TOPAZ_RUNTIME_H
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
 typedef double topaz_number;
+typedef bool topaz_boolean;
+
+static inline void topaz_console_log_boolean(topaz_boolean b) {
+  fputs(b ? "true\n" : "false\n", stdout);
+}
 
 static inline void topaz_console_log_number(topaz_number n) {
   if (isnan(n)) {

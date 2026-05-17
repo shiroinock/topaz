@@ -1,5 +1,9 @@
 import * as ts from "typescript";
 
+type TopazType = "topaz_number" | "topaz_boolean";
+
+type Binding = { type: TopazType; isConst: boolean };
+
 class CodegenError extends Error {
   constructor(node: ts.Node, message: string) {
     const sf = node.getSourceFile();
@@ -13,152 +17,536 @@ class CodegenError extends Error {
 }
 
 function unsupported(node: ts.Node, what: string): never {
-  throw new CodegenError(node, `Phase 0: unsupported ${what} (${ts.SyntaxKind[node.kind]})`);
+  throw new CodegenError(node, `unsupported ${what} (${ts.SyntaxKind[node.kind]})`);
 }
 
-function tsTypeToC(node: ts.TypeNode | undefined, anchor: ts.Node): string {
-  if (!node) throw new CodegenError(anchor, "Phase 0: type annotation required");
-  if (node.kind === ts.SyntaxKind.NumberKeyword) return "topaz_number";
-  unsupported(node, "type");
-}
+class Scope {
+  private stack: Map<string, Binding>[] = [new Map()];
 
-function emitNumericLiteral(lit: ts.NumericLiteral): string {
-  const t = lit.text;
-  return /[.eE]/.test(t) ? t : `${t}.0`;
-}
+  push(): void {
+    this.stack.push(new Map());
+  }
 
-function mapBinaryOp(token: ts.BinaryOperatorToken): string {
-  switch (token.kind) {
-    case ts.SyntaxKind.PlusToken: return "+";
-    case ts.SyntaxKind.MinusToken: return "-";
-    case ts.SyntaxKind.AsteriskToken: return "*";
-    case ts.SyntaxKind.SlashToken: return "/";
-    case ts.SyntaxKind.LessThanToken: return "<";
-    case ts.SyntaxKind.LessThanEqualsToken: return "<=";
-    case ts.SyntaxKind.GreaterThanToken: return ">";
-    case ts.SyntaxKind.GreaterThanEqualsToken: return ">=";
-    case ts.SyntaxKind.EqualsEqualsEqualsToken: return "==";
-    case ts.SyntaxKind.ExclamationEqualsEqualsToken: return "!=";
-    default: unsupported(token, "binary operator");
+  pop(): void {
+    this.stack.pop();
   }
-}
 
-function emitCallee(callee: ts.Expression): string {
-  if (ts.isIdentifier(callee)) return callee.text;
-  if (
-    ts.isPropertyAccessExpression(callee) &&
-    ts.isIdentifier(callee.expression) &&
-    callee.expression.text === "console" &&
-    callee.name.text === "log"
-  ) {
-    return "topaz_console_log_number";
-  }
-  unsupported(callee, "call target");
-}
-
-function emitExpression(expr: ts.Expression): string {
-  if (ts.isNumericLiteral(expr)) return emitNumericLiteral(expr);
-  if (ts.isIdentifier(expr)) return expr.text;
-  if (ts.isParenthesizedExpression(expr)) return `(${emitExpression(expr.expression)})`;
-  if (ts.isBinaryExpression(expr)) {
-    const op = mapBinaryOp(expr.operatorToken);
-    return `(${emitExpression(expr.left)} ${op} ${emitExpression(expr.right)})`;
-  }
-  if (ts.isCallExpression(expr)) {
-    const callee = emitCallee(expr.expression);
-    const args = expr.arguments.map(emitExpression).join(", ");
-    return `${callee}(${args})`;
-  }
-  unsupported(expr, "expression");
-}
-
-function emitStatement(stmt: ts.Statement, indent: number): string {
-  const pad = "  ".repeat(indent);
-  if (ts.isReturnStatement(stmt)) {
-    return stmt.expression
-      ? `${pad}return ${emitExpression(stmt.expression)};`
-      : `${pad}return;`;
-  }
-  if (ts.isExpressionStatement(stmt)) {
-    return `${pad}${emitExpression(stmt.expression)};`;
-  }
-  if (ts.isIfStatement(stmt)) {
-    const cond = emitExpression(stmt.expression);
-    const thenStr = emitStatementAsBlock(stmt.thenStatement, indent);
-    let out = `${pad}if (${cond}) ${thenStr.trimStart()}`;
-    if (stmt.elseStatement) {
-      const elseStr = emitStatementAsBlock(stmt.elseStatement, indent);
-      out += ` else ${elseStr.trimStart()}`;
+  declare(name: string, type: TopazType, isConst: boolean, node: ts.Node): void {
+    const top = this.stack[this.stack.length - 1]!;
+    if (top.has(name)) {
+      throw new CodegenError(node, `redeclaration of '${name}'`);
     }
-    return out;
+    top.set(name, { type, isConst });
   }
-  if (ts.isBlock(stmt)) {
-    return emitBlock(stmt, indent);
+
+  lookup(name: string): Binding | undefined {
+    for (let i = this.stack.length - 1; i >= 0; i--) {
+      const b = this.stack[i]!.get(name);
+      if (b) return b;
+    }
+    return undefined;
   }
-  unsupported(stmt, "statement");
 }
 
-function emitStatementAsBlock(stmt: ts.Statement, indent: number): string {
-  if (ts.isBlock(stmt)) return emitBlock(stmt, indent);
-  const pad = "  ".repeat(indent);
-  const inner = emitStatement(stmt, indent + 1);
-  return `${pad}{\n${inner}\n${pad}}`;
-}
+class Emitter {
+  private scope = new Scope();
+  private functionReturns = new Map<string, TopazType>();
 
-function emitBlock(block: ts.Block, indent: number): string {
-  const pad = "  ".repeat(indent);
-  const lines = block.statements.map((s) => emitStatement(s, indent + 1));
-  return `${pad}{\n${lines.join("\n")}\n${pad}}`;
-}
+  emit(sf: ts.SourceFile): string {
+    const functions: ts.FunctionDeclaration[] = [];
+    const topLevel: ts.Statement[] = [];
+    for (const stmt of sf.statements) {
+      if (ts.isFunctionDeclaration(stmt)) functions.push(stmt);
+      else topLevel.push(stmt);
+    }
 
-function emitFunctionSignature(fn: ts.FunctionDeclaration): string {
-  if (!fn.name) throw new CodegenError(fn, "Phase 0: function must be named");
-  const ret = tsTypeToC(fn.type, fn);
-  const params = fn.parameters
-    .map((p) => {
-      if (!ts.isIdentifier(p.name)) {
-        throw new CodegenError(p, "Phase 0: parameter must be a simple identifier");
+    for (const fn of functions) {
+      if (!fn.name) throw new CodegenError(fn, "function must be named");
+      const ret = this.typeFromAnnotation(fn.type, fn);
+      if (this.functionReturns.has(fn.name.text)) {
+        throw new CodegenError(fn, `redeclaration of function '${fn.name.text}'`);
       }
-      const t = tsTypeToC(p.type, p);
-      return `${t} ${p.name.text}`;
-    })
-    .join(", ");
-  return `static ${ret} ${fn.name.text}(${params || "void"})`;
-}
+      this.functionReturns.set(fn.name.text, ret);
+    }
 
-function emitFunctionDefinition(fn: ts.FunctionDeclaration): string {
-  if (!fn.body) throw new CodegenError(fn, "Phase 0: function must have a body");
-  return `${emitFunctionSignature(fn)} ${emitBlock(fn.body, 0)}`;
+    const out: string[] = [];
+    out.push('#include "runtime.h"');
+    out.push("");
+
+    for (const fn of functions) {
+      out.push(`${this.formatSignature(fn)};`);
+    }
+    if (functions.length > 0) out.push("");
+
+    for (const fn of functions) {
+      out.push(this.emitFunctionDefinition(fn));
+      out.push("");
+    }
+
+    out.push("int main(void) {");
+    this.scope.push();
+    for (const stmt of topLevel) {
+      out.push(this.emitStatement(stmt, 1));
+    }
+    this.scope.pop();
+    out.push("  return 0;");
+    out.push("}");
+
+    return out.join("\n") + "\n";
+  }
+
+  private typeFromAnnotation(node: ts.TypeNode | undefined, anchor: ts.Node): TopazType {
+    if (!node) throw new CodegenError(anchor, "type annotation required");
+    if (node.kind === ts.SyntaxKind.NumberKeyword) return "topaz_number";
+    if (node.kind === ts.SyntaxKind.BooleanKeyword) return "topaz_boolean";
+    unsupported(node, "type");
+  }
+
+  private formatSignature(fn: ts.FunctionDeclaration): string {
+    const ret = this.typeFromAnnotation(fn.type, fn);
+    const params = fn.parameters
+      .map((p) => {
+        if (!ts.isIdentifier(p.name)) {
+          throw new CodegenError(p, "parameter must be a simple identifier");
+        }
+        if (p.questionToken || p.initializer || p.dotDotDotToken) {
+          throw new CodegenError(p, "optional/default/rest parameters are unsupported");
+        }
+        const t = this.typeFromAnnotation(p.type, p);
+        return `${t} ${p.name.text}`;
+      })
+      .join(", ");
+    return `static ${ret} ${fn.name!.text}(${params || "void"})`;
+  }
+
+  private emitFunctionDefinition(fn: ts.FunctionDeclaration): string {
+    if (!fn.body) throw new CodegenError(fn, "function must have a body");
+    this.scope.push();
+    for (const p of fn.parameters) {
+      const name = (p.name as ts.Identifier).text;
+      const t = this.typeFromAnnotation(p.type, p);
+      this.scope.declare(name, t, /* isConst */ false, p);
+    }
+    const body = this.emitBlock(fn.body, 0);
+    this.scope.pop();
+    return `${this.formatSignature(fn)} ${body}`;
+  }
+
+  private emitBlock(block: ts.Block, indent: number): string {
+    const pad = "  ".repeat(indent);
+    const lines = block.statements.map((s) => this.emitStatement(s, indent + 1));
+    return `${pad}{\n${lines.join("\n")}\n${pad}}`;
+  }
+
+  private emitStatement(stmt: ts.Statement, indent: number): string {
+    const pad = "  ".repeat(indent);
+
+    if (ts.isReturnStatement(stmt)) {
+      return stmt.expression
+        ? `${pad}return ${this.emitExpression(stmt.expression)};`
+        : `${pad}return;`;
+    }
+
+    if (ts.isExpressionStatement(stmt)) {
+      return `${pad}${this.emitExpression(stmt.expression)};`;
+    }
+
+    if (ts.isVariableStatement(stmt)) {
+      return this.emitVarDecls(stmt.declarationList, indent);
+    }
+
+    if (ts.isIfStatement(stmt)) {
+      this.expectType(stmt.expression, "topaz_boolean");
+      const cond = this.emitExpression(stmt.expression);
+      const thenStr = this.emitStatementAsBlock(stmt.thenStatement, indent);
+      let out = `${pad}if (${cond}) ${thenStr.trimStart()}`;
+      if (stmt.elseStatement) {
+        const elseStr = this.emitStatementAsBlock(stmt.elseStatement, indent);
+        out += ` else ${elseStr.trimStart()}`;
+      }
+      return out;
+    }
+
+    if (ts.isWhileStatement(stmt)) {
+      this.expectType(stmt.expression, "topaz_boolean");
+      const cond = this.emitExpression(stmt.expression);
+      const body = this.emitStatementAsBlock(stmt.statement, indent);
+      return `${pad}while (${cond}) ${body.trimStart()}`;
+    }
+
+    if (ts.isDoStatement(stmt)) {
+      this.expectType(stmt.expression, "topaz_boolean");
+      const cond = this.emitExpression(stmt.expression);
+      const body = this.emitStatementAsBlock(stmt.statement, indent);
+      return `${pad}do ${body.trimStart()} while (${cond});`;
+    }
+
+    if (ts.isForStatement(stmt)) {
+      return this.emitForStatement(stmt, indent);
+    }
+
+    if (ts.isBreakStatement(stmt)) {
+      if (stmt.label) unsupported(stmt, "labeled break");
+      return `${pad}break;`;
+    }
+
+    if (ts.isContinueStatement(stmt)) {
+      if (stmt.label) unsupported(stmt, "labeled continue");
+      return `${pad}continue;`;
+    }
+
+    if (ts.isBlock(stmt)) {
+      this.scope.push();
+      const out = this.emitBlock(stmt, indent);
+      this.scope.pop();
+      return out;
+    }
+
+    unsupported(stmt, "statement");
+  }
+
+  private emitStatementAsBlock(stmt: ts.Statement, indent: number): string {
+    const pad = "  ".repeat(indent);
+    if (ts.isBlock(stmt)) {
+      this.scope.push();
+      const out = this.emitBlock(stmt, indent);
+      this.scope.pop();
+      return out;
+    }
+    this.scope.push();
+    const inner = this.emitStatement(stmt, indent + 1);
+    this.scope.pop();
+    return `${pad}{\n${inner}\n${pad}}`;
+  }
+
+  private emitVarDecls(list: ts.VariableDeclarationList, indent: number): string {
+    const pad = "  ".repeat(indent);
+    const isConst = (list.flags & ts.NodeFlags.Const) !== 0;
+    const isLet = (list.flags & ts.NodeFlags.Let) !== 0;
+    if (!isConst && !isLet) {
+      throw new CodegenError(list, "var is unsupported; use let or const");
+    }
+    const lines: string[] = [];
+    for (const d of list.declarations) {
+      const { type, cName, initStr } = this.declareVar(d, isConst);
+      lines.push(`${pad}${type} ${cName}${initStr};`);
+    }
+    return lines.join("\n");
+  }
+
+  private declareVar(
+    decl: ts.VariableDeclaration,
+    isConst: boolean,
+  ): { type: TopazType; cName: string; initStr: string } {
+    if (!ts.isIdentifier(decl.name)) {
+      throw new CodegenError(decl, "variable name must be a simple identifier");
+    }
+    if (!decl.initializer) {
+      throw new CodegenError(decl, "variable declaration must have an initializer");
+    }
+    const name = decl.name.text;
+    let type: TopazType;
+    if (decl.type) {
+      type = this.typeFromAnnotation(decl.type, decl);
+      this.expectType(decl.initializer, type);
+    } else {
+      type = this.inferType(decl.initializer);
+    }
+    this.scope.declare(name, type, isConst, decl);
+    const initStr = ` = ${this.emitExpression(decl.initializer)}`;
+    return { type, cName: name, initStr };
+  }
+
+  private emitForStatement(stmt: ts.ForStatement, indent: number): string {
+    const pad = "  ".repeat(indent);
+    this.scope.push();
+    try {
+      let initStr = "";
+      if (stmt.initializer) {
+        if (ts.isVariableDeclarationList(stmt.initializer)) {
+          const init = stmt.initializer;
+          if (init.declarations.length !== 1) {
+            throw new CodegenError(init, "for-init with multiple declarations is unsupported");
+          }
+          const isConst = (init.flags & ts.NodeFlags.Const) !== 0;
+          const isLet = (init.flags & ts.NodeFlags.Let) !== 0;
+          if (!isConst && !isLet) {
+            throw new CodegenError(init, "var is unsupported; use let or const");
+          }
+          const { type, cName, initStr: vInit } = this.declareVar(init.declarations[0]!, isConst);
+          initStr = `${type} ${cName}${vInit}`;
+        } else {
+          initStr = this.emitExpression(stmt.initializer as ts.Expression);
+        }
+      }
+      if (!stmt.condition) {
+        throw new CodegenError(stmt, "for-loop requires a condition");
+      }
+      this.expectType(stmt.condition, "topaz_boolean");
+      const condStr = this.emitExpression(stmt.condition);
+      const incrStr = stmt.incrementor ? this.emitExpression(stmt.incrementor) : "";
+
+      let bodyStr: string;
+      if (ts.isBlock(stmt.statement)) {
+        this.scope.push();
+        bodyStr = this.emitBlock(stmt.statement, indent);
+        this.scope.pop();
+      } else {
+        this.scope.push();
+        const inner = this.emitStatement(stmt.statement, indent + 1);
+        this.scope.pop();
+        bodyStr = `${pad}{\n${inner}\n${pad}}`;
+      }
+      return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}`;
+    } finally {
+      this.scope.pop();
+    }
+  }
+
+  private emitExpression(expr: ts.Expression): string {
+    if (ts.isNumericLiteral(expr)) {
+      const t = expr.text;
+      return /[.eE]/.test(t) ? t : `${t}.0`;
+    }
+    if (expr.kind === ts.SyntaxKind.TrueKeyword) return "true";
+    if (expr.kind === ts.SyntaxKind.FalseKeyword) return "false";
+    if (ts.isIdentifier(expr)) {
+      if (!this.scope.lookup(expr.text)) {
+        throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
+      }
+      return expr.text;
+    }
+    if (ts.isParenthesizedExpression(expr)) {
+      return `(${this.emitExpression(expr.expression)})`;
+    }
+    if (ts.isPrefixUnaryExpression(expr)) {
+      this.inferType(expr); // type-check
+      const op = this.prefixOp(expr);
+      return `(${op}${this.emitExpression(expr.operand)})`;
+    }
+    if (ts.isPostfixUnaryExpression(expr)) {
+      this.inferType(expr);
+      const op = this.postfixOp(expr);
+      return `(${this.emitExpression(expr.operand)}${op})`;
+    }
+    if (ts.isBinaryExpression(expr)) {
+      this.inferType(expr); // type-check + const-check
+      const op = this.binaryOp(expr.operatorToken);
+      return `(${this.emitExpression(expr.left)} ${op} ${this.emitExpression(expr.right)})`;
+    }
+    if (ts.isCallExpression(expr)) {
+      return this.emitCall(expr);
+    }
+    unsupported(expr, "expression");
+  }
+
+  private prefixOp(expr: ts.PrefixUnaryExpression): string {
+    switch (expr.operator) {
+      case ts.SyntaxKind.MinusToken: return "-";
+      case ts.SyntaxKind.PlusToken: return "+";
+      case ts.SyntaxKind.ExclamationToken: return "!";
+      case ts.SyntaxKind.PlusPlusToken: return "++";
+      case ts.SyntaxKind.MinusMinusToken: return "--";
+      default: unsupported(expr, "prefix unary operator");
+    }
+  }
+
+  private postfixOp(expr: ts.PostfixUnaryExpression): string {
+    switch (expr.operator) {
+      case ts.SyntaxKind.PlusPlusToken: return "++";
+      case ts.SyntaxKind.MinusMinusToken: return "--";
+      default: unsupported(expr, "postfix unary operator");
+    }
+  }
+
+  private binaryOp(tok: ts.BinaryOperatorToken): string {
+    switch (tok.kind) {
+      case ts.SyntaxKind.PlusToken: return "+";
+      case ts.SyntaxKind.MinusToken: return "-";
+      case ts.SyntaxKind.AsteriskToken: return "*";
+      case ts.SyntaxKind.SlashToken: return "/";
+      case ts.SyntaxKind.PercentToken: return "%";
+      case ts.SyntaxKind.LessThanToken: return "<";
+      case ts.SyntaxKind.LessThanEqualsToken: return "<=";
+      case ts.SyntaxKind.GreaterThanToken: return ">";
+      case ts.SyntaxKind.GreaterThanEqualsToken: return ">=";
+      case ts.SyntaxKind.EqualsEqualsEqualsToken: return "==";
+      case ts.SyntaxKind.ExclamationEqualsEqualsToken: return "!=";
+      case ts.SyntaxKind.AmpersandAmpersandToken: return "&&";
+      case ts.SyntaxKind.BarBarToken: return "||";
+      case ts.SyntaxKind.EqualsToken: return "=";
+      case ts.SyntaxKind.PlusEqualsToken: return "+=";
+      case ts.SyntaxKind.MinusEqualsToken: return "-=";
+      case ts.SyntaxKind.AsteriskEqualsToken: return "*=";
+      case ts.SyntaxKind.SlashEqualsToken: return "/=";
+      case ts.SyntaxKind.PercentEqualsToken: return "%=";
+      case ts.SyntaxKind.EqualsEqualsToken:
+      case ts.SyntaxKind.ExclamationEqualsToken:
+        throw new CodegenError(tok, "loose equality (== / !=) is unsupported; use === / !==");
+      default:
+        unsupported(tok, "binary operator");
+    }
+  }
+
+  private emitCall(expr: ts.CallExpression): string {
+    const callee = expr.expression;
+
+    if (
+      ts.isPropertyAccessExpression(callee) &&
+      ts.isIdentifier(callee.expression) &&
+      callee.expression.text === "console" &&
+      callee.name.text === "log"
+    ) {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "console.log expects exactly one argument");
+      }
+      const arg = expr.arguments[0]!;
+      const t = this.inferType(arg);
+      const fn = t === "topaz_boolean" ? "topaz_console_log_boolean" : "topaz_console_log_number";
+      return `${fn}(${this.emitExpression(arg)})`;
+    }
+
+    if (ts.isIdentifier(callee)) {
+      const ret = this.functionReturns.get(callee.text);
+      if (!ret) {
+        throw new CodegenError(callee, `unknown function '${callee.text}'`);
+      }
+      const args = expr.arguments.map((a) => this.emitExpression(a)).join(", ");
+      return `${callee.text}(${args})`;
+    }
+
+    unsupported(callee, "call target");
+  }
+
+  private inferType(expr: ts.Expression): TopazType {
+    if (ts.isNumericLiteral(expr)) return "topaz_number";
+    if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
+      return "topaz_boolean";
+    }
+    if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
+    if (ts.isIdentifier(expr)) {
+      const b = this.scope.lookup(expr.text);
+      if (!b) throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
+      return b.type;
+    }
+    if (ts.isPrefixUnaryExpression(expr)) {
+      switch (expr.operator) {
+        case ts.SyntaxKind.MinusToken:
+        case ts.SyntaxKind.PlusToken:
+          this.expectType(expr.operand, "topaz_number");
+          return "topaz_number";
+        case ts.SyntaxKind.ExclamationToken:
+          this.expectType(expr.operand, "topaz_boolean");
+          return "topaz_boolean";
+        case ts.SyntaxKind.PlusPlusToken:
+        case ts.SyntaxKind.MinusMinusToken:
+          this.checkAssignTarget(expr.operand, expr);
+          this.expectType(expr.operand, "topaz_number");
+          return "topaz_number";
+        default:
+          unsupported(expr, "prefix unary operator");
+      }
+    }
+    if (ts.isPostfixUnaryExpression(expr)) {
+      this.checkAssignTarget(expr.operand, expr);
+      this.expectType(expr.operand, "topaz_number");
+      return "topaz_number";
+    }
+    if (ts.isBinaryExpression(expr)) {
+      const kind = expr.operatorToken.kind;
+      switch (kind) {
+        case ts.SyntaxKind.PlusToken:
+        case ts.SyntaxKind.MinusToken:
+        case ts.SyntaxKind.AsteriskToken:
+        case ts.SyntaxKind.SlashToken:
+        case ts.SyntaxKind.PercentToken:
+          this.expectType(expr.left, "topaz_number");
+          this.expectType(expr.right, "topaz_number");
+          return "topaz_number";
+        case ts.SyntaxKind.LessThanToken:
+        case ts.SyntaxKind.LessThanEqualsToken:
+        case ts.SyntaxKind.GreaterThanToken:
+        case ts.SyntaxKind.GreaterThanEqualsToken:
+          this.expectType(expr.left, "topaz_number");
+          this.expectType(expr.right, "topaz_number");
+          return "topaz_boolean";
+        case ts.SyntaxKind.EqualsEqualsEqualsToken:
+        case ts.SyntaxKind.ExclamationEqualsEqualsToken: {
+          const lt = this.inferType(expr.left);
+          this.expectType(expr.right, lt);
+          return "topaz_boolean";
+        }
+        case ts.SyntaxKind.AmpersandAmpersandToken:
+        case ts.SyntaxKind.BarBarToken:
+          this.expectType(expr.left, "topaz_boolean");
+          this.expectType(expr.right, "topaz_boolean");
+          return "topaz_boolean";
+        case ts.SyntaxKind.EqualsToken: {
+          this.checkAssignTarget(expr.left, expr);
+          const lt = this.inferType(expr.left);
+          this.expectType(expr.right, lt);
+          return lt;
+        }
+        case ts.SyntaxKind.PlusEqualsToken:
+        case ts.SyntaxKind.MinusEqualsToken:
+        case ts.SyntaxKind.AsteriskEqualsToken:
+        case ts.SyntaxKind.SlashEqualsToken:
+        case ts.SyntaxKind.PercentEqualsToken:
+          this.checkAssignTarget(expr.left, expr);
+          this.expectType(expr.left, "topaz_number");
+          this.expectType(expr.right, "topaz_number");
+          return "topaz_number";
+        case ts.SyntaxKind.EqualsEqualsToken:
+        case ts.SyntaxKind.ExclamationEqualsToken:
+          throw new CodegenError(
+            expr.operatorToken,
+            "loose equality (== / !=) is unsupported; use === / !==",
+          );
+        default:
+          unsupported(expr.operatorToken, "binary operator");
+      }
+    }
+    if (ts.isCallExpression(expr)) {
+      const callee = expr.expression;
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === "console" &&
+        callee.name.text === "log"
+      ) {
+        throw new CodegenError(expr, "console.log returns void and cannot be used as a value");
+      }
+      if (ts.isIdentifier(callee)) {
+        const ret = this.functionReturns.get(callee.text);
+        if (!ret) throw new CodegenError(callee, `unknown function '${callee.text}'`);
+        return ret;
+      }
+      unsupported(callee, "call target");
+    }
+    unsupported(expr, "expression");
+  }
+
+  private checkAssignTarget(target: ts.Expression, anchor: ts.Node): void {
+    if (!ts.isIdentifier(target)) {
+      throw new CodegenError(anchor, "assignment target must be a simple identifier");
+    }
+    const b = this.scope.lookup(target.text);
+    if (!b) {
+      throw new CodegenError(target, `unknown identifier '${target.text}'`);
+    }
+    if (b.isConst) {
+      throw new CodegenError(anchor, `cannot assign to const '${target.text}'`);
+    }
+  }
+
+  private expectType(expr: ts.Expression, expected: TopazType): void {
+    const actual = this.inferType(expr);
+    if (actual !== expected) {
+      throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${actual}`);
+    }
+  }
 }
 
 export function codegen(sf: ts.SourceFile): string {
-  const functions: ts.FunctionDeclaration[] = [];
-  const topLevel: ts.Statement[] = [];
-  for (const stmt of sf.statements) {
-    if (ts.isFunctionDeclaration(stmt)) functions.push(stmt);
-    else topLevel.push(stmt);
-  }
-
-  const out: string[] = [];
-  out.push('#include "runtime.h"');
-  out.push("");
-
-  for (const fn of functions) {
-    out.push(`${emitFunctionSignature(fn)};`);
-  }
-  if (functions.length > 0) out.push("");
-
-  for (const fn of functions) {
-    out.push(emitFunctionDefinition(fn));
-    out.push("");
-  }
-
-  out.push("int main(void) {");
-  for (const stmt of topLevel) {
-    out.push(emitStatement(stmt, 1));
-  }
-  out.push("  return 0;");
-  out.push("}");
-
-  return out.join("\n") + "\n";
+  return new Emitter().emit(sf);
 }
