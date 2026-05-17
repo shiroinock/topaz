@@ -236,6 +236,20 @@ static inline size_t topaz_hash_boolean(topaz_boolean b) {
   return b ? 1u : 0u;
 }
 
+// Reference identity hash for class instances / interface fat-pointer payloads.
+// Runs the same splitmix-style mixer on the pointer's bit pattern. Used by
+// Set<class>/Set<interface> monomorphs (codegen wraps this per-type so the
+// macro sees a hash_fn with the right key_t parameter).
+static inline size_t topaz_hash_pointer(const void *p) {
+  uint64_t bits = (uint64_t)(uintptr_t)p;
+  bits ^= bits >> 33;
+  bits *= 0xff51afd7ed558ccdULL;
+  bits ^= bits >> 33;
+  bits *= 0xc4ceb9fe1a85ec53ULL;
+  bits ^= bits >> 33;
+  return (size_t)bits;
+}
+
 static inline topaz_boolean topaz_key_eq_boolean(topaz_boolean a, topaz_boolean b) {
   return a == b;
 }

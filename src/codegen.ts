@@ -8,7 +8,11 @@ type TopazType =
   | `topaz_array_class_${string}`
   | `topaz_array_iface_${string}`
   | `topaz_map_${ScalarShortName}_${ScalarShortName}`
+  | `topaz_map_${ScalarShortName}_class_${string}`
+  | `topaz_map_${ScalarShortName}_iface_${string}`
   | `topaz_set_${ScalarShortName}`
+  | `topaz_set_class_${string}`
+  | `topaz_set_iface_${string}`
   | `topaz_class_${string}`
   | `topaz_iface_${string}`;
 
@@ -96,23 +100,40 @@ function mapShortName(t: TopazType): string {
   return t.slice("topaz_map_".length);
 }
 
+// Map tags look like "<key>_<value-tag>" where <value-tag> is a scalar short
+// name, or `class_<C>`, or `iface_<I>`. The key is always scalar, so we split
+// at the first underscore.
 function mapKey(t: TopazType): TopazType | undefined {
   if (!isMapType(t)) return undefined;
   const rest = t.slice("topaz_map_".length);
-  const [k] = rest.split("_") as [ScalarShortName, ScalarShortName];
+  const us = rest.indexOf("_");
+  const k = rest.slice(0, us) as ScalarShortName;
   return `topaz_${k}`;
 }
 
 function mapValue(t: TopazType): TopazType | undefined {
   if (!isMapType(t)) return undefined;
   const rest = t.slice("topaz_map_".length);
-  const [, v] = rest.split("_") as [ScalarShortName, ScalarShortName];
-  return `topaz_${v}`;
+  const us = rest.indexOf("_");
+  const v = rest.slice(us + 1);
+  if (v.startsWith("class_")) return classOf(v.slice("class_".length));
+  if (v.startsWith("iface_")) return interfaceOf(v.slice("iface_".length));
+  return `topaz_${v as ScalarShortName}` as TopazType;
 }
 
 function mapOf(k: TopazType, v: TopazType): TopazType | undefined {
-  if (!isScalarType(k) || !isScalarType(v)) return undefined;
-  return `topaz_map_${k.slice("topaz_".length) as ScalarShortName}_${v.slice("topaz_".length) as ScalarShortName}`;
+  if (!isScalarType(k)) return undefined;
+  const kShort = k.slice("topaz_".length) as ScalarShortName;
+  if (isScalarType(v)) {
+    return `topaz_map_${kShort}_${v.slice("topaz_".length) as ScalarShortName}`;
+  }
+  if (isClassType(v)) {
+    return `topaz_map_${kShort}_class_${classNameOf(v)!}` as TopazType;
+  }
+  if (isInterfaceType(v)) {
+    return `topaz_map_${kShort}_iface_${interfaceNameOf(v)!}` as TopazType;
+  }
+  return undefined;
 }
 
 function setShortName(t: TopazType): string {
@@ -121,12 +142,23 @@ function setShortName(t: TopazType): string {
 
 function setElem(t: TopazType): TopazType | undefined {
   if (!isSetType(t)) return undefined;
-  return `topaz_${t.slice("topaz_set_".length) as ScalarShortName}`;
+  const tag = t.slice("topaz_set_".length);
+  if (tag.startsWith("class_")) return classOf(tag.slice("class_".length));
+  if (tag.startsWith("iface_")) return interfaceOf(tag.slice("iface_".length));
+  return `topaz_${tag as ScalarShortName}` as TopazType;
 }
 
 function setOf(elem: TopazType): TopazType | undefined {
-  if (!isScalarType(elem)) return undefined;
-  return `topaz_set_${elem.slice("topaz_".length) as ScalarShortName}`;
+  if (isScalarType(elem)) {
+    return `topaz_set_${elem.slice("topaz_".length) as ScalarShortName}`;
+  }
+  if (isClassType(elem)) {
+    return `topaz_set_class_${classNameOf(elem)!}` as TopazType;
+  }
+  if (isInterfaceType(elem)) {
+    return `topaz_set_iface_${interfaceNameOf(elem)!}` as TopazType;
+  }
+  return undefined;
 }
 
 // C type used in declarations and signatures. Reference types (Array/Map/Set
@@ -231,11 +263,27 @@ class Emitter {
   // gets a TOPAZ_ARRAY_DEFINE() expansion in the generated C, since the runtime
   // header only preexpands the scalar monomorphs.
   private arrayMonomorphs = new Set<TopazType>();
+  // Phase 1.4c-1b: same idea for Map<K, class|interface> and Set<class|interface>.
+  // Maps are tracked by full (K, V) tuple so we get one expansion per combo.
+  private mapMonomorphs = new Set<TopazType>();
+  private setMonomorphs = new Set<TopazType>();
 
   private recordArrayMonomorph(t: TopazType): void {
     if (!isArrayType(t)) return;
     if (isScalarType(arrayElem(t)!)) return; // runtime.h preexpands these
     this.arrayMonomorphs.add(t);
+  }
+
+  private recordMapMonomorph(t: TopazType): void {
+    if (!isMapType(t)) return;
+    if (isScalarType(mapValue(t)!)) return; // runtime.h preexpands scalar K×V combos
+    this.mapMonomorphs.add(t);
+  }
+
+  private recordSetMonomorph(t: TopazType): void {
+    if (!isSetType(t)) return;
+    if (isScalarType(setElem(t)!)) return; // runtime.h preexpands scalar element sets
+    this.setMonomorphs.add(t);
   }
 
   emit(sf: ts.SourceFile): string {
@@ -351,9 +399,10 @@ class Emitter {
       out.push("");
     }
 
-    // Placeholder for TOPAZ_ARRAY_DEFINE expansions for Array<class>/
-    // Array<interface> monomorphs. We don't know the full set until we've
-    // walked every expression, so splice the real entries in at the very end.
+    // Placeholder for TOPAZ_ARRAY_DEFINE / TOPAZ_MAP_DEFINE / TOPAZ_SET_DEFINE
+    // expansions for container monomorphs whose element/value type is a class
+    // or interface. We don't know the full set until we've walked every
+    // expression, so splice the real entries in at the very end.
     const containerMonomorphSlot = out.length;
     out.push("");
 
@@ -404,15 +453,39 @@ class Emitter {
     out.push("  return 0;");
     out.push("}");
 
-    if (this.arrayMonomorphs.size > 0) {
+    if (
+      this.arrayMonomorphs.size > 0 ||
+      this.mapMonomorphs.size > 0 ||
+      this.setMonomorphs.size > 0
+    ) {
       const sections: string[] = [];
+      // Set<class>/Set<interface> need a typed hash/eq pair before
+      // TOPAZ_SET_DEFINE can reference them; emit those first.
+      const setElemKeys = new Set<string>();
+      const helperLines: string[] = [];
+      for (const t of this.setMonomorphs) {
+        const elem = setElem(t)!;
+        const key = `${elem}`;
+        if (setElemKeys.has(key)) continue;
+        setElemKeys.add(key);
+        helperLines.push(...this.emitSetElemHelpers(elem));
+      }
+      if (helperLines.length > 0) sections.push(helperLines.join("\n"));
+
       for (const t of this.arrayMonomorphs) {
         sections.push(this.emitArrayMonomorphMacro(t));
       }
+      for (const t of this.mapMonomorphs) {
+        sections.push(this.emitMapMonomorphMacro(t));
+      }
+      for (const t of this.setMonomorphs) {
+        sections.push(this.emitSetMonomorphMacro(t));
+      }
 
-      // TOPAZ_ARRAY_DEFINE expands several static-inline helpers (notably
-      // _pop) that the user program may not call. Suppress the warning so
-      // emit stays monomorph-driven instead of usage-driven.
+      // TOPAZ_ARRAY_DEFINE / TOPAZ_MAP_DEFINE / TOPAZ_SET_DEFINE expand several
+      // static-inline helpers (notably _pop / _delete) that the user program
+      // may not call. Suppress the warning so emit stays monomorph-driven
+      // instead of usage-driven.
       out[containerMonomorphSlot] =
         `#pragma GCC diagnostic push\n` +
         `#pragma GCC diagnostic ignored "-Wunused-function"\n` +
@@ -437,6 +510,78 @@ class Emitter {
       throw new Error(`unexpected array element type ${elem} for monomorph emission`);
     }
     return `TOPAZ_ARRAY_DEFINE(${tag}, ${cElem})`;
+  }
+
+  // Phase 1.4c-1b: expand TOPAZ_MAP_DEFINE for scalar-keyed maps whose value
+  // type is a class or interface. The key still uses the scalar hash/eq from
+  // runtime.h; only the value type changes.
+  private emitMapMonomorphMacro(t: TopazType): string {
+    const tag = mapShortName(t);
+    const k = mapKey(t)!;
+    const v = mapValue(t)!;
+    const kShort = k.slice("topaz_".length) as ScalarShortName;
+    const hashFn = `topaz_hash_${kShort}`;
+    // string keys use topaz_string_eq (byte compare); number/boolean use the
+    // SameValueZero-aware topaz_key_eq_* wrappers from runtime.h.
+    const eqFn = kShort === "string" ? "topaz_string_eq" : `topaz_key_eq_${kShort}`;
+    const cVal = this.cElemTypeForContainer(v);
+    return `TOPAZ_MAP_DEFINE(${tag}, ${k}, ${cVal}, ${hashFn}, ${eqFn})`;
+  }
+
+  // Phase 1.4c-1b: expand TOPAZ_SET_DEFINE for class/interface element sets.
+  // The hash/eq wrappers were emitted earlier (see emitSetElemHelpers).
+  private emitSetMonomorphMacro(t: TopazType): string {
+    const tag = setShortName(t);
+    const elem = setElem(t)!;
+    const cElem = this.cElemTypeForContainer(elem);
+    let hashFn: string;
+    let eqFn: string;
+    if (isClassType(elem)) {
+      const cname = classNameOf(elem)!;
+      hashFn = `topaz_hash_class_${cname}`;
+      eqFn = `topaz_key_eq_class_${cname}`;
+    } else if (isInterfaceType(elem)) {
+      const iname = interfaceNameOf(elem)!;
+      hashFn = `topaz_hash_iface_${iname}`;
+      eqFn = `topaz_key_eq_iface_${iname}`;
+    } else {
+      throw new Error(`unexpected set element type ${elem} for monomorph emission`);
+    }
+    return `TOPAZ_SET_DEFINE(${tag}, ${cElem}, ${hashFn}, ${eqFn})`;
+  }
+
+  // Per-(class|interface) hash and key-equality wrappers used by
+  // Set<class>/Set<interface> monomorphs. JS Set uses reference identity for
+  // objects, so the hash routes the underlying pointer through
+  // topaz_hash_pointer and equality is pointer comparison. For interface
+  // elements that's the .data field of the fat pointer — two interface values
+  // wrapping the same instance compare equal regardless of which interface
+  // "view" they came from.
+  private emitSetElemHelpers(elem: TopazType): string[] {
+    if (isClassType(elem)) {
+      const cname = classNameOf(elem)!;
+      const cType = `topaz_class_${cname} *`;
+      return [
+        `static inline size_t topaz_hash_class_${cname}(${cType} p) { return topaz_hash_pointer((const void *)p); }`,
+        `static inline topaz_boolean topaz_key_eq_class_${cname}(${cType} a, ${cType} b) { return a == b; }`,
+      ];
+    }
+    if (isInterfaceType(elem)) {
+      const iname = interfaceNameOf(elem)!;
+      const iType = `topaz_iface_${iname}`;
+      return [
+        `static inline size_t topaz_hash_iface_${iname}(${iType} v) { return topaz_hash_pointer(v.data); }`,
+        `static inline topaz_boolean topaz_key_eq_iface_${iname}(${iType} a, ${iType} b) { return a.data == b.data; }`,
+      ];
+    }
+    throw new Error(`unexpected set element type ${elem} for helper emission`);
+  }
+
+  private cElemTypeForContainer(elem: TopazType): string {
+    if (isClassType(elem)) return `topaz_class_${classNameOf(elem)!} *`;
+    if (isInterfaceType(elem)) return `topaz_iface_${interfaceNameOf(elem)!}`;
+    if (isScalarType(elem)) return elem;
+    throw new Error(`unexpected container element type ${elem}`);
   }
 
   private collectInterfaceMembers(iface: ts.InterfaceDeclaration): void {
@@ -910,6 +1055,7 @@ class Emitter {
         if (!m) {
           throw new CodegenError(node, `no Map monomorph for key=${k}, value=${v}`);
         }
+        this.recordMapMonomorph(m);
         return m;
       }
       if (refName === "Set") {
@@ -921,6 +1067,7 @@ class Emitter {
         if (!s) {
           throw new CodegenError(node, `no Set monomorph for element type ${elem}`);
         }
+        this.recordSetMonomorph(s);
         return s;
       }
       if (this.classes.has(refName)) {
@@ -1605,6 +1752,7 @@ class Emitter {
         }
         mapType = expected;
       }
+      this.recordMapMonomorph(mapType);
       return `topaz_map_${mapShortName(mapType)}_new()`;
     }
     if (name === "Set") {
@@ -1630,6 +1778,7 @@ class Emitter {
         }
         setType = expected;
       }
+      this.recordSetMonomorph(setType);
       return `topaz_set_${setShortName(setType)}_new()`;
     }
     if (this.interfaces.has(name)) {
@@ -1850,30 +1999,30 @@ class Emitter {
       if (expr.arguments.length !== 2) {
         throw new CodegenError(expr, "Map.set expects exactly two arguments");
       }
-      this.expectType(expr.arguments[0]!, k);
-      this.expectType(expr.arguments[1]!, v);
-      return `topaz_map_${name}_set(${base}, ${this.emitExpression(expr.arguments[0]!)}, ${this.emitExpression(expr.arguments[1]!)})`;
+      // emitWithExpected enables class -> interface coercion for the value
+      // when V is an interface; keys are still scalar so this is a no-op for
+      // them, but the helper handles both uniformly.
+      const ke = this.emitWithExpected(expr.arguments[0]!, k);
+      const ve = this.emitWithExpected(expr.arguments[1]!, v);
+      return `topaz_map_${name}_set(${base}, ${ke}, ${ve})`;
     }
     if (method === "get") {
       if (expr.arguments.length !== 1) {
         throw new CodegenError(expr, "Map.get expects exactly one argument");
       }
-      this.expectType(expr.arguments[0]!, k);
-      return `topaz_map_${name}_get(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+      return `topaz_map_${name}_get(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
     }
     if (method === "has") {
       if (expr.arguments.length !== 1) {
         throw new CodegenError(expr, "Map.has expects exactly one argument");
       }
-      this.expectType(expr.arguments[0]!, k);
-      return `topaz_map_${name}_has(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+      return `topaz_map_${name}_has(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
     }
     if (method === "delete") {
       if (expr.arguments.length !== 1) {
         throw new CodegenError(expr, "Map.delete expects exactly one argument");
       }
-      this.expectType(expr.arguments[0]!, k);
-      return `topaz_map_${name}_delete(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+      return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
   }
@@ -1949,22 +2098,19 @@ class Emitter {
       if (expr.arguments.length !== 1) {
         throw new CodegenError(expr, "Set.add expects exactly one argument");
       }
-      this.expectType(expr.arguments[0]!, elem);
-      return `topaz_set_${name}_add(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+      return `topaz_set_${name}_add(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
     }
     if (method === "has") {
       if (expr.arguments.length !== 1) {
         throw new CodegenError(expr, "Set.has expects exactly one argument");
       }
-      this.expectType(expr.arguments[0]!, elem);
-      return `topaz_set_${name}_has(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+      return `topaz_set_${name}_has(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
     }
     if (method === "delete") {
       if (expr.arguments.length !== 1) {
         throw new CodegenError(expr, "Set.delete expects exactly one argument");
       }
-      this.expectType(expr.arguments[0]!, elem);
-      return `topaz_set_${name}_delete(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+      return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
   }
@@ -2237,6 +2383,7 @@ class Emitter {
         const v = this.typeFromAnnotation(expr.typeArguments[1]!, expr);
         const t = mapOf(k, v);
         if (!t) throw new CodegenError(expr, `no Map monomorph for key=${k}, value=${v}`);
+        this.recordMapMonomorph(t);
         return t;
       }
       if (name === "Set") {
@@ -2246,6 +2393,7 @@ class Emitter {
         const elem = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
         const t = setOf(elem);
         if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${elem}`);
+        this.recordSetMonomorph(t);
         return t;
       }
       if (this.classes.has(name)) {
