@@ -1,45 +1,88 @@
 import * as ts from "typescript";
 
+type ScalarShortName = "number" | "boolean" | "string";
+
 type TopazType =
-  | "topaz_number"
-  | "topaz_boolean"
-  | "topaz_string"
-  | "topaz_array_number"
-  | "topaz_array_boolean"
-  | "topaz_array_string";
+  | `topaz_${ScalarShortName}`
+  | `topaz_array_${ScalarShortName}`
+  | `topaz_map_${ScalarShortName}_${ScalarShortName}`
+  | `topaz_set_${ScalarShortName}`;
 
-const ARRAY_ELEM: Partial<Record<TopazType, TopazType>> = {
-  topaz_array_number: "topaz_number",
-  topaz_array_boolean: "topaz_boolean",
-  topaz_array_string: "topaz_string",
-};
-
-const ARRAY_OF: Partial<Record<TopazType, TopazType>> = {
-  topaz_number: "topaz_array_number",
-  topaz_boolean: "topaz_array_boolean",
-  topaz_string: "topaz_array_string",
-};
-
-function arrayElem(t: TopazType): TopazType | undefined {
-  return ARRAY_ELEM[t];
-}
-
-function arrayOf(elem: TopazType): TopazType | undefined {
-  return ARRAY_OF[elem];
+function isScalarType(t: TopazType): boolean {
+  return t === "topaz_number" || t === "topaz_boolean" || t === "topaz_string";
 }
 
 function isArrayType(t: TopazType): boolean {
-  return arrayElem(t) !== undefined;
+  return t.startsWith("topaz_array_");
 }
 
-// e.g. "topaz_array_number" -> "number"
+function isMapType(t: TopazType): boolean {
+  return t.startsWith("topaz_map_");
+}
+
+function isSetType(t: TopazType): boolean {
+  return t.startsWith("topaz_set_");
+}
+
+function isReferenceType(t: TopazType): boolean {
+  return isArrayType(t) || isMapType(t) || isSetType(t);
+}
+
+function arrayElem(t: TopazType): TopazType | undefined {
+  if (!isArrayType(t)) return undefined;
+  return `topaz_${t.slice("topaz_array_".length) as ScalarShortName}`;
+}
+
+function arrayOf(elem: TopazType): TopazType | undefined {
+  if (!isScalarType(elem)) return undefined;
+  return `topaz_array_${elem.slice("topaz_".length) as ScalarShortName}`;
+}
+
 function arrayShortName(t: TopazType): string {
   return t.slice("topaz_array_".length);
 }
 
-// C type used in declarations and signatures (arrays are pointers).
+function mapShortName(t: TopazType): string {
+  return t.slice("topaz_map_".length);
+}
+
+function mapKey(t: TopazType): TopazType | undefined {
+  if (!isMapType(t)) return undefined;
+  const rest = t.slice("topaz_map_".length);
+  const [k] = rest.split("_") as [ScalarShortName, ScalarShortName];
+  return `topaz_${k}`;
+}
+
+function mapValue(t: TopazType): TopazType | undefined {
+  if (!isMapType(t)) return undefined;
+  const rest = t.slice("topaz_map_".length);
+  const [, v] = rest.split("_") as [ScalarShortName, ScalarShortName];
+  return `topaz_${v}`;
+}
+
+function mapOf(k: TopazType, v: TopazType): TopazType | undefined {
+  if (!isScalarType(k) || !isScalarType(v)) return undefined;
+  return `topaz_map_${k.slice("topaz_".length) as ScalarShortName}_${v.slice("topaz_".length) as ScalarShortName}`;
+}
+
+function setShortName(t: TopazType): string {
+  return t.slice("topaz_set_".length);
+}
+
+function setElem(t: TopazType): TopazType | undefined {
+  if (!isSetType(t)) return undefined;
+  return `topaz_${t.slice("topaz_set_".length) as ScalarShortName}`;
+}
+
+function setOf(elem: TopazType): TopazType | undefined {
+  if (!isScalarType(elem)) return undefined;
+  return `topaz_set_${elem.slice("topaz_".length) as ScalarShortName}`;
+}
+
+// C type used in declarations and signatures. Reference types (Array/Map/Set)
+// are pointers so assignment shares storage.
 function cTypeName(t: TopazType): string {
-  return isArrayType(t) ? `${t} *` : t;
+  return isReferenceType(t) ? `${t} *` : t;
 }
 
 type Binding = { type: TopazType; isConst: boolean };
@@ -150,20 +193,42 @@ class Emitter {
       }
       return arr;
     }
-    if (
-      ts.isTypeReferenceNode(node) &&
-      ts.isIdentifier(node.typeName) &&
-      node.typeName.text === "Array"
-    ) {
-      if (!node.typeArguments || node.typeArguments.length !== 1) {
-        throw new CodegenError(node, "Array<T> requires exactly one type argument");
+    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+      const refName = node.typeName.text;
+      if (refName === "Array") {
+        if (!node.typeArguments || node.typeArguments.length !== 1) {
+          throw new CodegenError(node, "Array<T> requires exactly one type argument");
+        }
+        const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        const arr = arrayOf(elem);
+        if (!arr) {
+          throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
+        }
+        return arr;
       }
-      const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
-      const arr = arrayOf(elem);
-      if (!arr) {
-        throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
+      if (refName === "Map") {
+        if (!node.typeArguments || node.typeArguments.length !== 2) {
+          throw new CodegenError(node, "Map<K, V> requires exactly two type arguments");
+        }
+        const k = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        const v = this.typeFromAnnotation(node.typeArguments[1]!, node);
+        const m = mapOf(k, v);
+        if (!m) {
+          throw new CodegenError(node, `no Map monomorph for key=${k}, value=${v}`);
+        }
+        return m;
       }
-      return arr;
+      if (refName === "Set") {
+        if (!node.typeArguments || node.typeArguments.length !== 1) {
+          throw new CodegenError(node, "Set<T> requires exactly one type argument");
+        }
+        const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        const s = setOf(elem);
+        if (!s) {
+          throw new CodegenError(node, `no Set monomorph for element type ${elem}`);
+        }
+        return s;
+      }
     }
     unsupported(node, "type");
   }
@@ -316,28 +381,47 @@ class Emitter {
       throw new CodegenError(decl, "variable declaration must have an initializer");
     }
     const name = decl.name.text;
+    const initIsEmptyArrayLit =
+      ts.isArrayLiteralExpression(decl.initializer) && decl.initializer.elements.length === 0;
+    const initIsBareNew =
+      ts.isNewExpression(decl.initializer) &&
+      (!decl.initializer.typeArguments || decl.initializer.typeArguments.length === 0);
+
     let type: TopazType;
     if (decl.type) {
       type = this.typeFromAnnotation(decl.type, decl);
-      // Empty `[]` literals can only be typed from context, so thread the
-      // declared type into the literal instead of running inferType on it.
-      if (
-        !(
-          ts.isArrayLiteralExpression(decl.initializer) &&
-          decl.initializer.elements.length === 0
-        )
-      ) {
+      if (initIsEmptyArrayLit) {
+        if (!isArrayType(type)) {
+          throw new CodegenError(
+            decl.initializer,
+            `type mismatch: expected ${type}, got an empty array literal`,
+          );
+        }
+      } else if (initIsBareNew) {
+        // Type checking happens inside emitNewExpression via the threaded
+        // `expected` type — bare `new Map()` / `new Set()` has no other source
+        // of type information.
+      } else {
         this.expectType(decl.initializer, type);
-      } else if (!isArrayType(type)) {
-        throw new CodegenError(decl.initializer, `type mismatch: expected ${type}, got an empty array literal`);
       }
     } else {
+      if (initIsBareNew) {
+        throw new CodegenError(
+          decl.initializer,
+          "cannot infer constructor type arguments; write `new Map<K, V>()` / `new Set<T>()` or annotate the binding",
+        );
+      }
       type = this.inferType(decl.initializer);
     }
     this.scope.declare(name, type, isConst, decl);
-    const initExpr = ts.isArrayLiteralExpression(decl.initializer)
-      ? this.emitArrayLiteral(decl.initializer, type)
-      : this.emitExpression(decl.initializer);
+    let initExpr: string;
+    if (ts.isArrayLiteralExpression(decl.initializer)) {
+      initExpr = this.emitArrayLiteral(decl.initializer, type);
+    } else if (ts.isNewExpression(decl.initializer)) {
+      initExpr = this.emitNewExpression(decl.initializer, type);
+    } else {
+      initExpr = this.emitExpression(decl.initializer);
+    }
     const initStr = ` = ${initExpr}`;
     return { type, cName: name, initStr };
   }
@@ -538,6 +622,9 @@ class Emitter {
       if (isArrayType(baseType) && expr.name.text === "length") {
         return `((topaz_number)(${this.emitExpression(expr.expression)})->len)`;
       }
+      if ((isMapType(baseType) || isSetType(baseType)) && expr.name.text === "size") {
+        return `((topaz_number)(${this.emitExpression(expr.expression)})->size)`;
+      }
       throw new CodegenError(
         expr,
         `unsupported property access '.${expr.name.text}' on ${baseType}`,
@@ -622,6 +709,9 @@ class Emitter {
     if (ts.isCallExpression(expr)) {
       return this.emitCall(expr);
     }
+    if (ts.isNewExpression(expr)) {
+      return this.emitNewExpression(expr, /* expected */ undefined);
+    }
     unsupported(expr, "expression");
   }
 
@@ -673,6 +763,80 @@ class Emitter {
       parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitExpression(e as ts.Expression)});`);
     }
     return `({ ${parts.join(" ")} ${tmp}; })`;
+  }
+
+  private emitNewExpression(
+    expr: ts.NewExpression,
+    expected: TopazType | undefined,
+  ): string {
+    if (!ts.isIdentifier(expr.expression)) {
+      throw new CodegenError(expr, "only `new Map<K, V>()` and `new Set<T>()` are supported");
+    }
+    const name = expr.expression.text;
+    if (expr.arguments && expr.arguments.length > 0) {
+      throw new CodegenError(
+        expr,
+        `${name}() constructor arguments are unsupported (initialize via .set/.add)`,
+      );
+    }
+    if (name === "Array") {
+      throw new CodegenError(
+        expr,
+        "use array literal syntax (`[...]` or `[]`) instead of `new Array()`",
+      );
+    }
+    if (name === "Map") {
+      let mapType: TopazType;
+      if (expr.typeArguments && expr.typeArguments.length === 2) {
+        const k = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
+        const v = this.typeFromAnnotation(expr.typeArguments[1]!, expr);
+        const t = mapOf(k, v);
+        if (!t) {
+          throw new CodegenError(expr, `no Map monomorph for key=${k}, value=${v}`);
+        }
+        if (expected && expected !== t) {
+          throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+        }
+        mapType = t;
+      } else if (expr.typeArguments && expr.typeArguments.length !== 2) {
+        throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
+      } else {
+        if (!expected || !isMapType(expected)) {
+          throw new CodegenError(
+            expr,
+            "cannot infer Map type arguments; write `new Map<K, V>()` or annotate the binding",
+          );
+        }
+        mapType = expected;
+      }
+      return `topaz_map_${mapShortName(mapType)}_new()`;
+    }
+    if (name === "Set") {
+      let setType: TopazType;
+      if (expr.typeArguments && expr.typeArguments.length === 1) {
+        const elem = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
+        const t = setOf(elem);
+        if (!t) {
+          throw new CodegenError(expr, `no Set monomorph for element type ${elem}`);
+        }
+        if (expected && expected !== t) {
+          throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+        }
+        setType = t;
+      } else if (expr.typeArguments && expr.typeArguments.length !== 1) {
+        throw new CodegenError(expr, "Set<T> requires exactly one type argument");
+      } else {
+        if (!expected || !isSetType(expected)) {
+          throw new CodegenError(
+            expr,
+            "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
+          );
+        }
+        setType = expected;
+      }
+      return `topaz_set_${setShortName(setType)}_new()`;
+    }
+    throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
   }
 
   private emitStringLiteral(expr: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral): string {
@@ -766,8 +930,8 @@ class Emitter {
       }
       const arg = expr.arguments[0]!;
       const t = this.inferType(arg);
-      if (isArrayType(t)) {
-        throw new CodegenError(arg, "console.log on Array is unsupported");
+      if (isReferenceType(t)) {
+        throw new CodegenError(arg, `console.log on ${t} is unsupported`);
       }
       const fn =
         t === "topaz_boolean" ? "topaz_console_log_boolean"
@@ -780,6 +944,12 @@ class Emitter {
       const baseType = this.inferType(callee.expression);
       if (isArrayType(baseType)) {
         return this.emitArrayMethodCall(expr, callee, baseType);
+      }
+      if (isMapType(baseType)) {
+        return this.emitMapMethodCall(expr, callee, baseType);
+      }
+      if (isSetType(baseType)) {
+        return this.emitSetMethodCall(expr, callee, baseType);
       }
       throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
     }
@@ -821,6 +991,81 @@ class Emitter {
     throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
   }
 
+  private emitMapMethodCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+    baseType: TopazType,
+  ): string {
+    const name = mapShortName(baseType);
+    const k = mapKey(baseType)!;
+    const v = mapValue(baseType)!;
+    const method = callee.name.text;
+    const base = this.emitExpression(callee.expression);
+    if (method === "set") {
+      if (expr.arguments.length !== 2) {
+        throw new CodegenError(expr, "Map.set expects exactly two arguments");
+      }
+      this.expectType(expr.arguments[0]!, k);
+      this.expectType(expr.arguments[1]!, v);
+      return `topaz_map_${name}_set(${base}, ${this.emitExpression(expr.arguments[0]!)}, ${this.emitExpression(expr.arguments[1]!)})`;
+    }
+    if (method === "get") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Map.get expects exactly one argument");
+      }
+      this.expectType(expr.arguments[0]!, k);
+      return `topaz_map_${name}_get(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+    }
+    if (method === "has") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Map.has expects exactly one argument");
+      }
+      this.expectType(expr.arguments[0]!, k);
+      return `topaz_map_${name}_has(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+    }
+    if (method === "delete") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Map.delete expects exactly one argument");
+      }
+      this.expectType(expr.arguments[0]!, k);
+      return `topaz_map_${name}_delete(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+    }
+    throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
+  }
+
+  private emitSetMethodCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+    baseType: TopazType,
+  ): string {
+    const name = setShortName(baseType);
+    const elem = setElem(baseType)!;
+    const method = callee.name.text;
+    const base = this.emitExpression(callee.expression);
+    if (method === "add") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Set.add expects exactly one argument");
+      }
+      this.expectType(expr.arguments[0]!, elem);
+      return `topaz_set_${name}_add(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+    }
+    if (method === "has") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Set.has expects exactly one argument");
+      }
+      this.expectType(expr.arguments[0]!, elem);
+      return `topaz_set_${name}_has(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+    }
+    if (method === "delete") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Set.delete expects exactly one argument");
+      }
+      this.expectType(expr.arguments[0]!, elem);
+      return `topaz_set_${name}_delete(${base}, ${this.emitExpression(expr.arguments[0]!)})`;
+    }
+    throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
+  }
+
   private inferType(expr: ts.Expression): TopazType {
     if (ts.isNumericLiteral(expr)) return "topaz_number";
     if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
@@ -841,6 +1086,9 @@ class Emitter {
         return "topaz_number";
       }
       if (isArrayType(baseType) && expr.name.text === "length") {
+        return "topaz_number";
+      }
+      if ((isMapType(baseType) || isSetType(baseType)) && expr.name.text === "size") {
         return "topaz_number";
       }
       throw new CodegenError(
@@ -993,6 +1241,24 @@ class Emitter {
           }
           throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
         }
+        if (isMapType(baseType)) {
+          const v = mapValue(baseType)!;
+          const m = callee.name.text;
+          if (m === "set") {
+            throw new CodegenError(expr, "Map.set returns void in this dialect and cannot be used as a value");
+          }
+          if (m === "get") return v;
+          if (m === "has" || m === "delete") return "topaz_boolean";
+          throw new CodegenError(callee, `unsupported method '.${m}' on ${baseType}`);
+        }
+        if (isSetType(baseType)) {
+          const m = callee.name.text;
+          if (m === "add") {
+            throw new CodegenError(expr, "Set.add returns void in this dialect and cannot be used as a value");
+          }
+          if (m === "has" || m === "delete") return "topaz_boolean";
+          throw new CodegenError(callee, `unsupported method '.${m}' on ${baseType}`);
+        }
         throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
       }
       if (ts.isIdentifier(callee)) {
@@ -1001,6 +1267,32 @@ class Emitter {
         return ret;
       }
       unsupported(callee, "call target");
+    }
+    if (ts.isNewExpression(expr)) {
+      if (!ts.isIdentifier(expr.expression)) {
+        throw new CodegenError(expr, "only `new Map<K, V>()` and `new Set<T>()` are supported");
+      }
+      const name = expr.expression.text;
+      if (name === "Map") {
+        if (!expr.typeArguments || expr.typeArguments.length !== 2) {
+          throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
+        }
+        const k = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
+        const v = this.typeFromAnnotation(expr.typeArguments[1]!, expr);
+        const t = mapOf(k, v);
+        if (!t) throw new CodegenError(expr, `no Map monomorph for key=${k}, value=${v}`);
+        return t;
+      }
+      if (name === "Set") {
+        if (!expr.typeArguments || expr.typeArguments.length !== 1) {
+          throw new CodegenError(expr, "Set<T> requires exactly one type argument");
+        }
+        const elem = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
+        const t = setOf(elem);
+        if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${elem}`);
+        return t;
+      }
+      throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
     }
     unsupported(expr, "expression");
   }

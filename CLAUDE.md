@@ -6,12 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TypeScript-syntax AOT native compiler. TS の構文をフロントエンドにして、JS のセマンティクスを切り捨てた上で真の AOT ネイティブコンパイルを狙う。詳細な設計判断・ロードマップ・落とし穴は `MEMO.md`(設計検討資料)を必ず読むこと。`docs/parser-choice.md` に Phase 0 のパーサ選定根拠がある。
 
-現在 **Phase 1.3 進行中(Array<T> 着地、Map/Set 未着手)**。Phase 1.1 までで制御フロー(`let`/`const`/`while`/`for`/`do-while`/`break`/`continue`)、`boolean` 型、論理・単項・複合代入・`++`/`--`、軽量な式レベル型推論を整備し、Phase 1.2 で `%` の `fmod` 化、ECMA-262 準拠 shortest round-trip による `number → string`、`switch`(`do/while(0)` ラダーへ lowering)、`string` 型(immutable・ASCII のみ・連結 `+` / `+=` / `.length` / `===`)を追加。Phase 1.3 第一弾として `Array<T>`(monomorphize、reference 渡し、doubling growable buffer、`.length` / `[i]` / `[i]=v` / `.push` / `.pop`)を入れた。`tests/smoke.sh` が複数ケースを回す形になっている。
+現在 **Phase 1.3 完了(Array<T> + Map/Set 着地)、次は Phase 1.4(class / interface / ジェネリクス)**。Phase 1.1 までで制御フロー(`let`/`const`/`while`/`for`/`do-while`/`break`/`continue`)、`boolean` 型、論理・単項・複合代入・`++`/`--`、軽量な式レベル型推論を整備し、Phase 1.2 で `%` の `fmod` 化、ECMA-262 準拠 shortest round-trip による `number → string`、`switch`(`do/while(0)` ラダーへ lowering)、`string` 型(immutable・ASCII のみ・連結 `+` / `+=` / `.length` / `===`)を追加。Phase 1.3a で `Array<T>`(monomorphize、reference 渡し、doubling growable buffer、`.length` / `[i]` / `[i]=v` / `.push` / `.pop`)、Phase 1.3b で `Map<K, V>` / `Set<T>`(K×V 9 monomorph + T 3 monomorph、open-addressing + tombstone、SameValueZero key 同値性、`.set` / `.get` / `.has` / `.delete` / `.add` / `.size`)を入れた。`tests/smoke.sh` が複数ケースを回す形になっている。
 
 ## Commands
 
 - `npm run build` — `tsc` で `src/` を `dist/` に出す。
-- `npm test` — `tests/smoke.sh`。`examples/*.ts` を順にコンパイル→実行して期待値と一致するか確認(`fib`, `loop_sum`, `while_count`, `boolean_print`, `mod_check`, `switch_check`, `number_format`, `string_basic`, `array_basic`)。新しいサンプルを追加したら `run_case` 行を増やす。
+- `npm test` — `tests/smoke.sh`。`examples/*.ts` を順にコンパイル→実行して期待値と一致するか確認(`fib`, `loop_sum`, `while_count`, `boolean_print`, `mod_check`, `switch_check`, `number_format`, `string_basic`, `array_basic`, `map_set_basic`)。新しいサンプルを追加したら `run_case` 行を増やす。
 - `npm run topaz -- <input.ts> [-o out]` — CLI を npm 越しに起動。
 - `node dist/cli.js <input.ts> [-o out] [--emit-c-only]` — 直接起動。`--emit-c-only` は cc を呼ばずに生成 C をファイルに残す。
 
@@ -28,11 +28,12 @@ cc のパスを変える / フラグ追加したい時は `src/cli.ts` の `exec
 - `src/parser.ts` — `typescript` の `ts.createSourceFile` を呼ぶだけの薄いラッパ。型チェッカーは使わない(全プログラム推論は将来自前で書く)。
 - `src/codegen.ts` — AST から C を直接吐く。未対応構文は `CodegenError` で `file:line:col` 付きで投げて止まる(`MEMO §3.1` の「禁止じゃなく未対応」方針)。`Emitter` クラスがレキシカルスコープ(`Scope`)と関数戻り値テーブル(`functionReturns`)を持ち、式単位で `inferType` を走らせて型不一致や `const` 再代入をエラーにする。型注釈なしの `let`/`const` は初期化式から型を推論する(`number` / `boolean` / `string` リテラル、識別子、関数呼び出し、各種演算)。
 - `src/cli.ts` — argv パース、parser → codegen → cc を駆動。`runtime/` は `dist/../runtime` で解決。
-- `runtime/runtime.h` — header-only。`topaz_number`(= `double`)、`topaz_boolean`(= C99 `bool`)、`topaz_string`(= `{ const char *data; size_t len; }`)、`topaz_console_log_*`、`topaz_fmod`、`topaz_string_concat`、`topaz_string_eq`、`topaz_emit_number_shortest`(ECMA-262 shortest)、`TOPAZ_ARRAY_DEFINE(name, elem_t)` で monomorphize される growable array(`number` / `boolean` / `string` の 3 monomorph 済み)。
+- `runtime/runtime.h` — header-only。`topaz_number`(= `double`)、`topaz_boolean`(= C99 `bool`)、`topaz_string`(= `{ const char *data; size_t len; }`)、`topaz_console_log_*`、`topaz_fmod`、`topaz_string_concat`、`topaz_string_eq`、`topaz_emit_number_shortest`(ECMA-262 shortest)、`TOPAZ_ARRAY_DEFINE(name, elem_t)` で monomorphize される growable array(`number` / `boolean` / `string` の 3 monomorph 済み)、`topaz_hash_<scalar>` / `topaz_key_eq_<scalar>` と `TOPAZ_MAP_DEFINE(name, key_t, val_t, hash_fn, eq_fn)` / `TOPAZ_SET_DEFINE(name, elem_t, hash_fn, eq_fn)` で生成する open-addressing ハッシュテーブル(Map は scalar 3×3 の 9 monomorph、Set は 3 monomorph)。
 - `examples/fib.ts` — Phase 0 の done 定義サンプル。`examples/fib.handwritten.c` は codegen ターゲット仕様を手で確定するための参照実装。
 - `examples/loop_sum.ts` / `examples/while_count.ts` / `examples/boolean_print.ts` — Phase 1.1 の回帰サンプル(`for`/`let`/`while`/`boolean` の代表ケース)。
 - `examples/mod_check.ts` / `examples/switch_check.ts` / `examples/number_format.ts` / `examples/string_basic.ts` — Phase 1.2 の回帰サンプル(`%`/`switch`/数値フォーマット/`string` の代表ケース)。
-- `examples/array_basic.ts` — Phase 1.3 第一弾の回帰サンプル(`number[]` / `Array<boolean>` / `Array<string>` の生成・読み書き・`.push` / `.pop` / `.length` / 空配列リテラル)。
+- `examples/array_basic.ts` — Phase 1.3a の回帰サンプル(`number[]` / `Array<boolean>` / `Array<string>` の生成・読み書き・`.push` / `.pop` / `.length` / 空配列リテラル)。
+- `examples/map_set_basic.ts` — Phase 1.3b の回帰サンプル(`Map<string,number>` / `Map<boolean,string>` / `Map<number,number>` / `Set<number>` / `Set<string>` の生成・`.set` / `.get` / `.has` / `.delete` / `.add` / `.size`、50 要素入れて grow パスを叩くケース、`new Map()` の context typing)。
 - `tests/smoke.sh` — `npm test` の中身。`run_case <name> <expected>` を並べる構造。
 - `docs/parser-choice.md` — パーサ選定(tsc API 採用)の根拠と SWC / oxc への乗り換え条件。
 
@@ -49,13 +50,16 @@ cc のパスを変える / フラグ追加したい時は `src/cli.ts` の `exec
 - **`switch` は `do { ... } while (0)` への lowering**。case ラベルは判別式と同型のみ、`default` は最終 clause のみ、暗黙の fall-through は禁止(非空 case は `break`/`return`/`throw`/`continue` で終わる必要あり)、`switch` 本体内の `continue` は未対応(do/while(0) で吸われてしまうため、明示的にエラー)。switch の対応型は `number` / `boolean` / `string`(string は `topaz_string_eq` で比較)。
 - **`string` は immutable・ASCII 限定**。`+` / `+=` で `topaz_string_concat`(malloc・leak 前提、Phase 1.5 の GC/arena までは諦める)、`===` / `!==` は `topaz_string_eq`(byte 比較)、`.length` はバイト数(JS の UTF-16 code units とは divergence するため非 ASCII リテラルは codegen 段でエラー)。
 - **`Array<T>` は monomorphize 後の reference 型**。変数は `topaz_array_<elem> *` を持ち、代入で storage を共有する。要素型ごとに `TOPAZ_ARRAY_DEFINE` で `_new` / `_reserve` / `_push` / `_pop` / `_at` / `_set` を生成し、現状 `number` / `boolean` / `string` の 3 monomorph をプリ展開している(ネストや任意要素型は Phase 1.4 のジェネリクス展開で再設計)。`[i]` / `[i] = v` はバウンドチェック付き(範囲外で `abort`、`NaN` も弾く)。`.push` は void なので式中で使えない、`.pop` は要素を返す。空 `[]` リテラルは要素型推論できないので注釈必須。配列要素への複合代入(`a[i] += v` 等)はインデックス二重評価を避けるため未対応エラー。`console.log` の配列引数も未対応(整形ポリシー未定)。
+- **`Map<K, V>` / `Set<T>` も monomorphize 後の reference 型**。変数は `topaz_map_<K>_<V> *` / `topaz_set_<T> *` を持ち、`Array<T>` と同じく代入で storage を共有する。`new Map<K, V>()` / `new Set<T>()` は型引数必須(`Array` と同様 `[]` リテラル相当の context typing は `let m: Map<...> = new Map()` の declareVar 経由のみ受理)。コンストラクタ引数(iterable initializer)は未対応。メソッドは Map = `.set` / `.get` / `.has` / `.delete` / `.size`、Set = `.add` / `.has` / `.delete` / `.size`(`.size` は property、それ以外は method call)。`.set` / `.add` は `Array.push` 同様 void 扱いでチェーン不可。`.get` は key 不在で `abort` するので、optional/union を持たない現状は `.has` で先にチェックする運用(JS 仕様の `V | undefined` とは divergence)。`console.log` の Map/Set 引数も未対応。
+- **Map/Set の key 同値性は SameValueZero**(NaN === NaN、-0 === +0)。これは JS Map の published セマンティクスに合わせたもので、`===` 演算子(NaN !== NaN)とは意図的に divergence する。number key の hash は `splitmix64`、string key は FNV-1a、boolean key は 0/1。テーブルは open-addressing + 線形プローブ + tombstone、load factor 0.75 で grow(tombstone が多いだけなら同 cap で rehash)。
 
 ### 既知の divergence
 
 - `string.length` は UTF-8 バイト長で、JS の UTF-16 code units と divergence する。非 ASCII を含む文字列リテラルは codegen 段でエラーに落としているため未対応のまま顕在化はしないが、`Array` や FFI で外から非 ASCII が来た時点で破綻する。Phase 1.5(全プログラム型検証)で UTF-16 へ寄せるか、`string` を UCS-2/UTF-16 で表現し直すか決める。
 - `topaz_emit_number_shortest` は `snprintf("%.*e") + strtod` のラウンドトリップ探索を 1〜17 回まわす実装で、観測上の出力は ECMA-262 ToString と一致するが、Ryu と比べて 1〜2 桁遅い。Phase 2 のベンチマーク整備時に Ryu(Ulf Adams)へ差し替える宿題。
-- 文字列連結は毎回 `malloc`、解放はしない(Phase 1.5 までヒープ管理を持たないため)。長時間走るプログラムだとリークする。
+- 文字列連結は毎回 `malloc`、解放はしない(Phase 1.5 までヒープ管理を持たないため)。長時間走るプログラムだとリークする。Map/Set の slot buffer や rehash で確保したテーブルも同じく leak 前提(`free` は rehash 時の旧テーブルだけ呼んでいる)。
 - 数値表記の divergence(`3.14` / `0.1+0.2` / `1e21` 等)と `%` の divergence は解消済み(Phase 1.2)。
+- `Map.get(k)` は JS では `V | undefined` を返すが、現状 optional/union を持たないため key 不在で `abort` する。`Map.set` / `Set.add` は JS では `this` を返すが、`Array.push` と同じく void 扱いで chain 不可。`Map.set` の中で型不一致(`m.set(k, undefined)` 相当)も書ける手段がないので顕在化しない。
 
 ## Phase 0 から先
 
@@ -65,7 +69,7 @@ Phase 1 の内訳(現状の刻み方):
 
 - **Phase 1.1 (done)** — 制御フロー(`let`/`const`/`while`/`for`/`do-while`/`break`/`continue`)、`boolean` 型、論理・単項・複合代入・`++`/`--`、軽量な式レベル型推論。
 - **Phase 1.2 (done)** — `%` の `fmod` 化、ECMA-262 ToString による shortest `number → string`(現状は `snprintf+strtod` ループ、Ryu 差し替えは Phase 2 のベンチ整備時に回す)、`switch`(`do/while(0)` ラダー、暗黙 fall-through 禁止、`default` 最後限定、`string` discriminant 対応)、`string` 型(immutable・ASCII 限定・`+`/`+=`/`.length`/`===`/`!==`)。
-- **Phase 1.3 (進行中)** — `Array<T>`(monomorphized、done)、`Map`/`Set`(未着手。`new` 構文サポート含めて次チャンク)。
+- **Phase 1.3 (done)** — 1.3a で `Array<T>`(monomorphized)、1.3b で `Map<K, V>` / `Set<T>`(scalar key/value monomorph、open-addressing + tombstone、SameValueZero key equality、`new Map<K,V>()` / `new Set<T>()` 構文)。
 - **Phase 1.4** — class / interface / ジェネリクス(monomorphize)。
 - **Phase 1.5** — 例外、ES module 静的解決、全プログラム型検証、ヒープ管理(GC/arena)、self-hosting 通過。
 

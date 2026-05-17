@@ -201,4 +201,256 @@ TOPAZ_ARRAY_DEFINE(number, topaz_number)
 TOPAZ_ARRAY_DEFINE(boolean, topaz_boolean)
 TOPAZ_ARRAY_DEFINE(string, topaz_string)
 
+// Phase 1.3b: hash helpers + monomorphized Map/Set.
+//
+// Key equality follows JS Map / Set's SameValueZero (NaN === NaN, -0 === +0)
+// rather than `===` — this is the published semantics for Map keys. The
+// divergence from topaz `===` only matters for `number` keys.
+
+#define TOPAZ_HASH_SLOT_EMPTY 0
+#define TOPAZ_HASH_SLOT_OCCUPIED 1
+#define TOPAZ_HASH_SLOT_TOMBSTONE 2
+
+static inline size_t topaz_hash_number(topaz_number n) {
+  if (n == 0.0) n = 0.0;          // collapse -0 → +0
+  if (n != n) {                    // any NaN → canonical NaN
+    n = (topaz_number)NAN;
+  }
+  uint64_t bits;
+  memcpy(&bits, &n, sizeof(bits));
+  bits ^= bits >> 33;
+  bits *= 0xff51afd7ed558ccdULL;
+  bits ^= bits >> 33;
+  bits *= 0xc4ceb9fe1a85ec53ULL;
+  bits ^= bits >> 33;
+  return (size_t)bits;
+}
+
+static inline topaz_boolean topaz_key_eq_number(topaz_number a, topaz_number b) {
+  if (a == b) return true;                  // covers ±0 and all finite cases
+  if (a != a && b != b) return true;        // SameValueZero treats NaN as equal
+  return false;
+}
+
+static inline size_t topaz_hash_boolean(topaz_boolean b) {
+  return b ? 1u : 0u;
+}
+
+static inline topaz_boolean topaz_key_eq_boolean(topaz_boolean a, topaz_boolean b) {
+  return a == b;
+}
+
+// FNV-1a over UTF-8 bytes. ASCII-only at the codegen layer, so byte hashing is
+// well-defined; if non-ASCII ever leaks in via FFI, the hash still works but
+// `.length` divergence with JS UTF-16 is the bigger issue.
+static inline size_t topaz_hash_string(topaz_string s) {
+  uint64_t h = 14695981039346656037ULL;
+  for (size_t i = 0; i < s.len; i++) {
+    h ^= (uint8_t)s.data[i];
+    h *= 1099511628211ULL;
+  }
+  return (size_t)h;
+}
+
+// Open-addressing hash table, linear probing, tombstones on delete. Grows when
+// (size + tombstones + 1) > cap * 3/4. If size hasn't grown but tombstones
+// have, rehash in place at the current cap instead of doubling.
+#define TOPAZ_MAP_DEFINE(name, key_t, val_t, hash_fn, eq_fn)                            \
+typedef struct {                                                                       \
+  uint8_t state;                                                                       \
+  key_t key;                                                                           \
+  val_t value;                                                                         \
+} topaz_map_##name##_slot;                                                             \
+                                                                                       \
+typedef struct {                                                                       \
+  topaz_map_##name##_slot *slots;                                                      \
+  size_t cap;                                                                          \
+  size_t size;                                                                         \
+  size_t tombstones;                                                                   \
+} topaz_map_##name;                                                                    \
+                                                                                       \
+static inline topaz_map_##name *topaz_map_##name##_new(void) {                         \
+  topaz_map_##name *m = (topaz_map_##name *)malloc(sizeof(*m));                        \
+  if (!m) { fputs("topaz: out of memory\n", stderr); abort(); }                        \
+  m->slots = NULL; m->cap = 0; m->size = 0; m->tombstones = 0;                         \
+  return m;                                                                            \
+}                                                                                      \
+                                                                                       \
+static inline size_t topaz_map_##name##_find_slot(                                     \
+    topaz_map_##name##_slot *slots, size_t cap, key_t k) {                             \
+  size_t mask = cap - 1;                                                               \
+  size_t i = hash_fn(k) & mask;                                                        \
+  size_t first_tomb = SIZE_MAX;                                                        \
+  for (;;) {                                                                           \
+    uint8_t st = slots[i].state;                                                       \
+    if (st == TOPAZ_HASH_SLOT_EMPTY) {                                                 \
+      return first_tomb != SIZE_MAX ? first_tomb : i;                                  \
+    }                                                                                  \
+    if (st == TOPAZ_HASH_SLOT_OCCUPIED && eq_fn(slots[i].key, k)) return i;            \
+    if (st == TOPAZ_HASH_SLOT_TOMBSTONE && first_tomb == SIZE_MAX) first_tomb = i;     \
+    i = (i + 1) & mask;                                                                \
+  }                                                                                    \
+}                                                                                      \
+                                                                                       \
+static inline void topaz_map_##name##_rehash(topaz_map_##name *m, size_t new_cap) {    \
+  topaz_map_##name##_slot *new_slots =                                                 \
+      (topaz_map_##name##_slot *)calloc(new_cap, sizeof(*new_slots));                  \
+  if (!new_slots) { fputs("topaz: out of memory\n", stderr); abort(); }                \
+  for (size_t i = 0; i < m->cap; i++) {                                                \
+    if (m->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;                       \
+    size_t idx = topaz_map_##name##_find_slot(new_slots, new_cap, m->slots[i].key);    \
+    new_slots[idx].state = TOPAZ_HASH_SLOT_OCCUPIED;                                   \
+    new_slots[idx].key = m->slots[i].key;                                              \
+    new_slots[idx].value = m->slots[i].value;                                          \
+  }                                                                                    \
+  free(m->slots);                                                                      \
+  m->slots = new_slots;                                                                \
+  m->cap = new_cap;                                                                    \
+  m->tombstones = 0;                                                                   \
+}                                                                                      \
+                                                                                       \
+static inline void topaz_map_##name##_set(                                             \
+    topaz_map_##name *m, key_t k, val_t v) {                                           \
+  if (m->cap == 0) {                                                                   \
+    topaz_map_##name##_rehash(m, 8);                                                   \
+  } else if ((m->size + m->tombstones + 1) * 4 > m->cap * 3) {                         \
+    size_t new_cap = m->size * 2 < m->cap ? m->cap : m->cap * 2;                       \
+    topaz_map_##name##_rehash(m, new_cap);                                             \
+  }                                                                                    \
+  size_t i = topaz_map_##name##_find_slot(m->slots, m->cap, k);                        \
+  if (m->slots[i].state == TOPAZ_HASH_SLOT_OCCUPIED) {                                 \
+    m->slots[i].value = v;                                                             \
+    return;                                                                            \
+  }                                                                                    \
+  if (m->slots[i].state == TOPAZ_HASH_SLOT_TOMBSTONE) m->tombstones--;                 \
+  m->slots[i].state = TOPAZ_HASH_SLOT_OCCUPIED;                                        \
+  m->slots[i].key = k;                                                                 \
+  m->slots[i].value = v;                                                               \
+  m->size++;                                                                           \
+}                                                                                      \
+                                                                                       \
+static inline topaz_boolean topaz_map_##name##_has(topaz_map_##name *m, key_t k) {     \
+  if (m->cap == 0) return false;                                                       \
+  size_t i = topaz_map_##name##_find_slot(m->slots, m->cap, k);                        \
+  return m->slots[i].state == TOPAZ_HASH_SLOT_OCCUPIED;                                \
+}                                                                                      \
+                                                                                       \
+static inline val_t topaz_map_##name##_get(topaz_map_##name *m, key_t k) {             \
+  if (m->cap == 0) {                                                                   \
+    fputs("topaz: map key not found\n", stderr); abort();                              \
+  }                                                                                    \
+  size_t i = topaz_map_##name##_find_slot(m->slots, m->cap, k);                        \
+  if (m->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) {                                 \
+    fputs("topaz: map key not found\n", stderr); abort();                              \
+  }                                                                                    \
+  return m->slots[i].value;                                                            \
+}                                                                                      \
+                                                                                       \
+static inline topaz_boolean topaz_map_##name##_delete(topaz_map_##name *m, key_t k) {  \
+  if (m->cap == 0) return false;                                                       \
+  size_t i = topaz_map_##name##_find_slot(m->slots, m->cap, k);                        \
+  if (m->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) return false;                     \
+  m->slots[i].state = TOPAZ_HASH_SLOT_TOMBSTONE;                                       \
+  m->size--;                                                                           \
+  m->tombstones++;                                                                     \
+  return true;                                                                         \
+}
+
+#define TOPAZ_SET_DEFINE(name, elem_t, hash_fn, eq_fn)                                 \
+typedef struct {                                                                       \
+  uint8_t state;                                                                       \
+  elem_t key;                                                                          \
+} topaz_set_##name##_slot;                                                             \
+                                                                                       \
+typedef struct {                                                                       \
+  topaz_set_##name##_slot *slots;                                                      \
+  size_t cap;                                                                          \
+  size_t size;                                                                         \
+  size_t tombstones;                                                                   \
+} topaz_set_##name;                                                                    \
+                                                                                       \
+static inline topaz_set_##name *topaz_set_##name##_new(void) {                         \
+  topaz_set_##name *s = (topaz_set_##name *)malloc(sizeof(*s));                        \
+  if (!s) { fputs("topaz: out of memory\n", stderr); abort(); }                        \
+  s->slots = NULL; s->cap = 0; s->size = 0; s->tombstones = 0;                         \
+  return s;                                                                            \
+}                                                                                      \
+                                                                                       \
+static inline size_t topaz_set_##name##_find_slot(                                     \
+    topaz_set_##name##_slot *slots, size_t cap, elem_t k) {                            \
+  size_t mask = cap - 1;                                                               \
+  size_t i = hash_fn(k) & mask;                                                        \
+  size_t first_tomb = SIZE_MAX;                                                        \
+  for (;;) {                                                                           \
+    uint8_t st = slots[i].state;                                                       \
+    if (st == TOPAZ_HASH_SLOT_EMPTY) {                                                 \
+      return first_tomb != SIZE_MAX ? first_tomb : i;                                  \
+    }                                                                                  \
+    if (st == TOPAZ_HASH_SLOT_OCCUPIED && eq_fn(slots[i].key, k)) return i;            \
+    if (st == TOPAZ_HASH_SLOT_TOMBSTONE && first_tomb == SIZE_MAX) first_tomb = i;     \
+    i = (i + 1) & mask;                                                                \
+  }                                                                                    \
+}                                                                                      \
+                                                                                       \
+static inline void topaz_set_##name##_rehash(topaz_set_##name *s, size_t new_cap) {    \
+  topaz_set_##name##_slot *new_slots =                                                 \
+      (topaz_set_##name##_slot *)calloc(new_cap, sizeof(*new_slots));                  \
+  if (!new_slots) { fputs("topaz: out of memory\n", stderr); abort(); }                \
+  for (size_t i = 0; i < s->cap; i++) {                                                \
+    if (s->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;                       \
+    size_t idx = topaz_set_##name##_find_slot(new_slots, new_cap, s->slots[i].key);    \
+    new_slots[idx].state = TOPAZ_HASH_SLOT_OCCUPIED;                                   \
+    new_slots[idx].key = s->slots[i].key;                                              \
+  }                                                                                    \
+  free(s->slots);                                                                      \
+  s->slots = new_slots;                                                                \
+  s->cap = new_cap;                                                                    \
+  s->tombstones = 0;                                                                   \
+}                                                                                      \
+                                                                                       \
+static inline void topaz_set_##name##_add(topaz_set_##name *s, elem_t k) {             \
+  if (s->cap == 0) {                                                                   \
+    topaz_set_##name##_rehash(s, 8);                                                   \
+  } else if ((s->size + s->tombstones + 1) * 4 > s->cap * 3) {                         \
+    size_t new_cap = s->size * 2 < s->cap ? s->cap : s->cap * 2;                       \
+    topaz_set_##name##_rehash(s, new_cap);                                             \
+  }                                                                                    \
+  size_t i = topaz_set_##name##_find_slot(s->slots, s->cap, k);                        \
+  if (s->slots[i].state == TOPAZ_HASH_SLOT_OCCUPIED) return;                           \
+  if (s->slots[i].state == TOPAZ_HASH_SLOT_TOMBSTONE) s->tombstones--;                 \
+  s->slots[i].state = TOPAZ_HASH_SLOT_OCCUPIED;                                        \
+  s->slots[i].key = k;                                                                 \
+  s->size++;                                                                           \
+}                                                                                      \
+                                                                                       \
+static inline topaz_boolean topaz_set_##name##_has(topaz_set_##name *s, elem_t k) {    \
+  if (s->cap == 0) return false;                                                       \
+  size_t i = topaz_set_##name##_find_slot(s->slots, s->cap, k);                        \
+  return s->slots[i].state == TOPAZ_HASH_SLOT_OCCUPIED;                                \
+}                                                                                      \
+                                                                                       \
+static inline topaz_boolean topaz_set_##name##_delete(topaz_set_##name *s, elem_t k) { \
+  if (s->cap == 0) return false;                                                       \
+  size_t i = topaz_set_##name##_find_slot(s->slots, s->cap, k);                        \
+  if (s->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) return false;                     \
+  s->slots[i].state = TOPAZ_HASH_SLOT_TOMBSTONE;                                       \
+  s->size--;                                                                           \
+  s->tombstones++;                                                                     \
+  return true;                                                                         \
+}
+
+TOPAZ_MAP_DEFINE(number_number,   topaz_number,  topaz_number,  topaz_hash_number,  topaz_key_eq_number)
+TOPAZ_MAP_DEFINE(number_boolean,  topaz_number,  topaz_boolean, topaz_hash_number,  topaz_key_eq_number)
+TOPAZ_MAP_DEFINE(number_string,   topaz_number,  topaz_string,  topaz_hash_number,  topaz_key_eq_number)
+TOPAZ_MAP_DEFINE(boolean_number,  topaz_boolean, topaz_number,  topaz_hash_boolean, topaz_key_eq_boolean)
+TOPAZ_MAP_DEFINE(boolean_boolean, topaz_boolean, topaz_boolean, topaz_hash_boolean, topaz_key_eq_boolean)
+TOPAZ_MAP_DEFINE(boolean_string,  topaz_boolean, topaz_string,  topaz_hash_boolean, topaz_key_eq_boolean)
+TOPAZ_MAP_DEFINE(string_number,   topaz_string,  topaz_number,  topaz_hash_string,  topaz_string_eq)
+TOPAZ_MAP_DEFINE(string_boolean,  topaz_string,  topaz_boolean, topaz_hash_string,  topaz_string_eq)
+TOPAZ_MAP_DEFINE(string_string,   topaz_string,  topaz_string,  topaz_hash_string,  topaz_string_eq)
+
+TOPAZ_SET_DEFINE(number,  topaz_number,  topaz_hash_number,  topaz_key_eq_number)
+TOPAZ_SET_DEFINE(boolean, topaz_boolean, topaz_hash_boolean, topaz_key_eq_boolean)
+TOPAZ_SET_DEFINE(string,  topaz_string,  topaz_hash_string,  topaz_string_eq)
+
 #endif

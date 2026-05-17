@@ -215,7 +215,7 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 - [x] **1.1**: 制御フロー(`let`/`const`/`while`/`for`/`do-while`/`break`/`continue`)、`boolean` 型、論理・単項・複合代入・`++`/`--`、軽量な式レベル型推論(codegen 内に同居)。サンプル: `loop_sum.ts` (= 5050)、`while_count.ts` (= 10)、`boolean_print.ts`。
 - [x] **1.2**: `%` の `fmod` 化、ECMA-262 ToString 準拠 shortest による `number → string`(Ryu 差し替えは perf 課題として Phase 2 のベンチ整備時に回す)、`switch`(do/while(0) ラダー)、`string` 型と最小文字列操作。サンプル: `mod_check.ts`、`switch_check.ts`、`number_format.ts`、`string_basic.ts`。
-- [~] **1.3**: `Array<T>` (monomorphize、done)、`Map`、`Set`(未着手)。
+- [x] **1.3**: `Array<T>` (monomorphize、done)、`Map<K, V>` / `Set<T>`(K×V scalar monomorph、open-addressing + tombstone、SameValueZero key equality、done)。
 - [ ] **1.4**: class、interface、ジェネリクス(monomorphize、構造的型は同 shape で nominal 統合)。
 - [ ] **1.5**: 例外、ES module 静的解決、全プログラム型検証(多態検出 → エラー)、ヒープ管理(GC/arena)、self-hosting 通過。
 
@@ -321,6 +321,19 @@ Phase 0 を実装する過程で確定した、設計検討時点で開いてい
 - **`.length` / `.push` / `.pop` の dispatch**。`PropertyAccessExpression` の `.length` は string と Array で別 C 式(`.len` vs `->len`)に展開。method call は `emitCall` から `emitArrayMethodCall` に分岐させた。`push` は void を返すので `inferType` 側で「式として使えない」エラーを出し、`pop` は要素型を返す。`console.log` も配列引数を整形ポリシー未定として明示的にエラー化。
 - **bounds check の `!(i >= 0)` イディオム**。`NaN` を弾くために `i >= 0` の否定で書いている(`NaN < 0` も `NaN >= 0` も false)。`size_t` への変換時に負値が wrap して巨大値になる事故も同時に防げる。
 - **Map/Set は次チャンクに分離**。実装には `new Map()` 構文サポート、key 型ごとの hash 関数、open-addressing マクロ、K×V monomorph 列挙、複数メソッド dispatch(`.set` / `.get` / `.has` / `.delete` / `.size`)が必要で、Array<T> と一塊にすると粒度が大きすぎる。「刻む」方針で 1.3 を 1.3a(Array)・1.3b(Map/Set)に分割した。
+
+## 15. Phase 1.3 実装決定ログ(Map/Set 着地時点 = 1.3b)
+
+- **K×V monomorph をプリ展開**。scalar 3 種(`number` / `boolean` / `string`)の全組合せで Map 9 個 + Set 3 個を `TOPAZ_MAP_DEFINE` / `TOPAZ_SET_DEFINE` マクロでヘッダ末尾に展開。`TopazType` の文字列ユニオンは Phase 1.3a 時点で「破綻直前」と書いた通りすでに苦しく、ここで template literal 型で `` `topaz_map_${ScalarShortName}_${ScalarShortName}` `` 形式に書き換えて静的列挙を継続。Phase 1.4 でジェネリクスを入れる段で `{ kind: "map", key, value }` 等の structured 表現へ移行する想定は変わらない。
+- **TopazType を template literal で再構成**。Phase 1.3a 時点では string union を手で並べていたが、Map 9 monomorph を素直に並べると 18 行になるため、`type TopazType = \`topaz_${ScalarShortName}\` | \`topaz_array_${ScalarShortName}\` | \`topaz_map_${ScalarShortName}_${ScalarShortName}\` | \`topaz_set_${ScalarShortName}\`` に集約。`arrayElem` / `mapKey` / `mapValue` / `setElem` 等のヘルパは文字列を `slice` / `split("_")` で剥がす実装にして、scalar 名にアンダースコアを含めない不変条件で押し切っている(scalar 名を増やす時はこの不変条件を見直す)。
+- **key の同値性は SameValueZero、`===` ではない**。JS Map / Set は SameValueZero(NaN === NaN、-0 === +0)を採用しており、Web で動いている TS コードの暗黙の前提もこれ。`topaz_key_eq_number` を `a == b || (a != a && b != b)` で実装し、ハッシュ側でも `-0 → +0` と NaN 正規化を行う。`===` 演算子のセマンティクス(NaN !== NaN)と意図的に divergence する点だけ CLAUDE.md に明記。
+- **open-addressing + tombstone**。線形プローブで実装。slot state を 3 値(empty/occupied/tombstone)で持ち、`(size + tombstones + 1) * 4 > cap * 3` で grow 判定。`size * 2 < cap` なら同 cap で rehash(tombstone だけで太った場合の縮退)。初期 cap は最初の `set` / `add` で 8 にする lazy 確保で、空の Map / Set 1 個あたりのバイト数を抑えている。
+- **`new Map<K,V>()` / `new Set<T>()` 構文サポート**。`NewExpression` を `emitExpression` / `inferType` / `emitNewExpression` の 3 箇所でハンドル。`Array` 用の `new Array()` は誤用率が高いので「`[]` リテラルを使え」というエラーメッセージで明示的に弾く。bare `new Map()` / `new Set()` は `[]` 同様 `declareVar` から expected 型を thread して受理する(`let m: Map<...> = new Map()` の TS で一番自然な書き味を守るため)。`expected` を持つ場所が declareVar しかないので、関数引数や return 値では型引数必須という非対称が残るが、Phase 1.4 で全プログラム推論を入れる時に解消するつもり。
+- **メソッド dispatch は型別に分岐**。`emitCall` を `isArrayType` / `isMapType` / `isSetType` の 3 分岐に拡張し、各々 `emitArrayMethodCall` / `emitMapMethodCall` / `emitSetMethodCall` に流す。`inferType` 側でも対称に同じ分岐を入れ、`.set` / `.add` が void(式中で使えない)、`.get` / `.has` / `.delete` が値を返すというルールを片側だけに書かないよう注意。
+- **`.size` は property、`.length` と同じ枠**。`isMapType(t) || isSetType(t)` の `.size` を `((topaz_number)(x)->size)` に下ろすケースを `length` のすぐ下に並べる。実装パスは同じだが、`.size` という名前は JS の Map/Set の API 上の決定で、`Array.length` と揃えてくれなかったのは諦めポイント。
+- **`Map.get(k)` は key 不在で `abort`**。JS では `V | undefined` を返すが、optional / union を現状持たないので、`undefined` 相当を表現する手段がない。`.has` で先にチェックする運用にし、divergence は CLAUDE.md に明記。Phase 1.5 で `T | undefined` の narrowing を入れる段で、`Map.get` の戻り値を `V | undefined` に変えて narrowing 必須にする計画。
+- **`Map.set` / `Set.add` は void**。JS では `this` を返すので `m.set(k, v).set(k2, v2)` がチェーンできるが、`Array.push` を void にしたのと同じ理由で void に倒した。チェーンしたい時にはエラーメッセージで「式として使えない」と教える。Phase 1.4 で `this` 型が入った後で再検討する宿題。
+- **テスト**。`examples/map_set_basic.ts` で全 monomorph(Map<string,number> / Map<boolean,string> / Map<number,number> / Set<number> / Set<string>)、重複 add の冪等性、delete 後の `.size` / `.has`、50 要素入れての grow パス、`new Map()` の context typing、`Map.get` の存在 key からの読み出し を一通り叩いている。tombstone を多数生む `delete` ストレスは未カバー(load factor 計算と rehash 縮退パスの単体検証は今回ペンディング、Phase 1.5 でプロパティテスト基盤を入れる時に拾い直す)。
 
 ---
 
