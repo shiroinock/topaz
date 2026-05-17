@@ -1,0 +1,28 @@
+{
+  "name": "topaz",
+  "version": "0.0.0",
+  "description": "TypeScript-syntax AOT native compiler",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "topaz": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "runtime"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "topaz": "node dist/cli.js",
+    "test": "bash tests/smoke.sh"
+  },
+  "dependencies": {
+    "typescript": "^5.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -151,7 +151,7 @@ console.log(fib(34));
 TypeScript (.ts)
     |
     v
-parser              SWC または oxc を借りる(自前パーサは書かない)
+parser              Phase 0 は tsc API。Phase 1 以降の乗り換え候補は oxc。詳細 docs/parser-choice.md
     |
     v
 TypedAST            型注釈付き AST
@@ -199,13 +199,15 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 ## 6. ロードマップ
 
-### Phase 0: PoC(目標 1–2 ヶ月)
+### Phase 0: PoC(目標 1–2 ヶ月) — **完了**
 
-- パーサ統合(SWC または oxc を借用)
-- 最小型推論(注釈をそのまま信じる版)
-- `fib(34)` が動く
-- runtime.h に `number`, `console.log` だけ
-- C 出力 + `cc -O2` でビルド
+- [x] パーサ統合(tsc API を採用、`docs/parser-choice.md`)
+- [x] 最小型推論(注釈をそのまま信じる版、現状は codegen 内で `number` のみ受理)
+- [x] `fib(34)` が動く(`npm test` で回帰チェック)
+- [x] runtime.h に `number`, `console.log` だけ
+- [x] C 出力 + `cc -O2` でビルド
+
+実装概要は `CLAUDE.md` を参照。
 
 ### Phase 1: Self-hosting 可能なサブセット(3–4 ヶ月)
 
@@ -272,11 +274,22 @@ Spinel(尖晶石)が宝石名なので、参照を見せる意味で同系列が
 
 ## 10. 直近のアクション
 
-1. リポジトリ初期化、ライセンス決定(MIT で揃える?)
-2. SWC か oxc か Babel か、パーサ選定の比較メモを書く
-3. `fib(34)` を C に手で落としてみて、runtime header の最小要件を出す
-4. monomorphize のジェネリクス展開ポリシーを明文化
-5. Phase 0 のスコープを issue に切る
+1. [x] リポジトリ初期化、ライセンス決定(MIT)
+2. [x] SWC か oxc か Babel か、パーサ選定の比較メモを書く → `docs/parser-choice.md`(tsc API 採用)
+3. [x] `fib(34)` を C に手で落としてみて、runtime header の最小要件を出す → `examples/fib.handwritten.c` / `runtime/runtime.h`
+4. [ ] monomorphize のジェネリクス展開ポリシーを明文化(Phase 1 入口でやる、Phase 0 時点では机上検討になる)
+5. [ ] Phase 0 のスコープを issue に切る(remote/issue 運用が未定のため保留)
+
+## 11. Phase 0 実装決定ログ
+
+Phase 0 を実装する過程で確定した、設計検討時点で開いていた選択肢の解:
+
+- **パーサ**: `typescript` パッケージの tsc API。`ts.createSourceFile` を呼ぶだけの薄いラッパで Phase 0 は十分。乗り換え条件は `docs/parser-choice.md`。
+- **runtime のレイアウト**: header-only、`static inline` 関数。Spinel の単一ヘッダ流儀を踏襲。Phase 0 では `topaz_number`(= `double`)と `topaz_console_log_number` のみ。
+- **codegen の C 出力スタイル**: 全関数を `static`、トップレベル文は `int main(void)` に包む。前方宣言を全関数まとめて出してから定義。
+- **未対応構文の扱い**: codegen 中に `CodegenError` を `file:line:col` 付きで投げて停止(`§3.1` の方針を実装に落とした形)。
+- **number → 文字列**: Phase 0 は `printf("%.17g", n)`。`3.14` が `"3.1400000000000001"` になる divergence あり。Phase 1 で **Ryu**(Ulf Adams, PLDI 2018, Apache-2.0 / Boost)を `runtime/` に取り込んで差し替える。shortest round-trip 系として実装サイズ・C 単体での扱いやすさで採用。
+- **CLI のデフォルト出力**: `<input>.ts` の隣にバイナリと `.c` を落とす。`--emit-c-only` で cc をスキップして生成 C を残せる。`.gitignore` で `examples/` の生成物は無視。
 
 ---
 

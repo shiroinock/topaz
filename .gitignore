@@ -37,6 +37,15 @@ bower_components
 # Compiled binary addons (https://nodejs.org/api/addons.html)
 build/Release
 
+# topaz cc output
+/build/
+
+# topaz example outputs (compiled binaries + generated .c sit next to .ts sources by default)
+/examples/*
+!/examples/*.ts
+!/examples/*.handwritten.c
+!/examples/number_format_test.c
+
 # Dependency directories
 node_modules/
 jspm_packages/
