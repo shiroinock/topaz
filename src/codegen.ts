@@ -7,7 +7,8 @@ type TopazType =
   | `topaz_array_${ScalarShortName}`
   | `topaz_map_${ScalarShortName}_${ScalarShortName}`
   | `topaz_set_${ScalarShortName}`
-  | `topaz_class_${string}`;
+  | `topaz_class_${string}`
+  | `topaz_iface_${string}`;
 
 const TOPAZ_THIS = "__topaz_this";
 
@@ -40,6 +41,23 @@ function classOf(name: string): TopazType {
   return `topaz_class_${name}` as TopazType;
 }
 
+function isInterfaceType(t: TopazType): boolean {
+  return t.startsWith("topaz_iface_");
+}
+
+function interfaceNameOf(t: TopazType): string | undefined {
+  if (!isInterfaceType(t)) return undefined;
+  return t.slice("topaz_iface_".length);
+}
+
+function interfaceOf(name: string): TopazType {
+  return `topaz_iface_${name}` as TopazType;
+}
+
+// "reference" here means represented in C as `T *` (pointer). Interfaces are
+// fat-pointer structs passed by value, so they're handled separately by
+// cTypeName even though their semantics (shared underlying data) are
+// reference-like.
 function isReferenceType(t: TopazType): boolean {
   return isArrayType(t) || isMapType(t) || isSetType(t) || isClassType(t);
 }
@@ -95,9 +113,11 @@ function setOf(elem: TopazType): TopazType | undefined {
   return `topaz_set_${elem.slice("topaz_".length) as ScalarShortName}`;
 }
 
-// C type used in declarations and signatures. Reference types (Array/Map/Set)
-// are pointers so assignment shares storage.
+// C type used in declarations and signatures. Reference types (Array/Map/Set
+// /Class) are pointers so assignment shares storage. Interfaces are passed by
+// value as fat pointer structs (struct topaz_iface_X with embedded data ptr).
 function cTypeName(t: TopazType): string {
+  if (isInterfaceType(t)) return t;
   return isReferenceType(t) ? `${t} *` : t;
 }
 
@@ -161,28 +181,50 @@ type ClassInfo = {
   fieldOrder: string[];
   ctor: { params: ParamInfo[]; decl: ts.ConstructorDeclaration } | undefined;
   methods: Map<string, MethodInfo>;
+  implements: string[]; // interface names this class declares to implement
   decl: ts.ClassDeclaration;
 };
 
+type InterfaceMethodSig = {
+  params: ParamInfo[];
+  returnType: TopazType;
+  decl: ts.MethodSignature;
+};
+
+type InterfaceInfo = {
+  name: string;
+  fields: Map<string, TopazType>;
+  fieldOrder: string[];
+  methods: Map<string, InterfaceMethodSig>;
+  methodOrder: string[];
+  decl: ts.InterfaceDeclaration;
+};
+
+type FunctionSig = { params: ParamInfo[]; returnType: TopazType };
+
 class Emitter {
   private scope = new Scope();
-  private functionReturns = new Map<string, TopazType>();
+  private functionSigs = new Map<string, FunctionSig>();
   private classes = new Map<string, ClassInfo>();
+  private interfaces = new Map<string, InterfaceInfo>();
   private currentClass: string | undefined;
+  private currentReturnType: TopazType | undefined;
   private switchCounter = 0;
   private tmpCounter = 0;
 
   emit(sf: ts.SourceFile): string {
     const functions: ts.FunctionDeclaration[] = [];
     const classes: ts.ClassDeclaration[] = [];
+    const interfaces: ts.InterfaceDeclaration[] = [];
     const topLevel: ts.Statement[] = [];
     for (const stmt of sf.statements) {
       if (ts.isFunctionDeclaration(stmt)) functions.push(stmt);
       else if (ts.isClassDeclaration(stmt)) classes.push(stmt);
+      else if (ts.isInterfaceDeclaration(stmt)) interfaces.push(stmt);
       else topLevel.push(stmt);
     }
 
-    // Pass 1: register class names so field/method types can refer to each
+    // Pass 1a: register class names so field/method types can refer to each
     // other regardless of source order.
     for (const cls of classes) {
       if (!cls.name) throw new CodegenError(cls, "class must be named");
@@ -199,39 +241,86 @@ class Emitter {
         fieldOrder: [],
         ctor: undefined,
         methods: new Map(),
+        implements: [],
         decl: cls,
       });
     }
 
-    // Pass 2: parse class members (now all class types resolve via
-    // typeFromAnnotation).
+    // Pass 1b: register interface names.
+    for (const iface of interfaces) {
+      const name = iface.name.text;
+      if (name === "Array" || name === "Map" || name === "Set") {
+        throw new CodegenError(iface, `cannot redefine built-in '${name}'`);
+      }
+      if (this.classes.has(name)) {
+        throw new CodegenError(iface, `interface '${name}' collides with a class of the same name`);
+      }
+      if (this.interfaces.has(name)) {
+        throw new CodegenError(iface, `redeclaration of interface '${name}'`);
+      }
+      this.interfaces.set(name, {
+        name,
+        fields: new Map(),
+        fieldOrder: [],
+        methods: new Map(),
+        methodOrder: [],
+        decl: iface,
+      });
+    }
+
+    // Pass 2a: parse interface members (so classes can reference interfaces in
+    // field/method types).
+    for (const iface of interfaces) {
+      this.collectInterfaceMembers(iface);
+    }
+
+    // Pass 2b: parse class members + verify implements.
     for (const cls of classes) {
       this.collectClassMembers(cls);
     }
 
     for (const fn of functions) {
       if (!fn.name) throw new CodegenError(fn, "function must be named");
-      const ret = this.typeFromAnnotation(fn.type, fn);
-      if (this.functionReturns.has(fn.name.text)) {
+      if (this.functionSigs.has(fn.name.text)) {
         throw new CodegenError(fn, `redeclaration of function '${fn.name.text}'`);
       }
-      this.functionReturns.set(fn.name.text, ret);
+      const ret = this.typeFromAnnotation(fn.type, fn);
+      const params = this.collectParams(fn.parameters);
+      this.functionSigs.set(fn.name.text, { params, returnType: ret });
     }
 
     const out: string[] = [];
     out.push('#include "runtime.h"');
     out.push("");
 
-    // Forward-declare class structs so fields referencing other classes work
-    // regardless of order.
+    // Forward-declare class structs and interface vtable structs so any
+    // ordering of fields/methods that crosses class/interface boundaries works.
     if (classes.length > 0) {
       for (const cls of classes) {
         const n = cls.name!.text;
         out.push(`typedef struct topaz_class_${n} topaz_class_${n};`);
       }
       out.push("");
+    }
+    if (interfaces.length > 0) {
+      for (const iface of interfaces) {
+        const n = iface.name.text;
+        out.push(`struct topaz_iface_${n}_vt;`);
+        out.push(
+          `typedef struct topaz_iface_${n} { void *data; const struct topaz_iface_${n}_vt *vt; } topaz_iface_${n};`,
+        );
+      }
+      out.push("");
+    }
+    if (classes.length > 0) {
       for (const cls of classes) {
         out.push(this.emitClassStruct(this.classes.get(cls.name!.text)!));
+      }
+      out.push("");
+    }
+    if (interfaces.length > 0) {
+      for (const iface of interfaces) {
+        out.push(this.emitInterfaceVtableStruct(this.interfaces.get(iface.name.text)!));
       }
       out.push("");
     }
@@ -244,6 +333,22 @@ class Emitter {
       for (const line of this.classMemberSignatures(info)) out.push(`${line};`);
     }
     if (functions.length > 0 || classes.length > 0) out.push("");
+
+    // Emit per-(interface, implementing-class) wrapper functions and the
+    // static const vtable instances. These must come before user function /
+    // class method definitions so coercion sites (`&topaz_iface_I_for_C_vt`)
+    // can reference them.
+    for (const cls of classes) {
+      const info = this.classes.get(cls.name!.text)!;
+      for (const ifaceName of info.implements) {
+        const iface = this.interfaces.get(ifaceName)!;
+        for (const def of this.emitInterfaceWrappers(iface, info)) {
+          out.push(def);
+        }
+        out.push(this.emitInterfaceVtableInstance(iface, info));
+        out.push("");
+      }
+    }
 
     for (const fn of functions) {
       out.push(this.emitFunctionDefinition(fn));
@@ -270,13 +375,95 @@ class Emitter {
     return out.join("\n") + "\n";
   }
 
+  private collectInterfaceMembers(iface: ts.InterfaceDeclaration): void {
+    const info = this.interfaces.get(iface.name.text)!;
+    if (iface.typeParameters && iface.typeParameters.length > 0) {
+      throw new CodegenError(iface, "generic interfaces are unsupported (Phase 1.4c)");
+    }
+    if (iface.heritageClauses && iface.heritageClauses.length > 0) {
+      throw new CodegenError(iface, "interface inheritance (`extends`) is unsupported");
+    }
+    if (iface.modifiers && iface.modifiers.length > 0) {
+      throw new CodegenError(iface, "interface modifiers (export/default) are unsupported");
+    }
+    for (const m of iface.members) {
+      if (ts.isPropertySignature(m)) {
+        if (!m.name || !ts.isIdentifier(m.name)) {
+          throw new CodegenError(m, "interface field name must be a simple identifier");
+        }
+        if (m.questionToken) {
+          throw new CodegenError(m, "optional interface fields are unsupported");
+        }
+        if (m.modifiers && m.modifiers.length > 0) {
+          throw new CodegenError(m, "interface field modifiers (readonly) are unsupported");
+        }
+        const fname = m.name.text;
+        if (info.fields.has(fname) || info.methods.has(fname)) {
+          throw new CodegenError(m, `duplicate member '${fname}' in interface '${info.name}'`);
+        }
+        const t = this.typeFromAnnotation(m.type, m);
+        info.fields.set(fname, t);
+        info.fieldOrder.push(fname);
+      } else if (ts.isMethodSignature(m)) {
+        if (!m.name || !ts.isIdentifier(m.name)) {
+          throw new CodegenError(m, "interface method name must be a simple identifier");
+        }
+        if (m.questionToken) {
+          throw new CodegenError(m, "optional interface methods are unsupported");
+        }
+        if (m.typeParameters && m.typeParameters.length > 0) {
+          throw new CodegenError(m, "generic interface methods are unsupported (Phase 1.4c)");
+        }
+        const mname = m.name.text;
+        if (info.fields.has(mname) || info.methods.has(mname)) {
+          throw new CodegenError(m, `duplicate member '${mname}' in interface '${info.name}'`);
+        }
+        const params = this.collectParams(m.parameters);
+        const returnType = this.typeFromAnnotation(m.type, m);
+        info.methods.set(mname, { params, returnType, decl: m });
+        info.methodOrder.push(mname);
+      } else if (ts.isIndexSignatureDeclaration(m)) {
+        throw new CodegenError(m, "interface index signatures are unsupported");
+      } else if (ts.isCallSignatureDeclaration(m) || ts.isConstructSignatureDeclaration(m)) {
+        throw new CodegenError(m, "interface call/construct signatures are unsupported");
+      } else if (ts.isGetAccessor(m) || ts.isSetAccessor(m)) {
+        throw new CodegenError(m, "interface accessors are unsupported");
+      } else {
+        unsupported(m, "interface member");
+      }
+    }
+  }
+
   private collectClassMembers(cls: ts.ClassDeclaration): void {
     const info = this.classes.get(cls.name!.text)!;
     if (cls.typeParameters && cls.typeParameters.length > 0) {
       throw new CodegenError(cls, "generic classes are unsupported (Phase 1.4c)");
     }
-    if (cls.heritageClauses && cls.heritageClauses.length > 0) {
-      throw new CodegenError(cls, "`extends` / `implements` are unsupported");
+    if (cls.heritageClauses) {
+      for (const hc of cls.heritageClauses) {
+        if (hc.token === ts.SyntaxKind.ExtendsKeyword) {
+          throw new CodegenError(hc, "`extends` is unsupported (no class inheritance)");
+        }
+        if (hc.token !== ts.SyntaxKind.ImplementsKeyword) {
+          throw new CodegenError(hc, "unsupported heritage clause");
+        }
+        for (const t of hc.types) {
+          if (!ts.isIdentifier(t.expression)) {
+            throw new CodegenError(t, "implements target must be a bare interface name");
+          }
+          if (t.typeArguments && t.typeArguments.length > 0) {
+            throw new CodegenError(t, "generic interfaces are unsupported (Phase 1.4c)");
+          }
+          const ifaceName = t.expression.text;
+          if (!this.interfaces.has(ifaceName)) {
+            throw new CodegenError(t, `unknown interface '${ifaceName}'`);
+          }
+          if (info.implements.includes(ifaceName)) {
+            throw new CodegenError(t, `class '${info.name}' lists interface '${ifaceName}' more than once`);
+          }
+          info.implements.push(ifaceName);
+        }
+      }
     }
     if (cls.modifiers && cls.modifiers.length > 0) {
       throw new CodegenError(cls, "class modifiers (export/default/abstract) are unsupported");
@@ -309,6 +496,67 @@ class Emitter {
         `class '${info.name}' has fields but no constructor; add an explicit constructor`,
       );
     }
+    for (const ifaceName of info.implements) {
+      this.verifyImplements(info, this.interfaces.get(ifaceName)!, cls);
+    }
+  }
+
+  // Phase 1.4b: exact structural match — interface field types and method
+  // signatures must equal the class's. No coercion happens at the vtable
+  // boundary, only at user-visible value sites.
+  private verifyImplements(cls: ClassInfo, iface: InterfaceInfo, anchor: ts.Node): void {
+    for (const fname of iface.fieldOrder) {
+      const want = iface.fields.get(fname)!;
+      const got = cls.fields.get(fname);
+      if (!got) {
+        throw new CodegenError(
+          anchor,
+          `class '${cls.name}' is missing field '${fname}' required by interface '${iface.name}'`,
+        );
+      }
+      if (got !== want) {
+        throw new CodegenError(
+          anchor,
+          `class '${cls.name}.${fname}' has type ${got}, but interface '${iface.name}' requires ${want}`,
+        );
+      }
+    }
+    for (const mname of iface.methodOrder) {
+      const want = iface.methods.get(mname)!;
+      const got = cls.methods.get(mname);
+      if (!got) {
+        throw new CodegenError(
+          anchor,
+          `class '${cls.name}' is missing method '${mname}' required by interface '${iface.name}'`,
+        );
+      }
+      if (got.returnType !== want.returnType) {
+        throw new CodegenError(
+          anchor,
+          `class '${cls.name}.${mname}' returns ${got.returnType}, but interface '${iface.name}' requires ${want.returnType}`,
+        );
+      }
+      if (got.params.length !== want.params.length) {
+        throw new CodegenError(
+          anchor,
+          `class '${cls.name}.${mname}' has ${got.params.length} parameter(s), but interface '${iface.name}' requires ${want.params.length}`,
+        );
+      }
+      for (let i = 0; i < want.params.length; i++) {
+        if (got.params[i]!.type !== want.params[i]!.type) {
+          throw new CodegenError(
+            anchor,
+            `class '${cls.name}.${mname}' parameter ${i + 1} has type ${got.params[i]!.type}, but interface '${iface.name}' requires ${want.params[i]!.type}`,
+          );
+        }
+      }
+    }
+  }
+
+  private classImplements(className: string, ifaceName: string): boolean {
+    const cls = this.classes.get(className);
+    if (!cls) return false;
+    return cls.implements.includes(ifaceName);
   }
 
   private collectField(info: ClassInfo, m: ts.PropertyDeclaration): void {
@@ -475,6 +723,8 @@ class Emitter {
 
   private emitMethodDefinition(info: ClassInfo, method: MethodInfo): string {
     this.currentClass = info.name;
+    const prevRet = this.currentReturnType;
+    this.currentReturnType = method.returnType;
     this.scope.push();
     try {
       for (const p of method.params) {
@@ -485,7 +735,77 @@ class Emitter {
     } finally {
       this.scope.pop();
       this.currentClass = undefined;
+      this.currentReturnType = prevRet;
     }
+  }
+
+  // Phase 1.4b: each interface gets a vtable struct. Fields become get/set
+  // function pointers (so we don't have to pin field layouts across all
+  // implementing classes), methods become function pointers that take
+  // `void *self` as the first arg.
+  private emitInterfaceVtableStruct(info: InterfaceInfo): string {
+    const lines: string[] = [];
+    lines.push(`struct topaz_iface_${info.name}_vt {`);
+    if (info.fieldOrder.length === 0 && info.methodOrder.length === 0) {
+      lines.push("  char __topaz_empty;");
+    } else {
+      for (const f of info.fieldOrder) {
+        const t = info.fields.get(f)!;
+        lines.push(`  ${cTypeName(t)} (*get_${f})(void *self);`);
+        lines.push(`  void (*set_${f})(void *self, ${cTypeName(t)} value);`);
+      }
+      for (const mname of info.methodOrder) {
+        const sig = info.methods.get(mname)!;
+        const tail = sig.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
+        const params = tail ? `void *self, ${tail}` : "void *self";
+        lines.push(`  ${cTypeName(sig.returnType)} (*${mname})(${params});`);
+      }
+    }
+    lines.push("};");
+    return lines.join("\n");
+  }
+
+  // Per-(interface, implementing-class) thin wrappers around the class's
+  // field accesses and methods. Each one casts `void *self` back to
+  // `topaz_class_<C> *` and forwards to the underlying access/call.
+  private emitInterfaceWrappers(iface: InterfaceInfo, cls: ClassInfo): string[] {
+    const out: string[] = [];
+    const prefix = `topaz_iface_${iface.name}_for_${cls.name}`;
+    for (const f of iface.fieldOrder) {
+      const t = iface.fields.get(f)!;
+      out.push(
+        `static ${cTypeName(t)} ${prefix}_get_${f}(void *self) { return ((topaz_class_${cls.name} *)self)->${f}; }`,
+      );
+      out.push(
+        `static void ${prefix}_set_${f}(void *self, ${cTypeName(t)} value) { ((topaz_class_${cls.name} *)self)->${f} = value; }`,
+      );
+    }
+    for (const mname of iface.methodOrder) {
+      const sig = iface.methods.get(mname)!;
+      const declParams =
+        sig.params.length === 0
+          ? "void *self"
+          : `void *self, ${sig.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ")}`;
+      const callArgs = [`(topaz_class_${cls.name} *)self`, ...sig.params.map((p) => p.name)].join(", ");
+      out.push(
+        `static ${cTypeName(sig.returnType)} ${prefix}_${mname}(${declParams}) { return topaz_class_${cls.name}_method_${mname}(${callArgs}); }`,
+      );
+    }
+    return out;
+  }
+
+  private emitInterfaceVtableInstance(iface: InterfaceInfo, cls: ClassInfo): string {
+    const prefix = `topaz_iface_${iface.name}_for_${cls.name}`;
+    const entries: string[] = [];
+    for (const f of iface.fieldOrder) {
+      entries.push(`  .get_${f} = ${prefix}_get_${f},`);
+      entries.push(`  .set_${f} = ${prefix}_set_${f},`);
+    }
+    for (const mname of iface.methodOrder) {
+      entries.push(`  .${mname} = ${prefix}_${mname},`);
+    }
+    const body = entries.length === 0 ? "  .__topaz_empty = 0,\n" : entries.join("\n") + "\n";
+    return `static const struct topaz_iface_${iface.name}_vt ${prefix}_vt = {\n${body}};`;
   }
 
   private typeFromAnnotation(node: ts.TypeNode | undefined, anchor: ts.Node): TopazType {
@@ -543,6 +863,12 @@ class Emitter {
         }
         return classOf(refName);
       }
+      if (this.interfaces.has(refName)) {
+        if (node.typeArguments && node.typeArguments.length > 0) {
+          throw new CodegenError(node, `interface '${refName}' takes no type arguments (Phase 1.4c)`);
+        }
+        return interfaceOf(refName);
+      }
     }
     unsupported(node, "type");
   }
@@ -566,15 +892,22 @@ class Emitter {
 
   private emitFunctionDefinition(fn: ts.FunctionDeclaration): string {
     if (!fn.body) throw new CodegenError(fn, "function must have a body");
+    const sig = this.functionSigs.get(fn.name!.text)!;
+    const prevRet = this.currentReturnType;
+    this.currentReturnType = sig.returnType;
     this.scope.push();
-    for (const p of fn.parameters) {
-      const name = (p.name as ts.Identifier).text;
-      const t = this.typeFromAnnotation(p.type, p);
-      this.scope.declare(name, t, /* isConst */ false, p);
+    try {
+      for (const p of fn.parameters) {
+        const name = (p.name as ts.Identifier).text;
+        const t = this.typeFromAnnotation(p.type, p);
+        this.scope.declare(name, t, /* isConst */ false, p);
+      }
+      const body = this.emitBlock(fn.body, 0);
+      return `${this.formatSignature(fn)} ${body}`;
+    } finally {
+      this.scope.pop();
+      this.currentReturnType = prevRet;
     }
-    const body = this.emitBlock(fn.body, 0);
-    this.scope.pop();
-    return `${this.formatSignature(fn)} ${body}`;
   }
 
   private emitBlock(block: ts.Block, indent: number): string {
@@ -587,9 +920,11 @@ class Emitter {
     const pad = "  ".repeat(indent);
 
     if (ts.isReturnStatement(stmt)) {
-      return stmt.expression
-        ? `${pad}return ${this.emitExpression(stmt.expression)};`
-        : `${pad}return;`;
+      if (!stmt.expression) return `${pad}return;`;
+      if (!this.currentReturnType) {
+        throw new CodegenError(stmt, "`return` outside of a function or method");
+      }
+      return `${pad}return ${this.emitWithExpected(stmt.expression, this.currentReturnType)};`;
     }
 
     if (ts.isExpressionStatement(stmt)) {
@@ -695,36 +1030,21 @@ class Emitter {
       throw new CodegenError(decl, "variable declaration must have an initializer");
     }
     const name = decl.name.text;
-    const initIsEmptyArrayLit =
-      ts.isArrayLiteralExpression(decl.initializer) && decl.initializer.elements.length === 0;
-    // Only `new Map()` / `new Set()` without type arguments need a binding-side
-    // annotation to fix K/V; user-class instantiation has all info in the
-    // identifier itself.
-    const initIsBareNew =
-      ts.isNewExpression(decl.initializer) &&
-      ts.isIdentifier(decl.initializer.expression) &&
-      (decl.initializer.expression.text === "Map" ||
-        decl.initializer.expression.text === "Set") &&
-      (!decl.initializer.typeArguments || decl.initializer.typeArguments.length === 0);
 
     let type: TopazType;
+    let initExpr: string;
     if (decl.type) {
       type = this.typeFromAnnotation(decl.type, decl);
-      if (initIsEmptyArrayLit) {
-        if (!isArrayType(type)) {
-          throw new CodegenError(
-            decl.initializer,
-            `type mismatch: expected ${type}, got an empty array literal`,
-          );
-        }
-      } else if (initIsBareNew) {
-        // Type checking happens inside emitNewExpression via the threaded
-        // `expected` type — bare `new Map()` / `new Set()` has no other source
-        // of type information.
-      } else {
-        this.expectType(decl.initializer, type);
-      }
+      // emitWithExpected threads `type` through ArrayLiteral / NewExpression
+      // context typing and applies class -> interface coercion when needed.
+      initExpr = this.emitWithExpected(decl.initializer, type);
     } else {
+      const initIsBareNew =
+        ts.isNewExpression(decl.initializer) &&
+        ts.isIdentifier(decl.initializer.expression) &&
+        (decl.initializer.expression.text === "Map" ||
+          decl.initializer.expression.text === "Set") &&
+        (!decl.initializer.typeArguments || decl.initializer.typeArguments.length === 0);
       if (initIsBareNew) {
         throw new CodegenError(
           decl.initializer,
@@ -732,18 +1052,16 @@ class Emitter {
         );
       }
       type = this.inferType(decl.initializer);
+      if (ts.isArrayLiteralExpression(decl.initializer)) {
+        initExpr = this.emitArrayLiteral(decl.initializer, type);
+      } else if (ts.isNewExpression(decl.initializer)) {
+        initExpr = this.emitNewExpression(decl.initializer, type);
+      } else {
+        initExpr = this.emitExpression(decl.initializer);
+      }
     }
     this.scope.declare(name, type, isConst, decl);
-    let initExpr: string;
-    if (ts.isArrayLiteralExpression(decl.initializer)) {
-      initExpr = this.emitArrayLiteral(decl.initializer, type);
-    } else if (ts.isNewExpression(decl.initializer)) {
-      initExpr = this.emitNewExpression(decl.initializer, type);
-    } else {
-      initExpr = this.emitExpression(decl.initializer);
-    }
-    const initStr = ` = ${initExpr}`;
-    return { type, cName: name, initStr };
+    return { type, cName: name, initStr: ` = ${initExpr}` };
   }
 
   private emitForStatement(stmt: ts.ForStatement, indent: number): string {
@@ -967,6 +1285,26 @@ class Emitter {
           `class '${cls.name}' has no member '${expr.name.text}'`,
         );
       }
+      if (isInterfaceType(baseType)) {
+        const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
+        const fname = expr.name.text;
+        if (iface.fields.has(fname)) {
+          const id = this.tmpCounter++;
+          const tmp = `__topaz_ib_${id}`;
+          const baseStr = this.emitExpression(expr.expression);
+          return `({ ${cTypeName(baseType)} ${tmp} = ${baseStr}; ${tmp}.vt->get_${fname}(${tmp}.data); })`;
+        }
+        if (iface.methods.has(fname)) {
+          throw new CodegenError(
+            expr,
+            `method '${fname}' cannot be used as a value (call it instead)`,
+          );
+        }
+        throw new CodegenError(
+          expr,
+          `interface '${iface.name}' has no member '${fname}'`,
+        );
+      }
       throw new CodegenError(
         expr,
         `unsupported property access '.${expr.name.text}' on ${baseType}`,
@@ -1018,6 +1356,51 @@ class Emitter {
         const idx = this.emitExpression(expr.left.argumentExpression);
         const val = this.emitExpression(expr.right);
         return `topaz_array_${name}_set(${base}, ${idx}, ${val})`;
+      }
+      // Interface property assignment goes through the vtable's setter; no
+      // C lvalue exists for the underlying field. Compound forms would need
+      // to evaluate the base twice, so reject them.
+      if (
+        ts.isPropertyAccessExpression(expr.left) &&
+        (tok === ts.SyntaxKind.EqualsToken ||
+          tok === ts.SyntaxKind.PlusEqualsToken ||
+          tok === ts.SyntaxKind.MinusEqualsToken ||
+          tok === ts.SyntaxKind.AsteriskEqualsToken ||
+          tok === ts.SyntaxKind.SlashEqualsToken ||
+          tok === ts.SyntaxKind.PercentEqualsToken)
+      ) {
+        const baseT = this.inferType(expr.left.expression);
+        if (isInterfaceType(baseT)) {
+          if (tok !== ts.SyntaxKind.EqualsToken) {
+            throw new CodegenError(
+              expr,
+              "compound assignment on interface field is unsupported; use iface.field = ...",
+            );
+          }
+          const iname = interfaceNameOf(baseT)!;
+          const iface = this.interfaces.get(iname)!;
+          const fname = expr.left.name.text;
+          const ftype = iface.fields.get(fname)!;
+          const id = this.tmpCounter++;
+          const tmp = `__topaz_ib_${id}`;
+          const baseStr = this.emitExpression(expr.left.expression);
+          const rhsStr = this.emitWithExpected(expr.right, ftype);
+          // The vtable setter returns void, so this expression's value is
+          // void. Chained assignment (`x = (iface.field = v)`) is therefore
+          // unsupported — acceptable for now since it's a rare pattern.
+          return `({ ${cTypeName(baseT)} ${tmp} = ${baseStr}; ${tmp}.vt->set_${fname}(${tmp}.data, ${rhsStr}); })`;
+        }
+      }
+      // Plain assignment with rhs coercion (covers `let a: Shape = ...; a = new Circle(...)`
+      // as well as `obj.field = new Circle(...)` when field is an interface).
+      if (tok === ts.SyntaxKind.EqualsToken) {
+        const lt = this.inferType(expr.left);
+        const rt = this.inferType(expr.right);
+        if (lt !== rt && this.isAssignableTo(rt, lt)) {
+          const lhsStr = this.emitExpression(expr.left);
+          const rhsStr = this.emitWithExpected(expr.right, lt);
+          return `(${lhsStr} = ${rhsStr})`;
+        }
       }
       // JS `%` is fmod for number; C's `%` rejects double, so always lower.
       if (tok === ts.SyntaxKind.PercentToken) {
@@ -1178,35 +1561,40 @@ class Emitter {
       }
       return `topaz_set_${setShortName(setType)}_new()`;
     }
+    if (this.interfaces.has(name)) {
+      throw new CodegenError(expr, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
+    }
     if (this.classes.has(name)) {
       if (expr.typeArguments && expr.typeArguments.length > 0) {
         throw new CodegenError(expr, `class '${name}' takes no type arguments`);
       }
       const cls = this.classes.get(name)!;
       const args = expr.arguments ?? ([] as readonly ts.Expression[]);
+      const t = classOf(name);
+      // Class -> interface coercion happens at the caller's site (the
+      // surrounding emitWithExpected); here we only need to confirm the new
+      // expression isn't being asked to produce a different concrete type.
+      if (expected && expected !== t && !this.isAssignableTo(t, expected)) {
+        throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+      }
       if (!cls.ctor) {
         // Reachable only when a class has no fields (we require a ctor when
         // fields exist), so this is a structurally empty class.
         if (args.length !== 0) {
           throw new CodegenError(expr, `${cls.name}() takes no arguments`);
         }
-      } else {
-        const params = cls.ctor.params;
-        if (args.length !== params.length) {
-          throw new CodegenError(
-            expr,
-            `${cls.name}() expects ${params.length} argument(s), got ${args.length}`,
-          );
-        }
-        for (let i = 0; i < params.length; i++) {
-          this.expectType(args[i]!, params[i]!.type);
-        }
+        return `topaz_class_${name}_new()`;
       }
-      const t = classOf(name);
-      if (expected && expected !== t) {
-        throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+      const params = cls.ctor.params;
+      if (args.length !== params.length) {
+        throw new CodegenError(
+          expr,
+          `${cls.name}() expects ${params.length} argument(s), got ${args.length}`,
+        );
       }
-      const argStr = args.map((a) => this.emitExpression(a)).join(", ");
+      const argStr = args
+        .map((a, i) => this.emitWithExpected(a, params[i]!.type))
+        .join(", ");
       return `topaz_class_${name}_new(${argStr})`;
     }
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
@@ -1303,7 +1691,7 @@ class Emitter {
       }
       const arg = expr.arguments[0]!;
       const t = this.inferType(arg);
-      if (isReferenceType(t)) {
+      if (isReferenceType(t) || isInterfaceType(t)) {
         throw new CodegenError(arg, `console.log on ${t} is unsupported`);
       }
       const fn =
@@ -1327,15 +1715,26 @@ class Emitter {
       if (isClassType(baseType)) {
         return this.emitClassMethodCall(expr, callee, baseType);
       }
+      if (isInterfaceType(baseType)) {
+        return this.emitInterfaceMethodCall(expr, callee, baseType);
+      }
       throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
     }
 
     if (ts.isIdentifier(callee)) {
-      const ret = this.functionReturns.get(callee.text);
-      if (!ret) {
+      const sig = this.functionSigs.get(callee.text);
+      if (!sig) {
         throw new CodegenError(callee, `unknown function '${callee.text}'`);
       }
-      const args = expr.arguments.map((a) => this.emitExpression(a)).join(", ");
+      if (expr.arguments.length !== sig.params.length) {
+        throw new CodegenError(
+          expr,
+          `${callee.text}() expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
+        );
+      }
+      const args = expr.arguments
+        .map((a, i) => this.emitWithExpected(a, sig.params[i]!.type))
+        .join(", ");
       return `${callee.text}(${args})`;
     }
 
@@ -1429,12 +1828,42 @@ class Emitter {
         `${cls.name}.${mname} expects ${method.params.length} argument(s), got ${expr.arguments.length}`,
       );
     }
-    for (let i = 0; i < method.params.length; i++) {
-      this.expectType(expr.arguments[i]!, method.params[i]!.type);
-    }
     const base = this.emitExpression(callee.expression);
-    const argParts = [base, ...expr.arguments.map((a) => this.emitExpression(a))];
+    const argParts = [
+      base,
+      ...expr.arguments.map((a, i) => this.emitWithExpected(a, method.params[i]!.type)),
+    ];
     return `topaz_class_${cls.name}_method_${mname}(${argParts.join(", ")})`;
+  }
+
+  private emitInterfaceMethodCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+    baseType: TopazType,
+  ): string {
+    const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
+    const mname = callee.name.text;
+    const sig = iface.methods.get(mname);
+    if (!sig) {
+      if (iface.fields.has(mname)) {
+        throw new CodegenError(callee, `'${mname}' is a field, not a method, on interface '${iface.name}'`);
+      }
+      throw new CodegenError(callee, `interface '${iface.name}' has no method '${mname}'`);
+    }
+    if (expr.arguments.length !== sig.params.length) {
+      throw new CodegenError(
+        expr,
+        `${iface.name}.${mname} expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
+      );
+    }
+    const id = this.tmpCounter++;
+    const tmp = `__topaz_ib_${id}`;
+    const baseStr = this.emitExpression(callee.expression);
+    const argParts = [
+      `${tmp}.data`,
+      ...expr.arguments.map((a, i) => this.emitWithExpected(a, sig.params[i]!.type)),
+    ];
+    return `({ ${cTypeName(baseType)} ${tmp} = ${baseStr}; ${tmp}.vt->${mname}(${argParts.join(", ")}); })`;
   }
 
   private emitSetMethodCall(
@@ -1514,6 +1943,21 @@ class Emitter {
         throw new CodegenError(
           expr,
           `class '${cls.name}' has no member '${expr.name.text}'`,
+        );
+      }
+      if (isInterfaceType(baseType)) {
+        const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
+        const f = iface.fields.get(expr.name.text);
+        if (f) return f;
+        if (iface.methods.has(expr.name.text)) {
+          throw new CodegenError(
+            expr,
+            `method '${expr.name.text}' cannot be used as a value (call it instead)`,
+          );
+        }
+        throw new CodegenError(
+          expr,
+          `interface '${iface.name}' has no member '${expr.name.text}'`,
         );
       }
       throw new CodegenError(
@@ -1692,12 +2136,20 @@ class Emitter {
           }
           return method.returnType;
         }
+        if (isInterfaceType(baseType)) {
+          const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
+          const sig = iface.methods.get(callee.name.text);
+          if (!sig) {
+            throw new CodegenError(callee, `interface '${iface.name}' has no method '${callee.name.text}'`);
+          }
+          return sig.returnType;
+        }
         throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
       }
       if (ts.isIdentifier(callee)) {
-        const ret = this.functionReturns.get(callee.text);
-        if (!ret) throw new CodegenError(callee, `unknown function '${callee.text}'`);
-        return ret;
+        const sig = this.functionSigs.get(callee.text);
+        if (!sig) throw new CodegenError(callee, `unknown function '${callee.text}'`);
+        return sig.returnType;
       }
       unsupported(callee, "call target");
     }
@@ -1730,6 +2182,9 @@ class Emitter {
           throw new CodegenError(expr, `class '${name}' takes no type arguments`);
         }
         return classOf(name);
+      }
+      if (this.interfaces.has(name)) {
+        throw new CodegenError(expr, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
       }
       throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
     }
@@ -1764,8 +2219,18 @@ class Emitter {
         throw new CodegenError(target, "property assignment requires a simple base (identifier, `this`, or chained property access)");
       }
       const baseType = this.inferType(target.expression);
+      if (isInterfaceType(baseType)) {
+        const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
+        if (!iface.fields.has(target.name.text)) {
+          if (iface.methods.has(target.name.text)) {
+            throw new CodegenError(target, `cannot assign to method '${target.name.text}'`);
+          }
+          throw new CodegenError(target, `interface '${iface.name}' has no field '${target.name.text}'`);
+        }
+        return;
+      }
       if (!isClassType(baseType)) {
-        throw new CodegenError(target, `property assignment is only supported on class instances (got ${baseType})`);
+        throw new CodegenError(target, `property assignment is only supported on class instances or interface values (got ${baseType})`);
       }
       const cls = this.classes.get(classNameOf(baseType)!)!;
       if (!cls.fields.has(target.name.text)) {
@@ -1789,9 +2254,71 @@ class Emitter {
 
   private expectType(expr: ts.Expression, expected: TopazType): void {
     const actual = this.inferType(expr);
-    if (actual !== expected) {
-      throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${actual}`);
+    if (actual === expected) return;
+    if (this.isAssignableTo(actual, expected)) return;
+    throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${actual}`);
+  }
+
+  // Phase 1.4b: class implementing an interface is the only implicit
+  // conversion in the language. Same-type and class -> declared-interface
+  // count as assignable. (No interface -> interface, no narrowing, no scalar
+  // widening — divergence from TS structural typing.)
+  private isAssignableTo(actual: TopazType, expected: TopazType): boolean {
+    if (actual === expected) return true;
+    if (isInterfaceType(expected) && isClassType(actual)) {
+      return this.classImplements(classNameOf(actual)!, interfaceNameOf(expected)!);
     }
+    return false;
+  }
+
+  // Type-check `expr` against `expected` and emit C source, inserting class ->
+  // interface coercion (fat pointer compound literal) when needed. Use this
+  // helper at every value-passing site (variable init, call argument, return
+  // statement, assignment RHS) where the expected type is known.
+  private emitWithExpected(expr: ts.Expression, expected: TopazType): string {
+    if (ts.isArrayLiteralExpression(expr)) {
+      // Array literal element types aren't interfaces (no Array<Interface> in
+      // 1.4b), so no coercion is needed at the array itself.
+      return this.emitArrayLiteral(expr, expected);
+    }
+    if (ts.isNewExpression(expr)) {
+      // Bare `new Map()` / `new Set()` carries no type info; thread expected
+      // through as context. Interface widening is impossible for Map/Set, so
+      // forwarding expected unmodified is safe.
+      const isBareMapSet =
+        ts.isIdentifier(expr.expression) &&
+        (expr.expression.text === "Map" || expr.expression.text === "Set") &&
+        (!expr.typeArguments || expr.typeArguments.length === 0);
+      if (isBareMapSet) {
+        return this.emitNewExpression(expr, expected);
+      }
+      const newType = this.inferType(expr);
+      // emitNewExpression only uses `expected` for bare `new Map()` / `new
+      // Set()` context typing; suppress that when expected is interface so we
+      // keep the class type and let coercion below wrap it.
+      const ctx = isInterfaceType(expected) ? undefined : expected;
+      const raw = this.emitNewExpression(expr, ctx);
+      return this.applyCoercion(raw, newType, expected, expr);
+    }
+    const actual = this.inferType(expr);
+    const raw = this.emitExpression(expr);
+    return this.applyCoercion(raw, actual, expected, expr);
+  }
+
+  private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: ts.Node): string {
+    if (actual === expected) return raw;
+    if (isInterfaceType(expected) && isClassType(actual)) {
+      const iname = interfaceNameOf(expected)!;
+      const cname = classNameOf(actual)!;
+      if (!this.classImplements(cname, iname)) {
+        throw new CodegenError(
+          anchor,
+          `class '${cname}' does not implement interface '${iname}'`,
+        );
+      }
+      return `((topaz_iface_${iname}){ .data = ${raw}, .vt = &topaz_iface_${iname}_for_${cname}_vt })`;
+    }
+    throw new CodegenError(anchor, `type mismatch: expected ${expected}, got ${actual}`);
   }
 }
 
