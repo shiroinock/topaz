@@ -214,10 +214,10 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 実装サイズが大きすぎるので 1.1〜1.5 に細分化して進める。各小段階の done 定義は CLAUDE.md の「Phase 0 から先」セクションを参照。
 
 - [x] **1.1**: 制御フロー(`let`/`const`/`while`/`for`/`do-while`/`break`/`continue`)、`boolean` 型、論理・単項・複合代入・`++`/`--`、軽量な式レベル型推論(codegen 内に同居)。サンプル: `loop_sum.ts` (= 5050)、`while_count.ts` (= 10)、`boolean_print.ts`。
-- [ ] **1.2**: `%` の `fmod` 化、Ryu による `number → string`、`switch`、`string` 型と最小文字列操作。
+- [x] **1.2**: `%` の `fmod` 化、ECMA-262 ToString 準拠 shortest による `number → string`(Ryu 差し替えは perf 課題として Phase 2 のベンチ整備時に回す)、`switch`(do/while(0) ラダー)、`string` 型と最小文字列操作。サンプル: `mod_check.ts`、`switch_check.ts`、`number_format.ts`、`string_basic.ts`。
 - [ ] **1.3**: `Array<T>` (monomorphize)、`Map`、`Set`。
 - [ ] **1.4**: class、interface、ジェネリクス(monomorphize、構造的型は同 shape で nominal 統合)。
-- [ ] **1.5**: 例外、ES module 静的解決、全プログラム型検証(多態検出 → エラー)、self-hosting 通過。
+- [ ] **1.5**: 例外、ES module 静的解決、全プログラム型検証(多態検出 → エラー)、ヒープ管理(GC/arena)、self-hosting 通過。
 
 ### Phase 2: 実用性(6 ヶ月〜)
 
@@ -301,6 +301,15 @@ Phase 0 を実装する過程で確定した、設計検討時点で開いてい
 - **for-init は単一宣言**: `for (let i = 0, j = 0; ...)` を許すと、型が混じった場合に C の for 構文に乗らない。単一宣言だけ受理し、複数変数を回したい場合は外で `let` しておくスタイルに統一。
 - **scope と関数シグネチャ**: 関数の前方宣言が全関数ぶん最初に出るのを利用して、本体 emit より先に全関数の戻り値型を `functionReturns` に登録する。これで相互再帰しても型解決できる。
 - **`%` は C の `%` でとりあえず出している**: 浮動小数では JS の `%` (= `fmod`) とずれる。整数領域では一致するので Phase 1.1 のサンプル(`loop_sum`/`while_count`)に影響しないが、Phase 1.2 で Ryu と一緒に `topaz_fmod` 経由に差し替える宿題。
+
+## 13. Phase 1.2 実装決定ログ
+
+- **`%` の lowering**: `topaz_number` の `%` / `%=` は常に `topaz_fmod(a, b)` に下ろす。C の `%` は整数型限定でそもそも `double` を受けないため「整数領域なら同じ」という Phase 1.1 のコメントは正確ではなく、Phase 1.1 のサンプル(`loop_sum`/`while_count`)が `%` を使っていなかっただけで、`%` を含むコードは Phase 1.1 では一切コンパイルできない状態だった。`topaz_fmod` は `<math.h>` の `fmod` を `static inline` でラップしただけのもの。
+- **shortest `number → string`**: Ryu(d2s)の本家ポートは ~1500 行のテーブル付きで取り込み・検証コストが大きいので、Phase 1.2 では `snprintf("%.*e") + strtod` の精度探索(p=1..17)で shortest 桁数を見つけ、ECMA-262 ToString の場合分け(`k <= n <= 21` / `0 < n <= 21` / `-6 < n <= 0` / それ以外は指数表記)で出力する実装にした。観測上の出力は Ryu と一致するはずだが、最悪 17 回 snprintf+strtod を回すので、Ryu に比べて 1〜2 桁遅い。perf に敏感な用途が顕在化するまでは置いておく(Phase 2 のベンチ整備で差し替え)。
+- **`switch` lowering**: C の `switch` は整数型しか受けないので、`do { if (d === c1) { ... } else if (...) { ... } else { default } } while (0)` の if/else ラダーに落とす。`break` は do/while の `break` でそのまま switch を抜ける。trade-off として、`switch` 本体内の `continue`(外側ループに対する continue)は do/while(0) で吸われてしまうため、AST の親をたどって「switch を間に挟む continue」を検出して `CodegenError` で落としている。JS の暗黙 fall-through は禁止(非空 case は terminator で終わる必要あり)、`default` は最終 clause のみ許可、case ラベルは判別式と同型のみ。`number` / `boolean` / `string` 判別式に対応(string は `topaz_string_eq`)。
+- **`string` の表現**: `{ const char *data; size_t len; }` を値渡しで運ぶ。リテラルは C99 compound literal `((topaz_string){"abc", 3})` として埋め込み、`data` は string literal(静的寿命)を指す。連結は `topaz_string_concat` が `malloc` して詰める。Phase 1.5 まで GC/arena を持たないので連結結果はリーク前提。文字列リテラルは ASCII 限定で codegen 段で reject(JS の `.length` は UTF-16 code units、C 側のバイト長との divergence を回避するため)。
+- **`+` の型分岐**: `inferType` で左辺を見て `topaz_string` なら右辺も `topaz_string` を要求して string 連結、それ以外は両辺 `topaz_number` を要求して数値加算。`+=` も同じ分岐。実装上は `inferType` を一度走らせて codegen 側で再度型を見るので少しもったいないが、Phase 1.3 以降の型推論層分離で解消する想定。
+- **`.length` の扱い**: `PropertyAccessExpression` を `inferType` / `emitExpression` の両方で扱う最初のケース。今は `topaz_string.length` だけだが、Phase 1.3 以降 `Array<T>.length` でも同じ枠組みに乗せられるよう、`baseType + propertyName` で dispatch する形にしてある(現状は `if` 1 本だが)。
 
 ---
 

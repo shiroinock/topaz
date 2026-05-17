@@ -1,6 +1,6 @@
 import * as ts from "typescript";
 
-type TopazType = "topaz_number" | "topaz_boolean";
+type TopazType = "topaz_number" | "topaz_boolean" | "topaz_string";
 
 type Binding = { type: TopazType; isConst: boolean };
 
@@ -51,6 +51,7 @@ class Scope {
 class Emitter {
   private scope = new Scope();
   private functionReturns = new Map<string, TopazType>();
+  private switchCounter = 0;
 
   emit(sf: ts.SourceFile): string {
     const functions: ts.FunctionDeclaration[] = [];
@@ -99,6 +100,7 @@ class Emitter {
     if (!node) throw new CodegenError(anchor, "type annotation required");
     if (node.kind === ts.SyntaxKind.NumberKeyword) return "topaz_number";
     if (node.kind === ts.SyntaxKind.BooleanKeyword) return "topaz_boolean";
+    if (node.kind === ts.SyntaxKind.StringKeyword) return "topaz_string";
     unsupported(node, "type");
   }
 
@@ -185,6 +187,10 @@ class Emitter {
       return this.emitForStatement(stmt, indent);
     }
 
+    if (ts.isSwitchStatement(stmt)) {
+      return this.emitSwitchStatement(stmt, indent);
+    }
+
     if (ts.isBreakStatement(stmt)) {
       if (stmt.label) unsupported(stmt, "labeled break");
       return `${pad}break;`;
@@ -192,6 +198,7 @@ class Emitter {
 
     if (ts.isContinueStatement(stmt)) {
       if (stmt.label) unsupported(stmt, "labeled continue");
+      this.checkContinueAllowed(stmt);
       return `${pad}continue;`;
     }
 
@@ -303,6 +310,129 @@ class Emitter {
     }
   }
 
+  private emitSwitchStatement(stmt: ts.SwitchStatement, indent: number): string {
+    const pad = "  ".repeat(indent);
+    const discType = this.inferType(stmt.expression);
+    const clauses = stmt.caseBlock.clauses;
+
+    let defaultClause: ts.DefaultClause | undefined;
+    for (let i = 0; i < clauses.length; i++) {
+      const c = clauses[i]!;
+      if (ts.isDefaultClause(c)) {
+        if (i !== clauses.length - 1) {
+          throw new CodegenError(c, "`default` must be the last clause of `switch`");
+        }
+        defaultClause = c;
+      }
+    }
+
+    type Group = { conds: ts.CaseClause[]; body: readonly ts.Statement[] };
+    const groups: Group[] = [];
+    let pending: ts.CaseClause[] = [];
+    for (const c of clauses) {
+      if (ts.isCaseClause(c)) {
+        this.expectType(c.expression, discType);
+        pending.push(c);
+        if (c.statements.length > 0) {
+          groups.push({ conds: pending, body: c.statements });
+          pending = [];
+        }
+      }
+    }
+    if (pending.length > 0) {
+      groups.push({ conds: pending, body: [] });
+    }
+
+    const isTerminator = (s: ts.Statement): boolean =>
+      ts.isBreakStatement(s) ||
+      ts.isReturnStatement(s) ||
+      ts.isThrowStatement(s) ||
+      ts.isContinueStatement(s);
+    for (const g of groups) {
+      if (g.body.length > 0 && !isTerminator(g.body[g.body.length - 1]!)) {
+        throw new CodegenError(
+          g.body[g.body.length - 1]!,
+          "case body must end with `break` or `return` (implicit fall-through is unsupported)",
+        );
+      }
+    }
+
+    const id = this.switchCounter++;
+    const tmp = `__topaz_sw_${id}`;
+    const discExpr = this.emitExpression(stmt.expression);
+
+    const out: string[] = [];
+    out.push(`${pad}{`);
+    out.push(`${pad}  ${discType} ${tmp} = ${discExpr};`);
+    out.push(`${pad}  do {`);
+
+    this.scope.push();
+    try {
+      const cmp = (rhs: string): string =>
+        discType === "topaz_string"
+          ? `topaz_string_eq(${tmp}, ${rhs})`
+          : `${tmp} == ${rhs}`;
+      let first = true;
+      for (const g of groups) {
+        const conds = g.conds.map((c) => cmp(this.emitExpression(c.expression))).join(" || ");
+        const head = first ? "if" : "else if";
+        if (g.body.length === 0) {
+          out.push(`${pad}    ${head} (${conds}) { break; }`);
+        } else {
+          out.push(`${pad}    ${head} (${conds}) {`);
+          for (const s of g.body) {
+            out.push(this.emitStatement(s, indent + 3));
+          }
+          out.push(`${pad}    }`);
+        }
+        first = false;
+      }
+      if (defaultClause) {
+        const head = first ? "if (1)" : "else";
+        if (defaultClause.statements.length === 0) {
+          out.push(`${pad}    ${head} { break; }`);
+        } else {
+          out.push(`${pad}    ${head} {`);
+          for (const s of defaultClause.statements) {
+            out.push(this.emitStatement(s, indent + 3));
+          }
+          out.push(`${pad}    }`);
+        }
+      }
+    } finally {
+      this.scope.pop();
+    }
+
+    out.push(`${pad}  } while (0);`);
+    out.push(`${pad}}`);
+    return out.join("\n");
+  }
+
+  private checkContinueAllowed(stmt: ts.ContinueStatement): void {
+    let p: ts.Node | undefined = stmt.parent;
+    while (p) {
+      if (
+        ts.isWhileStatement(p) ||
+        ts.isDoStatement(p) ||
+        ts.isForStatement(p) ||
+        ts.isForInStatement(p) ||
+        ts.isForOfStatement(p)
+      ) {
+        return;
+      }
+      if (ts.isSwitchStatement(p)) {
+        throw new CodegenError(
+          stmt,
+          "`continue` inside `switch` is unsupported (switch lowers to do/while(0))",
+        );
+      }
+      if (ts.isFunctionLike(p) || ts.isSourceFile(p)) {
+        throw new CodegenError(stmt, "`continue` outside of a loop");
+      }
+      p = p.parent;
+    }
+  }
+
   private emitExpression(expr: ts.Expression): string {
     if (ts.isNumericLiteral(expr)) {
       const t = expr.text;
@@ -310,6 +440,9 @@ class Emitter {
     }
     if (expr.kind === ts.SyntaxKind.TrueKeyword) return "true";
     if (expr.kind === ts.SyntaxKind.FalseKeyword) return "false";
+    if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+      return this.emitStringLiteral(expr);
+    }
     if (ts.isIdentifier(expr)) {
       if (!this.scope.lookup(expr.text)) {
         throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
@@ -318,6 +451,16 @@ class Emitter {
     }
     if (ts.isParenthesizedExpression(expr)) {
       return `(${this.emitExpression(expr.expression)})`;
+    }
+    if (ts.isPropertyAccessExpression(expr)) {
+      const baseType = this.inferType(expr.expression);
+      if (baseType === "topaz_string" && expr.name.text === "length") {
+        return `((topaz_number)(${this.emitExpression(expr.expression)}).len)`;
+      }
+      throw new CodegenError(
+        expr,
+        `unsupported property access '.${expr.name.text}' on ${baseType}`,
+      );
     }
     if (ts.isPrefixUnaryExpression(expr)) {
       this.inferType(expr); // type-check
@@ -331,6 +474,33 @@ class Emitter {
     }
     if (ts.isBinaryExpression(expr)) {
       this.inferType(expr); // type-check + const-check
+      const tok = expr.operatorToken.kind;
+      // JS `%` is fmod for number; C's `%` rejects double, so always lower.
+      if (tok === ts.SyntaxKind.PercentToken) {
+        return `topaz_fmod(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
+      }
+      if (tok === ts.SyntaxKind.PercentEqualsToken) {
+        const lhs = this.emitExpression(expr.left);
+        return `(${lhs} = topaz_fmod(${lhs}, ${this.emitExpression(expr.right)}))`;
+      }
+      if (tok === ts.SyntaxKind.PlusToken && this.inferType(expr.left) === "topaz_string") {
+        return `topaz_string_concat(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
+      }
+      if (
+        tok === ts.SyntaxKind.PlusEqualsToken &&
+        this.inferType(expr.left) === "topaz_string"
+      ) {
+        const lhs = this.emitExpression(expr.left);
+        return `(${lhs} = topaz_string_concat(${lhs}, ${this.emitExpression(expr.right)}))`;
+      }
+      if (
+        (tok === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+          tok === ts.SyntaxKind.ExclamationEqualsEqualsToken) &&
+        this.inferType(expr.left) === "topaz_string"
+      ) {
+        const inner = `topaz_string_eq(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
+        return tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? inner : `(!${inner})`;
+      }
       const op = this.binaryOp(expr.operatorToken);
       return `(${this.emitExpression(expr.left)} ${op} ${this.emitExpression(expr.right)})`;
     }
@@ -338,6 +508,35 @@ class Emitter {
       return this.emitCall(expr);
     }
     unsupported(expr, "expression");
+  }
+
+  private emitStringLiteral(expr: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral): string {
+    const cooked = expr.text;
+    let escaped = '"';
+    let byteLen = 0;
+    for (let i = 0; i < cooked.length; i++) {
+      const c = cooked.charCodeAt(i);
+      if (c >= 0x80) {
+        throw new CodegenError(
+          expr,
+          "non-ASCII characters in string literals are unsupported (UTF-16 length divergence)",
+        );
+      }
+      if (c === 0x22) escaped += '\\"';
+      else if (c === 0x5c) escaped += "\\\\";
+      else if (c === 0x0a) escaped += "\\n";
+      else if (c === 0x0d) escaped += "\\r";
+      else if (c === 0x09) escaped += "\\t";
+      else if (c === 0x00) escaped += "\\0";
+      else if (c < 0x20 || c === 0x7f) {
+        escaped += `\\x${c.toString(16).padStart(2, "0")}`;
+      } else {
+        escaped += String.fromCharCode(c);
+      }
+      byteLen++;
+    }
+    escaped += '"';
+    return `((topaz_string){ ${escaped}, ${byteLen} })`;
   }
 
   private prefixOp(expr: ts.PrefixUnaryExpression): string {
@@ -402,7 +601,10 @@ class Emitter {
       }
       const arg = expr.arguments[0]!;
       const t = this.inferType(arg);
-      const fn = t === "topaz_boolean" ? "topaz_console_log_boolean" : "topaz_console_log_number";
+      const fn =
+        t === "topaz_boolean" ? "topaz_console_log_boolean"
+        : t === "topaz_string" ? "topaz_console_log_string"
+        : "topaz_console_log_number";
       return `${fn}(${this.emitExpression(arg)})`;
     }
 
@@ -423,11 +625,24 @@ class Emitter {
     if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
       return "topaz_boolean";
     }
+    if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+      return "topaz_string";
+    }
     if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
     if (ts.isIdentifier(expr)) {
       const b = this.scope.lookup(expr.text);
       if (!b) throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
       return b.type;
+    }
+    if (ts.isPropertyAccessExpression(expr)) {
+      const baseType = this.inferType(expr.expression);
+      if (baseType === "topaz_string" && expr.name.text === "length") {
+        return "topaz_number";
+      }
+      throw new CodegenError(
+        expr,
+        `unsupported property access '.${expr.name.text}' on ${baseType}`,
+      );
     }
     if (ts.isPrefixUnaryExpression(expr)) {
       switch (expr.operator) {
@@ -455,7 +670,16 @@ class Emitter {
     if (ts.isBinaryExpression(expr)) {
       const kind = expr.operatorToken.kind;
       switch (kind) {
-        case ts.SyntaxKind.PlusToken:
+        case ts.SyntaxKind.PlusToken: {
+          const lt = this.inferType(expr.left);
+          if (lt === "topaz_string") {
+            this.expectType(expr.right, "topaz_string");
+            return "topaz_string";
+          }
+          this.expectType(expr.left, "topaz_number");
+          this.expectType(expr.right, "topaz_number");
+          return "topaz_number";
+        }
         case ts.SyntaxKind.MinusToken:
         case ts.SyntaxKind.AsteriskToken:
         case ts.SyntaxKind.SlashToken:
@@ -487,7 +711,17 @@ class Emitter {
           this.expectType(expr.right, lt);
           return lt;
         }
-        case ts.SyntaxKind.PlusEqualsToken:
+        case ts.SyntaxKind.PlusEqualsToken: {
+          this.checkAssignTarget(expr.left, expr);
+          const lt = this.inferType(expr.left);
+          if (lt === "topaz_string") {
+            this.expectType(expr.right, "topaz_string");
+            return "topaz_string";
+          }
+          this.expectType(expr.left, "topaz_number");
+          this.expectType(expr.right, "topaz_number");
+          return "topaz_number";
+        }
         case ts.SyntaxKind.MinusEqualsToken:
         case ts.SyntaxKind.AsteriskEqualsToken:
         case ts.SyntaxKind.SlashEqualsToken:
