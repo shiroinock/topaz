@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { codegen } from "./codegen.js";
-import { parseFile } from "./parser.js";
+import { loadModuleGraph } from "./loader.js";
 
 const USAGE = `usage: topaz <input.ts> [-o <output>] [--emit-c-only]
 
@@ -52,8 +52,8 @@ function main(): void {
   const cPath = `${output}.c`;
   mkdirSync(dirname(output), { recursive: true });
 
-  const sf = parseFile(input);
-  const cSource = codegen(sf);
+  const graph = loadModuleGraph(input);
+  const cSource = codegen(graph.files);
   writeFileSync(cPath, cSource);
 
   if (parsed.values["emit-c-only"]) {

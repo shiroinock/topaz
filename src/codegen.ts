@@ -209,6 +209,26 @@ function unsupported(node: ts.Node, what: string): never {
   throw new CodegenError(node, `unsupported ${what} (${ts.SyntaxKind[node.kind]})`);
 }
 
+// Phase 1.5-2: top-level の class / interface / function 宣言で `export` 修飾子
+// のみ受け入れる。`export default` / `declare` / `abstract` 等はこれまで通り
+// 未対応エラーで落とす。modifier を持ち得ない宣言にも安全に呼べる。
+function validateExportableModifiers(
+  node: ts.Node & { modifiers?: ts.NodeArray<ts.ModifierLike> },
+  kindLabel: string,
+): void {
+  if (!node.modifiers) return;
+  for (const m of node.modifiers) {
+    if (m.kind === ts.SyntaxKind.ExportKeyword) continue;
+    if (m.kind === ts.SyntaxKind.DefaultKeyword) {
+      throw new CodegenError(m, `\`export default\` is unsupported (Phase 1.5-2)`);
+    }
+    throw new CodegenError(
+      m,
+      `${kindLabel} modifier '${ts.SyntaxKind[m.kind]}' is unsupported`,
+    );
+  }
+}
+
 class Scope {
   private stack: Map<string, Binding>[] = [new Map()];
 
@@ -377,16 +397,43 @@ class Emitter {
     this.setMonomorphs.set(typeKey(t), t);
   }
 
-  emit(sf: ts.SourceFile): string {
+  emit(sourceFiles: readonly ts.SourceFile[]): string {
+    if (sourceFiles.length === 0) {
+      throw new Error("codegen: at least one source file is required");
+    }
     const functions: ts.FunctionDeclaration[] = [];
     const classes: ts.ClassDeclaration[] = [];
     const interfaces: ts.InterfaceDeclaration[] = [];
     const topLevel: ts.Statement[] = [];
-    for (const stmt of sf.statements) {
-      if (ts.isFunctionDeclaration(stmt)) functions.push(stmt);
-      else if (ts.isClassDeclaration(stmt)) classes.push(stmt);
-      else if (ts.isInterfaceDeclaration(stmt)) interfaces.push(stmt);
-      else topLevel.push(stmt);
+    // Phase 1.5-2: 全 SourceFile を flatten。配列末尾 (root module) のみが
+    // `main()` body に置く top-level statement を持てる。非 root module で
+    // 宣言以外の statement (let/const/式文/制御フロー) が出てきたら明示エラー。
+    const rootSf = sourceFiles[sourceFiles.length - 1]!;
+    for (const sf of sourceFiles) {
+      const isRoot = sf === rootSf;
+      for (const stmt of sf.statements) {
+        if (ts.isImportDeclaration(stmt)) {
+          // loader 側で既に検証済み (default/namespace/rename は弾かれている)。
+          // codegen はここでは無視する: 全 module の宣言は単一 global namespace に
+          // flatten されるため、import で名前を取り込む必要はない。
+          continue;
+        }
+        if (ts.isFunctionDeclaration(stmt)) {
+          validateExportableModifiers(stmt, "function");
+          functions.push(stmt);
+        } else if (ts.isClassDeclaration(stmt)) {
+          classes.push(stmt);
+        } else if (ts.isInterfaceDeclaration(stmt)) {
+          interfaces.push(stmt);
+        } else if (!isRoot) {
+          throw new CodegenError(
+            stmt,
+            "non-root module may only contain import / class / interface / function declarations (Phase 1.5-2)",
+          );
+        } else {
+          topLevel.push(stmt);
+        }
+      }
     }
 
     // Pass 1a: register class names so field/method types can refer to each
@@ -864,9 +911,7 @@ class Emitter {
     if (iface.heritageClauses && iface.heritageClauses.length > 0) {
       throw new CodegenError(iface, "interface inheritance (`extends`) is unsupported");
     }
-    if (iface.modifiers && iface.modifiers.length > 0) {
-      throw new CodegenError(iface, "interface modifiers (export/default) are unsupported");
-    }
+    validateExportableModifiers(iface, "interface");
     for (const m of iface.members) {
       if (ts.isPropertySignature(m)) {
         if (!m.name || !ts.isIdentifier(m.name)) {
@@ -946,9 +991,7 @@ class Emitter {
         }
       }
     }
-    if (cls.modifiers && cls.modifiers.length > 0) {
-      throw new CodegenError(cls, "class modifiers (export/default/abstract) are unsupported");
-    }
+    validateExportableModifiers(cls, "class");
     for (const m of cls.members) {
       if (m.kind === ts.SyntaxKind.SemicolonClassElement) continue;
       if ((ts as any).canHaveModifiers?.(m) && ts.getModifiers && ts.getModifiers(m as any)) {
@@ -3289,6 +3332,7 @@ class Emitter {
   }
 }
 
-export function codegen(sf: ts.SourceFile): string {
-  return new Emitter().emit(sf);
+export function codegen(sourceFiles: ts.SourceFile | readonly ts.SourceFile[]): string {
+  const files = Array.isArray(sourceFiles) ? (sourceFiles as readonly ts.SourceFile[]) : [sourceFiles as ts.SourceFile];
+  return new Emitter().emit(files);
 }

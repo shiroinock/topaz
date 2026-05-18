@@ -24,6 +24,49 @@ run_case() {
   echo "PASS [$name]"
 }
 
+# Phase 1.5-2: multi-module ケースは root を指定 (loader が依存を解決)。
+# label と root path を分けて受ける。
+run_module_case() {
+  local label="$1"
+  local root="$2"
+  local expected="$3"
+  node dist/cli.js "$root" -o "build/$label" > /dev/null
+  local out
+  out=$(./build/$label)
+  if [[ "$out" != "$expected" ]]; then
+    echo "FAIL [$label]:" >&2
+    echo "  expected:" >&2
+    printf '%s\n' "$expected" | sed 's/^/    /' >&2
+    echo "  got:" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [$label]"
+}
+
+# Phase 1.5-2: コンパイル時にエラーで落ちることを期待するケース。
+# 標準エラー出力に `expected_substring` が含まれていることをチェック。
+run_fail_case() {
+  local label="$1"
+  local root="$2"
+  local expected_substring="$3"
+  local err
+  if err=$(node dist/cli.js "$root" -o "build/$label" 2>&1); then
+    echo "FAIL [$label]: expected compile error, got success" >&2
+    echo "  stdout:" >&2
+    printf '%s\n' "$err" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$err" != *"$expected_substring"* ]]; then
+    echo "FAIL [$label]: error did not contain expected substring" >&2
+    echo "  expected substring: $expected_substring" >&2
+    echo "  got:" >&2
+    printf '%s\n' "$err" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [$label]"
+}
+
 run_case fib "5702887"
 run_case loop_sum "5050"
 run_case while_count "10"
@@ -41,5 +84,8 @@ run_case map_set_class_iface $'3\n2\n11\n11\ntrue\nfalse\n2\nfalse\n2\nsquare\n9
 run_case generic_fn $'42\n7\nhi\nyo\ntrue\nfalse\n10\n30\nalpha\ngamma\ntwo\n2\n1\n99\nsolo\n1\n123\nzzz\n1\n777\n555'
 run_case generic_class $'42\n42\n99\nhello\ntrue\n1\none\n3\n20\n99\nhello'
 run_case try_catch_basic $'boom\n1\nnegative\n42\n10\n7\n100\n9\nrewrapped\n2\n0\n999'
+
+run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
+run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
 
 echo "all tests passed"
