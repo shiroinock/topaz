@@ -250,6 +250,37 @@ type InterfaceInfo = {
 
 type FunctionSig = { params: ParamInfo[]; returnType: TopazType };
 
+// Phase 1.4c-2: generic top-level functions. Type parameters live in the AST
+// only; we don't resolve param/return types until a call site supplies concrete
+// type arguments (explicit or inferred). One MonomorphInfo per realized
+// (function, typeArgs) tuple.
+type GenericFunctionInfo = {
+  name: string;
+  typeParams: string[];
+  decl: ts.FunctionDeclaration;
+};
+
+type MonomorphInfo = {
+  mangled: string;
+  origName: string;
+  typeArgs: TopazType[];
+  subs: Map<string, TopazType>;
+  sig: FunctionSig;
+  decl: ts.FunctionDeclaration;
+};
+
+// Mangling: stripped of the `topaz_` prefix, joined with `__`. Class/iface
+// names already carry a `class_` / `iface_` prefix, so the resulting C
+// identifier is unambiguous (e.g. `identity__number`, `pair__class_Box`,
+// `first__array_class_Box`).
+function mangleTypeArg(t: TopazType): string {
+  return t.slice("topaz_".length);
+}
+
+function mangleMonomorph(origName: string, args: readonly TopazType[]): string {
+  return `${origName}__${args.map(mangleTypeArg).join("__")}`;
+}
+
 class Emitter {
   private scope = new Scope();
   private functionSigs = new Map<string, FunctionSig>();
@@ -267,6 +298,15 @@ class Emitter {
   // Maps are tracked by full (K, V) tuple so we get one expansion per combo.
   private mapMonomorphs = new Set<TopazType>();
   private setMonomorphs = new Set<TopazType>();
+  // Phase 1.4c-2: generic function declarations (registered but not signed
+  // until a call site supplies type arguments), realized monomorphs keyed by
+  // mangled name, and a worklist for monomorphs whose body still needs to be
+  // emitted. typeParamScope binds the active substitution while emitting a
+  // monomorph body (or while resolving its signature).
+  private genericFunctions = new Map<string, GenericFunctionInfo>();
+  private genericMonomorphs = new Map<string, MonomorphInfo>();
+  private genericWorklist: string[] = [];
+  private typeParamScope: Map<string, TopazType> | undefined;
 
   private recordArrayMonomorph(t: TopazType): void {
     if (!isArrayType(t)) return;
@@ -355,12 +395,34 @@ class Emitter {
 
     for (const fn of functions) {
       if (!fn.name) throw new CodegenError(fn, "function must be named");
-      if (this.functionSigs.has(fn.name.text)) {
-        throw new CodegenError(fn, `redeclaration of function '${fn.name.text}'`);
+      const fname = fn.name.text;
+      if (this.functionSigs.has(fname) || this.genericFunctions.has(fname)) {
+        throw new CodegenError(fn, `redeclaration of function '${fname}'`);
+      }
+      if (fn.typeParameters && fn.typeParameters.length > 0) {
+        // Generic function: defer signature resolution until call sites
+        // supply concrete type arguments. We still validate the type-param
+        // declaration here so the error fires regardless of whether the
+        // function is ever called.
+        const typeParams: string[] = [];
+        for (const tp of fn.typeParameters) {
+          if (tp.constraint) {
+            throw new CodegenError(tp, "type parameter constraints are unsupported (Phase 1.4c-2)");
+          }
+          if (tp.default) {
+            throw new CodegenError(tp, "default type parameters are unsupported (Phase 1.4c-2)");
+          }
+          if (typeParams.includes(tp.name.text)) {
+            throw new CodegenError(tp, `duplicate type parameter '${tp.name.text}'`);
+          }
+          typeParams.push(tp.name.text);
+        }
+        this.genericFunctions.set(fname, { name: fname, typeParams, decl: fn });
+        continue;
       }
       const ret = this.typeFromAnnotation(fn.type, fn);
       const params = this.collectParams(fn.parameters);
-      this.functionSigs.set(fn.name.text, { params, returnType: ret });
+      this.functionSigs.set(fname, { params, returnType: ret });
     }
 
     const out: string[] = [];
@@ -407,6 +469,7 @@ class Emitter {
     out.push("");
 
     for (const fn of functions) {
+      if (fn.typeParameters && fn.typeParameters.length > 0) continue;
       out.push(`${this.formatSignature(fn)};`);
     }
     for (const cls of classes) {
@@ -414,6 +477,13 @@ class Emitter {
       for (const line of this.classMemberSignatures(info)) out.push(`${line};`);
     }
     if (functions.length > 0 || classes.length > 0) out.push("");
+
+    // Phase 1.4c-2: forward declarations for generic-function monomorphs go
+    // here so concrete function bodies, class methods, and main() can all
+    // reference them by mangled name. Filled at the end of emit() once the
+    // worklist has fully drained.
+    const monomorphFwdSlot = out.length;
+    out.push("");
 
     // Emit per-(interface, implementing-class) wrapper functions and the
     // static const vtable instances. These must come before user function /
@@ -432,6 +502,7 @@ class Emitter {
     }
 
     for (const fn of functions) {
+      if (fn.typeParameters && fn.typeParameters.length > 0) continue;
       out.push(this.emitFunctionDefinition(fn));
       out.push("");
     }
@@ -444,6 +515,12 @@ class Emitter {
       }
     }
 
+    // Phase 1.4c-2: monomorph definitions land just before main, after any
+    // concrete user functions/methods. They're already forward-declared above
+    // so the order between concrete and monomorph defs doesn't matter.
+    const monomorphDefSlot = out.length;
+    out.push("");
+
     out.push("int main(void) {");
     this.scope.push();
     for (const stmt of topLevel) {
@@ -452,6 +529,37 @@ class Emitter {
     this.scope.pop();
     out.push("  return 0;");
     out.push("}");
+
+    // Drain the generic worklist now that all user emission is done. Each
+    // monomorph definition may register further monomorphs (mutually recursive
+    // or recursive generics), so loop until the worklist is empty. Container
+    // monomorphs discovered here flow into the arrayMonomorphs/mapMonomorphs/
+    // setMonomorphs sets and get expanded below.
+    const monoFwdLines: string[] = [];
+    const monoDefLines: string[] = [];
+    while (this.genericWorklist.length > 0) {
+      const mangled = this.genericWorklist.shift()!;
+      const mono = this.genericMonomorphs.get(mangled)!;
+      monoFwdLines.push(`${this.formatMonomorphSignature(mono.mangled, mono.sig)};`);
+      monoDefLines.push(this.emitMonomorphDefinition(mono));
+      monoDefLines.push("");
+    }
+    if (monoFwdLines.length > 0) {
+      out[monomorphFwdSlot] = monoFwdLines.join("\n") + "\n";
+    }
+    if (monoDefLines.length > 0) {
+      // Generic functions can legitimately ignore some type-parameterized
+      // params in the body (e.g. `pickSecond<A,B>(a: A, b: B): B` only uses
+      // `b`), which trips -Wunused-parameter. Wrap the monomorph block in a
+      // diagnostic pragma rather than synthesizing a `(void)x` per param.
+      const wrapped = [
+        '#pragma GCC diagnostic push',
+        '#pragma GCC diagnostic ignored "-Wunused-parameter"',
+        monoDefLines.join("\n"),
+        '#pragma GCC diagnostic pop',
+      ].join("\n");
+      out[monomorphDefSlot] = wrapped;
+    }
 
     if (
       this.arrayMonomorphs.size > 0 ||
@@ -1033,6 +1141,16 @@ class Emitter {
     }
     if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
       const refName = node.typeName.text;
+      // Phase 1.4c-2: when emitting under an active type-parameter scope,
+      // bare type references like `T` resolve through the substitution. Must
+      // come before the class/interface lookup so that a class declared with
+      // the same name as a type parameter doesn't shadow the binding.
+      if (this.typeParamScope && this.typeParamScope.has(refName)) {
+        if (node.typeArguments && node.typeArguments.length > 0) {
+          throw new CodegenError(node, `type parameter '${refName}' cannot have type arguments`);
+        }
+        return this.typeParamScope.get(refName)!;
+      }
       if (refName === "Array") {
         if (!node.typeArguments || node.typeArguments.length !== 1) {
           throw new CodegenError(node, "Array<T> requires exactly one type argument");
@@ -1120,6 +1238,210 @@ class Emitter {
     } finally {
       this.scope.pop();
       this.currentReturnType = prevRet;
+    }
+  }
+
+  // Phase 1.4c-2: format a monomorph's C signature from its resolved
+  // FunctionSig. Distinct from formatSignature(fn) which re-resolves via
+  // typeFromAnnotation; here the substitution has already been applied and we
+  // want the mangled name instead of the source name.
+  private formatMonomorphSignature(mangled: string, sig: FunctionSig): string {
+    const params = sig.params
+      .map((p) => `${cTypeName(p.type)} ${p.name}`)
+      .join(", ");
+    return `static ${cTypeName(sig.returnType)} ${mangled}(${params || "void"})`;
+  }
+
+  private emitMonomorphDefinition(mono: MonomorphInfo): string {
+    if (!mono.decl.body) throw new CodegenError(mono.decl, "function must have a body");
+    const prevScope = this.typeParamScope;
+    this.typeParamScope = mono.subs;
+    const prevRet = this.currentReturnType;
+    this.currentReturnType = mono.sig.returnType;
+    this.scope.push();
+    try {
+      for (const p of mono.sig.params) {
+        this.scope.declare(p.name, p.type, /* isConst */ false, mono.decl);
+      }
+      const body = this.emitBlock(mono.decl.body, 0);
+      return `${this.formatMonomorphSignature(mono.mangled, mono.sig)} ${body}`;
+    } finally {
+      this.scope.pop();
+      this.currentReturnType = prevRet;
+      this.typeParamScope = prevScope;
+    }
+  }
+
+  // Phase 1.4c-2: resolve a call to a generic function. Returns the mangled
+  // name and the substituted FunctionSig; registers the monomorph (and adds
+  // it to the worklist) on first observation. Returns undefined if `callee`
+  // doesn't name a generic function — caller falls back to concrete dispatch.
+  private resolveGenericCall(
+    callee: ts.Identifier,
+    expr: ts.CallExpression,
+  ): { mangled: string; sig: FunctionSig } | undefined {
+    const generic = this.genericFunctions.get(callee.text);
+    if (!generic) return undefined;
+
+    const subs = new Map<string, TopazType>();
+
+    if (expr.typeArguments && expr.typeArguments.length > 0) {
+      if (expr.typeArguments.length !== generic.typeParams.length) {
+        throw new CodegenError(
+          expr,
+          `${callee.text} expects ${generic.typeParams.length} type argument(s), got ${expr.typeArguments.length}`,
+        );
+      }
+      for (let i = 0; i < generic.typeParams.length; i++) {
+        // Type arguments can themselves reference the surrounding scope's
+        // type parameters (when a generic body calls another generic), so
+        // typeFromAnnotation must run with the outer typeParamScope still
+        // active. We don't swap it here.
+        const t = this.typeFromAnnotation(expr.typeArguments[i]!, expr);
+        subs.set(generic.typeParams[i]!, t);
+      }
+    } else {
+      // Best-effort inference: walk each parameter type node against the
+      // corresponding argument's inferred type, binding type parameters as
+      // we go. Concrete portions don't contribute. After the walk, every
+      // declared type parameter must be bound.
+      if (expr.arguments.length !== generic.decl.parameters.length) {
+        throw new CodegenError(
+          expr,
+          `${callee.text}() expects ${generic.decl.parameters.length} argument(s), got ${expr.arguments.length}`,
+        );
+      }
+      for (let i = 0; i < generic.decl.parameters.length; i++) {
+        const param = generic.decl.parameters[i]!;
+        if (!param.type) {
+          throw new CodegenError(param, "generic function parameter requires a type annotation");
+        }
+        const argType = this.inferType(expr.arguments[i]!);
+        this.unifyTypeParam(param.type, argType, generic.typeParams, subs, expr);
+      }
+      for (const tp of generic.typeParams) {
+        if (!subs.has(tp)) {
+          throw new CodegenError(
+            expr,
+            `cannot infer type parameter '${tp}' for ${callee.text}; provide explicit type arguments`,
+          );
+        }
+      }
+    }
+
+    const typeArgs = generic.typeParams.map((tp) => subs.get(tp)!);
+    const mangled = mangleMonomorph(generic.name, typeArgs);
+
+    const existing = this.genericMonomorphs.get(mangled);
+    if (existing) {
+      return { mangled, sig: existing.sig };
+    }
+
+    // First time we've seen this (function, typeArgs) tuple — resolve the
+    // signature under the new substitution and queue body emission.
+    const prevScope = this.typeParamScope;
+    this.typeParamScope = subs;
+    let sig: FunctionSig;
+    try {
+      const returnType = this.typeFromAnnotation(generic.decl.type, generic.decl);
+      const params = this.collectParams(generic.decl.parameters);
+      sig = { params, returnType };
+    } finally {
+      this.typeParamScope = prevScope;
+    }
+
+    const mono: MonomorphInfo = {
+      mangled,
+      origName: generic.name,
+      typeArgs,
+      subs,
+      sig,
+      decl: generic.decl,
+    };
+    this.genericMonomorphs.set(mangled, mono);
+    this.genericWorklist.push(mangled);
+    return { mangled, sig };
+  }
+
+  // Structural unifier: matches a parameter's TypeNode against an argument's
+  // concrete TopazType, binding type parameters where it can. Anything it
+  // can't decompose (mismatched shapes, type forms we don't introspect) is
+  // silently skipped — the caller checks at the end that every parameter was
+  // bound, and the per-argument coercion at emitCall surfaces any real
+  // mismatches with a type-error message.
+  private unifyTypeParam(
+    paramTypeNode: ts.TypeNode,
+    argType: TopazType,
+    params: string[],
+    subs: Map<string, TopazType>,
+    anchor: ts.Node,
+  ): void {
+    if (ts.isParenthesizedTypeNode(paramTypeNode)) {
+      this.unifyTypeParam(paramTypeNode.type, argType, params, subs, anchor);
+      return;
+    }
+    if (ts.isArrayTypeNode(paramTypeNode)) {
+      if (!isArrayType(argType)) return;
+      const elem = arrayElem(argType);
+      if (elem === undefined) return;
+      this.unifyTypeParam(paramTypeNode.elementType, elem, params, subs, anchor);
+      return;
+    }
+    if (ts.isTypeReferenceNode(paramTypeNode) && ts.isIdentifier(paramTypeNode.typeName)) {
+      const refName = paramTypeNode.typeName.text;
+      if (params.includes(refName)) {
+        if (paramTypeNode.typeArguments && paramTypeNode.typeArguments.length > 0) {
+          throw new CodegenError(
+            paramTypeNode,
+            `type parameter '${refName}' cannot have type arguments`,
+          );
+        }
+        const existing = subs.get(refName);
+        if (existing !== undefined && existing !== argType) {
+          throw new CodegenError(
+            anchor,
+            `type parameter '${refName}' inferred as both ${existing} and ${argType}`,
+          );
+        }
+        subs.set(refName, argType);
+        return;
+      }
+      if (
+        refName === "Array" &&
+        paramTypeNode.typeArguments &&
+        paramTypeNode.typeArguments.length === 1
+      ) {
+        if (!isArrayType(argType)) return;
+        const elem = arrayElem(argType);
+        if (elem === undefined) return;
+        this.unifyTypeParam(paramTypeNode.typeArguments[0]!, elem, params, subs, anchor);
+        return;
+      }
+      if (
+        refName === "Map" &&
+        paramTypeNode.typeArguments &&
+        paramTypeNode.typeArguments.length === 2
+      ) {
+        if (!isMapType(argType)) return;
+        const k = mapKey(argType);
+        const v = mapValue(argType);
+        if (k === undefined || v === undefined) return;
+        this.unifyTypeParam(paramTypeNode.typeArguments[0]!, k, params, subs, anchor);
+        this.unifyTypeParam(paramTypeNode.typeArguments[1]!, v, params, subs, anchor);
+        return;
+      }
+      if (
+        refName === "Set" &&
+        paramTypeNode.typeArguments &&
+        paramTypeNode.typeArguments.length === 1
+      ) {
+        if (!isSetType(argType)) return;
+        const elem = setElem(argType);
+        if (elem === undefined) return;
+        this.unifyTypeParam(paramTypeNode.typeArguments[0]!, elem, params, subs, anchor);
+        return;
+      }
+      // Concrete class/interface/scalar reference — nothing to bind.
     }
   }
 
@@ -1942,6 +2264,13 @@ class Emitter {
     }
 
     if (ts.isIdentifier(callee)) {
+      if (this.genericFunctions.has(callee.text)) {
+        const resolved = this.resolveGenericCall(callee, expr)!;
+        const args = expr.arguments
+          .map((a, i) => this.emitWithExpected(a, resolved.sig.params[i]!.type))
+          .join(", ");
+        return `${resolved.mangled}(${args})`;
+      }
       const sig = this.functionSigs.get(callee.text);
       if (!sig) {
         throw new CodegenError(callee, `unknown function '${callee.text}'`);
@@ -2364,6 +2693,10 @@ class Emitter {
         throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
       }
       if (ts.isIdentifier(callee)) {
+        if (this.genericFunctions.has(callee.text)) {
+          const resolved = this.resolveGenericCall(callee, expr)!;
+          return resolved.sig.returnType;
+        }
         const sig = this.functionSigs.get(callee.text);
         if (!sig) throw new CodegenError(callee, `unknown function '${callee.text}'`);
         return sig.returnType;
