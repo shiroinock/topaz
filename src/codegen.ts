@@ -1,63 +1,51 @@
 import * as ts from "typescript";
 
-type ScalarShortName = "number" | "boolean" | "string";
-
+// Phase 1.4c-3: TopazType is a structured tagged-union. Until 1.4c-2 we used a
+// string-union ("topaz_array_class_Box" etc.) keyed by canonical C identifier,
+// which broke on nested containers (`Array<Array<T>>`) and would have made
+// generic class monomorph plumbing painful. Helpers below preserve the same
+// C identifier surface (typeIdent / cTypeName / arrayShortName / ...) so the
+// generated C is byte-identical to the pre-refactor output.
 type TopazType =
-  | `topaz_${ScalarShortName}`
-  | `topaz_array_${ScalarShortName}`
-  | `topaz_array_class_${string}`
-  | `topaz_array_iface_${string}`
-  | `topaz_map_${ScalarShortName}_${ScalarShortName}`
-  | `topaz_map_${ScalarShortName}_class_${string}`
-  | `topaz_map_${ScalarShortName}_iface_${string}`
-  | `topaz_set_${ScalarShortName}`
-  | `topaz_set_class_${string}`
-  | `topaz_set_iface_${string}`
-  | `topaz_class_${string}`
-  | `topaz_iface_${string}`;
+  | { kind: "number" }
+  | { kind: "boolean" }
+  | { kind: "string" }
+  | { kind: "array"; elem: TopazType }
+  | { kind: "map"; key: TopazType; value: TopazType }
+  | { kind: "set"; elem: TopazType }
+  | { kind: "class"; name: string }
+  | { kind: "iface"; name: string };
+
+const T_NUMBER: TopazType = { kind: "number" };
+const T_BOOLEAN: TopazType = { kind: "boolean" };
+const T_STRING: TopazType = { kind: "string" };
 
 const TOPAZ_THIS = "__topaz_this";
 
 function isScalarType(t: TopazType): boolean {
-  return t === "topaz_number" || t === "topaz_boolean" || t === "topaz_string";
+  return t.kind === "number" || t.kind === "boolean" || t.kind === "string";
 }
 
-function isArrayType(t: TopazType): boolean {
-  return t.startsWith("topaz_array_");
-}
-
-function isMapType(t: TopazType): boolean {
-  return t.startsWith("topaz_map_");
-}
-
-function isSetType(t: TopazType): boolean {
-  return t.startsWith("topaz_set_");
-}
-
-function isClassType(t: TopazType): boolean {
-  return t.startsWith("topaz_class_");
-}
+function isArrayType(t: TopazType): boolean { return t.kind === "array"; }
+function isMapType(t: TopazType): boolean { return t.kind === "map"; }
+function isSetType(t: TopazType): boolean { return t.kind === "set"; }
+function isClassType(t: TopazType): boolean { return t.kind === "class"; }
+function isInterfaceType(t: TopazType): boolean { return t.kind === "iface"; }
 
 function classNameOf(t: TopazType): string | undefined {
-  if (!isClassType(t)) return undefined;
-  return t.slice("topaz_class_".length);
+  return t.kind === "class" ? t.name : undefined;
 }
 
 function classOf(name: string): TopazType {
-  return `topaz_class_${name}` as TopazType;
-}
-
-function isInterfaceType(t: TopazType): boolean {
-  return t.startsWith("topaz_iface_");
+  return { kind: "class", name };
 }
 
 function interfaceNameOf(t: TopazType): string | undefined {
-  if (!isInterfaceType(t)) return undefined;
-  return t.slice("topaz_iface_".length);
+  return t.kind === "iface" ? t.name : undefined;
 }
 
 function interfaceOf(name: string): TopazType {
-  return `topaz_iface_${name}` as TopazType;
+  return { kind: "iface", name };
 }
 
 // "reference" here means represented in C as `T *` (pointer). Interfaces are
@@ -69,104 +57,138 @@ function isReferenceType(t: TopazType): boolean {
 }
 
 function arrayElem(t: TopazType): TopazType | undefined {
-  if (!isArrayType(t)) return undefined;
-  // tag is "number"/"boolean"/"string" or "class_<Name>"/"iface_<Name>"; the
-  // element type is always `topaz_${tag}` regardless of which branch.
-  return `topaz_${t.slice("topaz_array_".length)}` as TopazType;
+  return t.kind === "array" ? t.elem : undefined;
 }
 
 function arrayOf(elem: TopazType): TopazType | undefined {
-  if (isScalarType(elem)) {
-    return `topaz_array_${elem.slice("topaz_".length) as ScalarShortName}`;
-  }
-  if (isClassType(elem)) {
-    return `topaz_array_class_${classNameOf(elem)!}` as TopazType;
-  }
-  if (isInterfaceType(elem)) {
-    return `topaz_array_iface_${interfaceNameOf(elem)!}` as TopazType;
-  }
-  return undefined;
+  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)) return undefined;
+  return { kind: "array", elem };
 }
 
-// The monomorph tag used in C identifiers (e.g. `topaz_array_<tag>`,
-// `topaz_array_<tag>_push`). For scalars it's the short name; for class/iface
-// it carries the `class_`/`iface_` prefix so we never collide with scalars or
-// with each other.
-function arrayShortName(t: TopazType): string {
-  return t.slice("topaz_array_".length);
-}
-
-function mapShortName(t: TopazType): string {
-  return t.slice("topaz_map_".length);
-}
-
-// Map tags look like "<key>_<value-tag>" where <value-tag> is a scalar short
-// name, or `class_<C>`, or `iface_<I>`. The key is always scalar, so we split
-// at the first underscore.
 function mapKey(t: TopazType): TopazType | undefined {
-  if (!isMapType(t)) return undefined;
-  const rest = t.slice("topaz_map_".length);
-  const us = rest.indexOf("_");
-  const k = rest.slice(0, us) as ScalarShortName;
-  return `topaz_${k}`;
+  return t.kind === "map" ? t.key : undefined;
 }
 
 function mapValue(t: TopazType): TopazType | undefined {
-  if (!isMapType(t)) return undefined;
-  const rest = t.slice("topaz_map_".length);
-  const us = rest.indexOf("_");
-  const v = rest.slice(us + 1);
-  if (v.startsWith("class_")) return classOf(v.slice("class_".length));
-  if (v.startsWith("iface_")) return interfaceOf(v.slice("iface_".length));
-  return `topaz_${v as ScalarShortName}` as TopazType;
+  return t.kind === "map" ? t.value : undefined;
 }
 
 function mapOf(k: TopazType, v: TopazType): TopazType | undefined {
   if (!isScalarType(k)) return undefined;
-  const kShort = k.slice("topaz_".length) as ScalarShortName;
-  if (isScalarType(v)) {
-    return `topaz_map_${kShort}_${v.slice("topaz_".length) as ScalarShortName}`;
-  }
-  if (isClassType(v)) {
-    return `topaz_map_${kShort}_class_${classNameOf(v)!}` as TopazType;
-  }
-  if (isInterfaceType(v)) {
-    return `topaz_map_${kShort}_iface_${interfaceNameOf(v)!}` as TopazType;
-  }
-  return undefined;
-}
-
-function setShortName(t: TopazType): string {
-  return t.slice("topaz_set_".length);
+  if (!isScalarType(v) && !isClassType(v) && !isInterfaceType(v)) return undefined;
+  return { kind: "map", key: k, value: v };
 }
 
 function setElem(t: TopazType): TopazType | undefined {
-  if (!isSetType(t)) return undefined;
-  const tag = t.slice("topaz_set_".length);
-  if (tag.startsWith("class_")) return classOf(tag.slice("class_".length));
-  if (tag.startsWith("iface_")) return interfaceOf(tag.slice("iface_".length));
-  return `topaz_${tag as ScalarShortName}` as TopazType;
+  return t.kind === "set" ? t.elem : undefined;
 }
 
 function setOf(elem: TopazType): TopazType | undefined {
-  if (isScalarType(elem)) {
-    return `topaz_set_${elem.slice("topaz_".length) as ScalarShortName}`;
+  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)) return undefined;
+  return { kind: "set", elem };
+}
+
+// Structural equality. Replaces the old string `===` comparisons; do not use
+// `===` directly on TopazType (objects compare by reference).
+function typeEq(a: TopazType, b: TopazType): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "number":
+    case "boolean":
+    case "string":
+      return true;
+    case "array":
+      return typeEq(a.elem, (b as Extract<TopazType, { kind: "array" }>).elem);
+    case "map": {
+      const bm = b as Extract<TopazType, { kind: "map" }>;
+      return typeEq(a.key, bm.key) && typeEq(a.value, bm.value);
+    }
+    case "set":
+      return typeEq(a.elem, (b as Extract<TopazType, { kind: "set" }>).elem);
+    case "class":
+      return a.name === (b as Extract<TopazType, { kind: "class" }>).name;
+    case "iface":
+      return a.name === (b as Extract<TopazType, { kind: "iface" }>).name;
   }
-  if (isClassType(elem)) {
-    return `topaz_set_class_${classNameOf(elem)!}` as TopazType;
+}
+
+// Element/value "tag" used to compose C identifiers (the bit after
+// `topaz_array_`, `topaz_set_`, the value half of `topaz_map_<K>_<V>`). For
+// scalars it's the bare name; for class/iface it carries the `class_`/`iface_`
+// prefix so we never collide with scalars or with each other.
+function elemTag(t: TopazType): string {
+  switch (t.kind) {
+    case "number":
+    case "boolean":
+    case "string":
+      return t.kind;
+    case "class":
+      return `class_${t.name}`;
+    case "iface":
+      return `iface_${t.name}`;
+    default:
+      throw new Error(`elemTag: container element kind=${t.kind} is unsupported (no nested containers yet)`);
   }
-  if (isInterfaceType(elem)) {
-    return `topaz_set_iface_${interfaceNameOf(elem)!}` as TopazType;
+}
+
+function scalarTag(t: TopazType): string {
+  if (t.kind !== "number" && t.kind !== "boolean" && t.kind !== "string") {
+    throw new Error(`scalarTag: expected scalar, got kind=${t.kind}`);
   }
-  return undefined;
+  return t.kind;
+}
+
+// Monomorph short-name tags (used to compose function/struct names like
+// `topaz_array_<short>_push`). Each matches the substring after the container
+// prefix from the pre-1.4c-3 string union.
+function arrayShortName(t: TopazType): string {
+  if (t.kind !== "array") throw new Error(`arrayShortName: not an array, kind=${t.kind}`);
+  return elemTag(t.elem);
+}
+
+function mapShortName(t: TopazType): string {
+  if (t.kind !== "map") throw new Error(`mapShortName: not a map, kind=${t.kind}`);
+  return `${scalarTag(t.key)}_${elemTag(t.value)}`;
+}
+
+function setShortName(t: TopazType): string {
+  if (t.kind !== "set") throw new Error(`setShortName: not a set, kind=${t.kind}`);
+  return elemTag(t.elem);
+}
+
+// Canonical C identifier for a type — the same string the pre-1.4c-3 string
+// union used as its value. Used both as the C type name (for non-reference
+// types) and as the display form in error messages and Map/Set keys.
+function typeIdent(t: TopazType): string {
+  switch (t.kind) {
+    case "number":
+    case "boolean":
+    case "string":
+      return `topaz_${t.kind}`;
+    case "array":
+      return `topaz_array_${arrayShortName(t)}`;
+    case "map":
+      return `topaz_map_${mapShortName(t)}`;
+    case "set":
+      return `topaz_set_${setShortName(t)}`;
+    case "class":
+      return `topaz_class_${t.name}`;
+    case "iface":
+      return `topaz_iface_${t.name}`;
+  }
+}
+
+// Stable key for using TopazType as a Map/Set key. Identical to typeIdent.
+function typeKey(t: TopazType): string {
+  return typeIdent(t);
 }
 
 // C type used in declarations and signatures. Reference types (Array/Map/Set
 // /Class) are pointers so assignment shares storage. Interfaces are passed by
 // value as fat pointer structs (struct topaz_iface_X with embedded data ptr).
 function cTypeName(t: TopazType): string {
-  if (isInterfaceType(t)) return t;
-  return isReferenceType(t) ? `${t} *` : t;
+  if (isInterfaceType(t)) return typeIdent(t);
+  return isReferenceType(t) ? `${typeIdent(t)} *` : typeIdent(t);
 }
 
 type Binding = { type: TopazType; isConst: boolean };
@@ -269,12 +291,33 @@ type MonomorphInfo = {
   decl: ts.FunctionDeclaration;
 };
 
+// Phase 1.4c-3: generic top-level classes. Same shape as GenericFunctionInfo
+// but for classes. Concrete monomorphs land in `this.classes` under the
+// mangled name; the original `name` (e.g. "Box") is reserved in
+// `genericClasses` so `new Box<...>` / `Box<T>` references can be resolved.
+type GenericClassInfo = {
+  name: string;
+  typeParams: string[];
+  decl: ts.ClassDeclaration;
+};
+
+// Per realized (class, typeArgs) tuple. The ClassInfo under the mangled name
+// in `this.classes` already carries the substituted fields/methods (so
+// references to `T` in collected types are already concrete), but the method
+// *bodies* still mention `T`, so we need `subs` again when emitting them.
+type ClassMonomorphInfo = {
+  mangled: string;
+  origName: string;
+  typeArgs: TopazType[];
+  subs: Map<string, TopazType>;
+};
+
 // Mangling: stripped of the `topaz_` prefix, joined with `__`. Class/iface
 // names already carry a `class_` / `iface_` prefix, so the resulting C
 // identifier is unambiguous (e.g. `identity__number`, `pair__class_Box`,
 // `first__array_class_Box`).
 function mangleTypeArg(t: TopazType): string {
-  return t.slice("topaz_".length);
+  return typeIdent(t).slice("topaz_".length);
 }
 
 function mangleMonomorph(origName: string, args: readonly TopazType[]): string {
@@ -292,12 +335,13 @@ class Emitter {
   private tmpCounter = 0;
   // Phase 1.4c-1a: each Array<class>/Array<interface> referenced in user code
   // gets a TOPAZ_ARRAY_DEFINE() expansion in the generated C, since the runtime
-  // header only preexpands the scalar monomorphs.
-  private arrayMonomorphs = new Set<TopazType>();
+  // header only preexpands the scalar monomorphs. Keyed by typeKey() so we
+  // de-duplicate structurally (TopazType objects compare by reference).
+  private arrayMonomorphs = new Map<string, TopazType>();
   // Phase 1.4c-1b: same idea for Map<K, class|interface> and Set<class|interface>.
   // Maps are tracked by full (K, V) tuple so we get one expansion per combo.
-  private mapMonomorphs = new Set<TopazType>();
-  private setMonomorphs = new Set<TopazType>();
+  private mapMonomorphs = new Map<string, TopazType>();
+  private setMonomorphs = new Map<string, TopazType>();
   // Phase 1.4c-2: generic function declarations (registered but not signed
   // until a call site supplies type arguments), realized monomorphs keyed by
   // mangled name, and a worklist for monomorphs whose body still needs to be
@@ -307,23 +351,30 @@ class Emitter {
   private genericMonomorphs = new Map<string, MonomorphInfo>();
   private genericWorklist: string[] = [];
   private typeParamScope: Map<string, TopazType> | undefined;
+  // Phase 1.4c-3: generic class declarations and their realized monomorphs.
+  // The mangled name (e.g. "Box__number") is the key into `this.classes` for
+  // the substituted ClassInfo; the worklist accumulates monomorphs whose
+  // typedef/struct/methods still need to be emitted in the late slots.
+  private genericClasses = new Map<string, GenericClassInfo>();
+  private classMonomorphs = new Map<string, ClassMonomorphInfo>();
+  private classMonomorphWorklist: string[] = [];
 
   private recordArrayMonomorph(t: TopazType): void {
     if (!isArrayType(t)) return;
     if (isScalarType(arrayElem(t)!)) return; // runtime.h preexpands these
-    this.arrayMonomorphs.add(t);
+    this.arrayMonomorphs.set(typeKey(t), t);
   }
 
   private recordMapMonomorph(t: TopazType): void {
     if (!isMapType(t)) return;
     if (isScalarType(mapValue(t)!)) return; // runtime.h preexpands scalar K×V combos
-    this.mapMonomorphs.add(t);
+    this.mapMonomorphs.set(typeKey(t), t);
   }
 
   private recordSetMonomorph(t: TopazType): void {
     if (!isSetType(t)) return;
     if (isScalarType(setElem(t)!)) return; // runtime.h preexpands scalar element sets
-    this.setMonomorphs.add(t);
+    this.setMonomorphs.set(typeKey(t), t);
   }
 
   emit(sf: ts.SourceFile): string {
@@ -339,15 +390,42 @@ class Emitter {
     }
 
     // Pass 1a: register class names so field/method types can refer to each
-    // other regardless of source order.
+    // other regardless of source order. Generic classes (`class Box<T>`) are
+    // held aside in `genericClasses`; their substituted ClassInfo is built
+    // lazily under the mangled name on first use.
     for (const cls of classes) {
       if (!cls.name) throw new CodegenError(cls, "class must be named");
       const name = cls.name.text;
       if (name === "Array" || name === "Map" || name === "Set") {
         throw new CodegenError(cls, `cannot redefine built-in '${name}'`);
       }
-      if (this.classes.has(name)) {
+      if (this.classes.has(name) || this.genericClasses.has(name)) {
         throw new CodegenError(cls, `redeclaration of class '${name}'`);
+      }
+      if (cls.typeParameters && cls.typeParameters.length > 0) {
+        // Validate the type-param declaration eagerly so errors fire even
+        // when the class is never instantiated (mirrors generic functions).
+        const typeParams: string[] = [];
+        for (const tp of cls.typeParameters) {
+          if (tp.constraint) {
+            throw new CodegenError(tp, "type parameter constraints are unsupported (Phase 1.4c-3)");
+          }
+          if (tp.default) {
+            throw new CodegenError(tp, "default type parameters are unsupported (Phase 1.4c-3)");
+          }
+          if (typeParams.includes(tp.name.text)) {
+            throw new CodegenError(tp, `duplicate type parameter '${tp.name.text}'`);
+          }
+          typeParams.push(tp.name.text);
+        }
+        if (cls.heritageClauses && cls.heritageClauses.length > 0) {
+          throw new CodegenError(
+            cls,
+            "generic classes cannot implement interfaces (Phase 1.4c-3)",
+          );
+        }
+        this.genericClasses.set(name, { name, typeParams, decl: cls });
+        continue;
       }
       this.classes.set(name, {
         name,
@@ -366,7 +444,7 @@ class Emitter {
       if (name === "Array" || name === "Map" || name === "Set") {
         throw new CodegenError(iface, `cannot redefine built-in '${name}'`);
       }
-      if (this.classes.has(name)) {
+      if (this.classes.has(name) || this.genericClasses.has(name)) {
         throw new CodegenError(iface, `interface '${name}' collides with a class of the same name`);
       }
       if (this.interfaces.has(name)) {
@@ -388,8 +466,11 @@ class Emitter {
       this.collectInterfaceMembers(iface);
     }
 
-    // Pass 2b: parse class members + verify implements.
+    // Pass 2b: parse class members + verify implements. Generic classes are
+    // deferred — their substituted ClassInfo is built on demand when a use
+    // site instantiates them via instantiateGenericClass.
     for (const cls of classes) {
+      if (cls.typeParameters && cls.typeParameters.length > 0) continue;
       this.collectClassMembers(cls);
     }
 
@@ -431,13 +512,24 @@ class Emitter {
 
     // Forward-declare class structs and interface vtable structs so any
     // ordering of fields/methods that crosses class/interface boundaries works.
-    if (classes.length > 0) {
-      for (const cls of classes) {
+    // Generic class monomorphs get their own typedef slot below; we don't
+    // know all of them yet.
+    const concreteClasses = classes.filter(
+      (c) => !(c.typeParameters && c.typeParameters.length > 0),
+    );
+    if (concreteClasses.length > 0) {
+      for (const cls of concreteClasses) {
         const n = cls.name!.text;
         out.push(`typedef struct topaz_class_${n} topaz_class_${n};`);
       }
       out.push("");
     }
+    // Phase 1.4c-3: generic class monomorph typedefs. Concrete class struct
+    // bodies, function signatures, and main() can all reference monomorph
+    // class pointers, so the typedef must precede everything below. Filled
+    // at the end of emit() once the class worklist has drained.
+    const classMonoTypedefSlot = out.length;
+    out.push("");
     if (interfaces.length > 0) {
       for (const iface of interfaces) {
         const n = iface.name.text;
@@ -448,12 +540,17 @@ class Emitter {
       }
       out.push("");
     }
-    if (classes.length > 0) {
-      for (const cls of classes) {
+    if (concreteClasses.length > 0) {
+      for (const cls of concreteClasses) {
         out.push(this.emitClassStruct(this.classes.get(cls.name!.text)!));
       }
       out.push("");
     }
+    // Phase 1.4c-3: generic class monomorph struct definitions. Field types
+    // already use pointer C types for class refs, so this can sit after
+    // concrete struct defs without circular-ordering pain.
+    const classMonoStructSlot = out.length;
+    out.push("");
     if (interfaces.length > 0) {
       for (const iface of interfaces) {
         out.push(this.emitInterfaceVtableStruct(this.interfaces.get(iface.name.text)!));
@@ -472,11 +569,18 @@ class Emitter {
       if (fn.typeParameters && fn.typeParameters.length > 0) continue;
       out.push(`${this.formatSignature(fn)};`);
     }
-    for (const cls of classes) {
+    for (const cls of concreteClasses) {
       const info = this.classes.get(cls.name!.text)!;
       for (const line of this.classMemberSignatures(info)) out.push(`${line};`);
     }
-    if (functions.length > 0 || classes.length > 0) out.push("");
+    if (functions.length > 0 || concreteClasses.length > 0) out.push("");
+
+    // Phase 1.4c-3: forward declarations for generic class monomorph members.
+    // Placed alongside the concrete class member fwds so user code, methods,
+    // and main() can all reference monomorph constructors/methods by mangled
+    // name. Filled at the end of emit().
+    const classMonoSigSlot = out.length;
+    out.push("");
 
     // Phase 1.4c-2: forward declarations for generic-function monomorphs go
     // here so concrete function bodies, class methods, and main() can all
@@ -489,7 +593,7 @@ class Emitter {
     // static const vtable instances. These must come before user function /
     // class method definitions so coercion sites (`&topaz_iface_I_for_C_vt`)
     // can reference them.
-    for (const cls of classes) {
+    for (const cls of concreteClasses) {
       const info = this.classes.get(cls.name!.text)!;
       for (const ifaceName of info.implements) {
         const iface = this.interfaces.get(ifaceName)!;
@@ -507,13 +611,20 @@ class Emitter {
       out.push("");
     }
 
-    for (const cls of classes) {
+    for (const cls of concreteClasses) {
       const info = this.classes.get(cls.name!.text)!;
       for (const def of this.emitClassMemberDefinitions(info)) {
         out.push(def);
         out.push("");
       }
     }
+
+    // Phase 1.4c-3: generic class monomorph member definitions. Filled at
+    // the end of emit() after the class worklist drains. Sits before the
+    // generic function monomorph defs since a generic class method body
+    // might call a generic function with a monomorph class type arg.
+    const classMonoDefSlot = out.length;
+    out.push("");
 
     // Phase 1.4c-2: monomorph definitions land just before main, after any
     // concrete user functions/methods. They're already forward-declared above
@@ -530,19 +641,72 @@ class Emitter {
     out.push("  return 0;");
     out.push("}");
 
-    // Drain the generic worklist now that all user emission is done. Each
-    // monomorph definition may register further monomorphs (mutually recursive
-    // or recursive generics), so loop until the worklist is empty. Container
-    // monomorphs discovered here flow into the arrayMonomorphs/mapMonomorphs/
+    // Drain the generic worklists now that all user emission is done. Class
+    // and function monomorphs can transitively register each other (a
+    // generic class method may call a generic function and vice versa), so
+    // we round-robin until both worklists are empty. Container monomorphs
+    // discovered here flow into the arrayMonomorphs/mapMonomorphs/
     // setMonomorphs sets and get expanded below.
+    const classMonoTypedefLines: string[] = [];
+    const classMonoStructLines: string[] = [];
+    const classMonoSigLines: string[] = [];
+    const classMonoDefLines: string[] = [];
     const monoFwdLines: string[] = [];
     const monoDefLines: string[] = [];
-    while (this.genericWorklist.length > 0) {
-      const mangled = this.genericWorklist.shift()!;
-      const mono = this.genericMonomorphs.get(mangled)!;
-      monoFwdLines.push(`${this.formatMonomorphSignature(mono.mangled, mono.sig)};`);
-      monoDefLines.push(this.emitMonomorphDefinition(mono));
-      monoDefLines.push("");
+    while (
+      this.classMonomorphWorklist.length > 0 ||
+      this.genericWorklist.length > 0
+    ) {
+      while (this.classMonomorphWorklist.length > 0) {
+        const mangled = this.classMonomorphWorklist.shift()!;
+        const info = this.classes.get(mangled)!;
+        const mono = this.classMonomorphs.get(mangled)!;
+        classMonoTypedefLines.push(`typedef struct topaz_class_${mangled} topaz_class_${mangled};`);
+        classMonoStructLines.push(this.emitClassStruct(info));
+        for (const line of this.classMemberSignatures(info)) classMonoSigLines.push(`${line};`);
+        // Method bodies still reference T/U/...; reactivate the substitution
+        // for the duration of body emission.
+        const prevScope = this.typeParamScope;
+        this.typeParamScope = mono.subs;
+        try {
+          for (const def of this.emitClassMemberDefinitions(info)) {
+            classMonoDefLines.push(def);
+            classMonoDefLines.push("");
+          }
+        } finally {
+          this.typeParamScope = prevScope;
+        }
+      }
+      while (this.genericWorklist.length > 0) {
+        const mangled = this.genericWorklist.shift()!;
+        const mono = this.genericMonomorphs.get(mangled)!;
+        monoFwdLines.push(`${this.formatMonomorphSignature(mono.mangled, mono.sig)};`);
+        monoDefLines.push(this.emitMonomorphDefinition(mono));
+        monoDefLines.push("");
+      }
+    }
+    if (classMonoTypedefLines.length > 0) {
+      out[classMonoTypedefSlot] = classMonoTypedefLines.join("\n") + "\n";
+    }
+    if (classMonoStructLines.length > 0) {
+      out[classMonoStructSlot] = classMonoStructLines.join("\n") + "\n";
+    }
+    if (classMonoSigLines.length > 0) {
+      out[classMonoSigSlot] = classMonoSigLines.join("\n") + "\n";
+    }
+    if (classMonoDefLines.length > 0) {
+      // Generic class methods can legitimately ignore type-parameterized
+      // params just like generic functions, and a monomorph realized via a
+      // type annotation may have methods that are never called (e.g.
+      // `Box<string>.replace` when only `.get` is used). Suppress both
+      // warnings around the monomorph block.
+      out[classMonoDefSlot] = [
+        '#pragma GCC diagnostic push',
+        '#pragma GCC diagnostic ignored "-Wunused-parameter"',
+        '#pragma GCC diagnostic ignored "-Wunused-function"',
+        classMonoDefLines.join("\n"),
+        '#pragma GCC diagnostic pop',
+      ].join("\n");
     }
     if (monoFwdLines.length > 0) {
       out[monomorphFwdSlot] = monoFwdLines.join("\n") + "\n";
@@ -571,22 +735,22 @@ class Emitter {
       // TOPAZ_SET_DEFINE can reference them; emit those first.
       const setElemKeys = new Set<string>();
       const helperLines: string[] = [];
-      for (const t of this.setMonomorphs) {
+      for (const t of this.setMonomorphs.values()) {
         const elem = setElem(t)!;
-        const key = `${elem}`;
+        const key = typeKey(elem);
         if (setElemKeys.has(key)) continue;
         setElemKeys.add(key);
         helperLines.push(...this.emitSetElemHelpers(elem));
       }
       if (helperLines.length > 0) sections.push(helperLines.join("\n"));
 
-      for (const t of this.arrayMonomorphs) {
+      for (const t of this.arrayMonomorphs.values()) {
         sections.push(this.emitArrayMonomorphMacro(t));
       }
-      for (const t of this.mapMonomorphs) {
+      for (const t of this.mapMonomorphs.values()) {
         sections.push(this.emitMapMonomorphMacro(t));
       }
-      for (const t of this.setMonomorphs) {
+      for (const t of this.setMonomorphs.values()) {
         sections.push(this.emitSetMonomorphMacro(t));
       }
 
@@ -615,7 +779,7 @@ class Emitter {
     } else if (isInterfaceType(elem)) {
       cElem = `topaz_iface_${interfaceNameOf(elem)!}`;
     } else {
-      throw new Error(`unexpected array element type ${elem} for monomorph emission`);
+      throw new Error(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
     return `TOPAZ_ARRAY_DEFINE(${tag}, ${cElem})`;
   }
@@ -627,13 +791,13 @@ class Emitter {
     const tag = mapShortName(t);
     const k = mapKey(t)!;
     const v = mapValue(t)!;
-    const kShort = k.slice("topaz_".length) as ScalarShortName;
+    const kShort = scalarTag(k);
     const hashFn = `topaz_hash_${kShort}`;
     // string keys use topaz_string_eq (byte compare); number/boolean use the
     // SameValueZero-aware topaz_key_eq_* wrappers from runtime.h.
     const eqFn = kShort === "string" ? "topaz_string_eq" : `topaz_key_eq_${kShort}`;
     const cVal = this.cElemTypeForContainer(v);
-    return `TOPAZ_MAP_DEFINE(${tag}, ${k}, ${cVal}, ${hashFn}, ${eqFn})`;
+    return `TOPAZ_MAP_DEFINE(${tag}, ${typeIdent(k)}, ${cVal}, ${hashFn}, ${eqFn})`;
   }
 
   // Phase 1.4c-1b: expand TOPAZ_SET_DEFINE for class/interface element sets.
@@ -653,7 +817,7 @@ class Emitter {
       hashFn = `topaz_hash_iface_${iname}`;
       eqFn = `topaz_key_eq_iface_${iname}`;
     } else {
-      throw new Error(`unexpected set element type ${elem} for monomorph emission`);
+      throw new Error(`unexpected set element type ${typeIdent(elem)} for monomorph emission`);
     }
     return `TOPAZ_SET_DEFINE(${tag}, ${cElem}, ${hashFn}, ${eqFn})`;
   }
@@ -682,14 +846,14 @@ class Emitter {
         `static inline topaz_boolean topaz_key_eq_iface_${iname}(${iType} a, ${iType} b) { return a.data == b.data; }`,
       ];
     }
-    throw new Error(`unexpected set element type ${elem} for helper emission`);
+    throw new Error(`unexpected set element type ${typeIdent(elem)} for helper emission`);
   }
 
   private cElemTypeForContainer(elem: TopazType): string {
     if (isClassType(elem)) return `topaz_class_${classNameOf(elem)!} *`;
     if (isInterfaceType(elem)) return `topaz_iface_${interfaceNameOf(elem)!}`;
-    if (isScalarType(elem)) return elem;
-    throw new Error(`unexpected container element type ${elem}`);
+    if (isScalarType(elem)) return typeIdent(elem);
+    throw new Error(`unexpected container element type ${typeIdent(elem)}`);
   }
 
   private collectInterfaceMembers(iface: ts.InterfaceDeclaration): void {
@@ -751,11 +915,11 @@ class Emitter {
     }
   }
 
-  private collectClassMembers(cls: ts.ClassDeclaration): void {
-    const info = this.classes.get(cls.name!.text)!;
-    if (cls.typeParameters && cls.typeParameters.length > 0) {
-      throw new CodegenError(cls, "generic classes are unsupported (Phase 1.4c)");
-    }
+  private collectClassMembers(cls: ts.ClassDeclaration, infoOverride?: ClassInfo): void {
+    // infoOverride is set when collecting members for a generic class
+    // monomorph (the ClassInfo lives under the mangled name, not cls.name);
+    // otherwise we look up by the source name.
+    const info = infoOverride ?? this.classes.get(cls.name!.text)!;
     if (cls.heritageClauses) {
       for (const hc of cls.heritageClauses) {
         if (hc.token === ts.SyntaxKind.ExtendsKeyword) {
@@ -831,10 +995,10 @@ class Emitter {
           `class '${cls.name}' is missing field '${fname}' required by interface '${iface.name}'`,
         );
       }
-      if (got !== want) {
+      if (!typeEq(got, want)) {
         throw new CodegenError(
           anchor,
-          `class '${cls.name}.${fname}' has type ${got}, but interface '${iface.name}' requires ${want}`,
+          `class '${cls.name}.${fname}' has type ${typeIdent(got)}, but interface '${iface.name}' requires ${typeIdent(want)}`,
         );
       }
     }
@@ -847,10 +1011,10 @@ class Emitter {
           `class '${cls.name}' is missing method '${mname}' required by interface '${iface.name}'`,
         );
       }
-      if (got.returnType !== want.returnType) {
+      if (!typeEq(got.returnType, want.returnType)) {
         throw new CodegenError(
           anchor,
-          `class '${cls.name}.${mname}' returns ${got.returnType}, but interface '${iface.name}' requires ${want.returnType}`,
+          `class '${cls.name}.${mname}' returns ${typeIdent(got.returnType)}, but interface '${iface.name}' requires ${typeIdent(want.returnType)}`,
         );
       }
       if (got.params.length !== want.params.length) {
@@ -860,10 +1024,10 @@ class Emitter {
         );
       }
       for (let i = 0; i < want.params.length; i++) {
-        if (got.params[i]!.type !== want.params[i]!.type) {
+        if (!typeEq(got.params[i]!.type, want.params[i]!.type)) {
           throw new CodegenError(
             anchor,
-            `class '${cls.name}.${mname}' parameter ${i + 1} has type ${got.params[i]!.type}, but interface '${iface.name}' requires ${want.params[i]!.type}`,
+            `class '${cls.name}.${mname}' parameter ${i + 1} has type ${typeIdent(got.params[i]!.type)}, but interface '${iface.name}' requires ${typeIdent(want.params[i]!.type)}`,
           );
         }
       }
@@ -1127,14 +1291,14 @@ class Emitter {
 
   private typeFromAnnotation(node: ts.TypeNode | undefined, anchor: ts.Node): TopazType {
     if (!node) throw new CodegenError(anchor, "type annotation required");
-    if (node.kind === ts.SyntaxKind.NumberKeyword) return "topaz_number";
-    if (node.kind === ts.SyntaxKind.BooleanKeyword) return "topaz_boolean";
-    if (node.kind === ts.SyntaxKind.StringKeyword) return "topaz_string";
+    if (node.kind === ts.SyntaxKind.NumberKeyword) return T_NUMBER;
+    if (node.kind === ts.SyntaxKind.BooleanKeyword) return T_BOOLEAN;
+    if (node.kind === ts.SyntaxKind.StringKeyword) return T_STRING;
     if (ts.isArrayTypeNode(node)) {
       const elem = this.typeFromAnnotation(node.elementType, node);
       const arr = arrayOf(elem);
       if (!arr) {
-        throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
+        throw new CodegenError(node, `no Array monomorph for element type ${typeIdent(elem)}`);
       }
       this.recordArrayMonomorph(arr);
       return arr;
@@ -1158,7 +1322,7 @@ class Emitter {
         const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
         const arr = arrayOf(elem);
         if (!arr) {
-          throw new CodegenError(node, `no Array monomorph for element type ${elem}`);
+          throw new CodegenError(node, `no Array monomorph for element type ${typeIdent(elem)}`);
         }
         this.recordArrayMonomorph(arr);
         return arr;
@@ -1171,7 +1335,7 @@ class Emitter {
         const v = this.typeFromAnnotation(node.typeArguments[1]!, node);
         const m = mapOf(k, v);
         if (!m) {
-          throw new CodegenError(node, `no Map monomorph for key=${k}, value=${v}`);
+          throw new CodegenError(node, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         }
         this.recordMapMonomorph(m);
         return m;
@@ -1183,10 +1347,13 @@ class Emitter {
         const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
         const s = setOf(elem);
         if (!s) {
-          throw new CodegenError(node, `no Set monomorph for element type ${elem}`);
+          throw new CodegenError(node, `no Set monomorph for element type ${typeIdent(elem)}`);
         }
         this.recordSetMonomorph(s);
         return s;
+      }
+      if (this.genericClasses.has(refName)) {
+        return this.instantiateGenericClass(refName, node.typeArguments, node);
       }
       if (this.classes.has(refName)) {
         if (node.typeArguments && node.typeArguments.length > 0) {
@@ -1363,6 +1530,64 @@ class Emitter {
     return { mangled, sig };
   }
 
+  // Phase 1.4c-3: realize `Box<number>`-style references. The mangled name
+  // (e.g. "Box__number") is registered in `this.classes` with substituted
+  // fields/methods; future references see the cache and return immediately.
+  // Throws if `refName` isn't a generic class (callers gate on
+  // `this.genericClasses.has(refName)` before invoking).
+  private instantiateGenericClass(
+    refName: string,
+    typeArgNodes: readonly ts.TypeNode[] | undefined,
+    anchor: ts.Node,
+  ): TopazType {
+    const generic = this.genericClasses.get(refName)!;
+    if (!typeArgNodes || typeArgNodes.length !== generic.typeParams.length) {
+      throw new CodegenError(
+        anchor,
+        `${refName} expects ${generic.typeParams.length} type argument(s), got ${typeArgNodes?.length ?? 0}`,
+      );
+    }
+    // Type args can themselves reference the surrounding type-param scope
+    // (e.g. a generic class field of type `Box<T>`), so resolve under the
+    // current scope without swapping.
+    const subs = new Map<string, TopazType>();
+    for (let i = 0; i < generic.typeParams.length; i++) {
+      const t = this.typeFromAnnotation(typeArgNodes[i]!, anchor);
+      subs.set(generic.typeParams[i]!, t);
+    }
+    const typeArgs = generic.typeParams.map((tp) => subs.get(tp)!);
+    const mangled = mangleMonomorph(generic.name, typeArgs);
+    if (this.classMonomorphs.has(mangled)) {
+      return classOf(mangled);
+    }
+    // Pre-register the ClassInfo so a recursive reference (e.g.
+    // `class Node<T> { next: Node<T>; }` instantiated as `Node<number>`)
+    // sees the in-progress entry instead of recursing forever.
+    const info: ClassInfo = {
+      name: mangled,
+      fields: new Map(),
+      fieldOrder: [],
+      ctor: undefined,
+      methods: new Map(),
+      implements: [],
+      decl: generic.decl,
+    };
+    this.classes.set(mangled, info);
+    this.classMonomorphs.set(mangled, { mangled, origName: generic.name, typeArgs, subs });
+    this.classMonomorphWorklist.push(mangled);
+    // Collect fields/methods under the substitution. typeParamScope is the
+    // same channel generic functions use; typeFromAnnotation already
+    // consults it before falling through to class/interface lookups.
+    const prevScope = this.typeParamScope;
+    this.typeParamScope = subs;
+    try {
+      this.collectClassMembers(generic.decl, info);
+    } finally {
+      this.typeParamScope = prevScope;
+    }
+    return classOf(mangled);
+  }
+
   // Structural unifier: matches a parameter's TypeNode against an argument's
   // concrete TopazType, binding type parameters where it can. Anything it
   // can't decompose (mismatched shapes, type forms we don't introspect) is
@@ -1397,10 +1622,10 @@ class Emitter {
           );
         }
         const existing = subs.get(refName);
-        if (existing !== undefined && existing !== argType) {
+        if (existing !== undefined && !typeEq(existing, argType)) {
           throw new CodegenError(
             anchor,
-            `type parameter '${refName}' inferred as both ${existing} and ${argType}`,
+            `type parameter '${refName}' inferred as both ${typeIdent(existing)} and ${typeIdent(argType)}`,
           );
         }
         subs.set(refName, argType);
@@ -1441,6 +1666,31 @@ class Emitter {
         this.unifyTypeParam(paramTypeNode.typeArguments[0]!, elem, params, subs, anchor);
         return;
       }
+      // Phase 1.4c-3: generic class on the parameter side. The argument's
+      // TopazType is a regular class type whose name is the mangled monomorph;
+      // we recover the original generic + per-position type args from
+      // `classMonomorphs` and unify pairwise.
+      if (
+        this.genericClasses.has(refName) &&
+        paramTypeNode.typeArguments &&
+        paramTypeNode.typeArguments.length > 0
+      ) {
+        if (!isClassType(argType)) return;
+        const argClassName = classNameOf(argType)!;
+        const argMono = this.classMonomorphs.get(argClassName);
+        if (!argMono || argMono.origName !== refName) return;
+        if (argMono.typeArgs.length !== paramTypeNode.typeArguments.length) return;
+        for (let i = 0; i < paramTypeNode.typeArguments.length; i++) {
+          this.unifyTypeParam(
+            paramTypeNode.typeArguments[i]!,
+            argMono.typeArgs[i]!,
+            params,
+            subs,
+            anchor,
+          );
+        }
+        return;
+      }
       // Concrete class/interface/scalar reference — nothing to bind.
     }
   }
@@ -1471,7 +1721,7 @@ class Emitter {
     }
 
     if (ts.isIfStatement(stmt)) {
-      this.expectType(stmt.expression, "topaz_boolean");
+      this.expectType(stmt.expression, T_BOOLEAN);
       const cond = this.emitExpression(stmt.expression);
       const thenStr = this.emitStatementAsBlock(stmt.thenStatement, indent);
       let out = `${pad}if (${cond}) ${thenStr.trimStart()}`;
@@ -1483,14 +1733,14 @@ class Emitter {
     }
 
     if (ts.isWhileStatement(stmt)) {
-      this.expectType(stmt.expression, "topaz_boolean");
+      this.expectType(stmt.expression, T_BOOLEAN);
       const cond = this.emitExpression(stmt.expression);
       const body = this.emitStatementAsBlock(stmt.statement, indent);
       return `${pad}while (${cond}) ${body.trimStart()}`;
     }
 
     if (ts.isDoStatement(stmt)) {
-      this.expectType(stmt.expression, "topaz_boolean");
+      this.expectType(stmt.expression, T_BOOLEAN);
       const cond = this.emitExpression(stmt.expression);
       const body = this.emitStatementAsBlock(stmt.statement, indent);
       return `${pad}do ${body.trimStart()} while (${cond});`;
@@ -1624,7 +1874,7 @@ class Emitter {
       if (!stmt.condition) {
         throw new CodegenError(stmt, "for-loop requires a condition");
       }
-      this.expectType(stmt.condition, "topaz_boolean");
+      this.expectType(stmt.condition, T_BOOLEAN);
       const condStr = this.emitExpression(stmt.condition);
       const incrStr = stmt.incrementor ? this.emitExpression(stmt.incrementor) : "";
 
@@ -1704,7 +1954,7 @@ class Emitter {
     this.scope.push();
     try {
       const cmp = (rhs: string): string =>
-        discType === "topaz_string"
+        discType.kind === "string"
           ? `topaz_string_eq(${tmp}, ${rhs})`
           : `${tmp} == ${rhs}`;
       let first = true;
@@ -1795,7 +2045,7 @@ class Emitter {
     }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
-      if (baseType === "topaz_string" && expr.name.text === "length") {
+      if (baseType.kind === "string" && expr.name.text === "length") {
         return `((topaz_number)(${this.emitExpression(expr.expression)}).len)`;
       }
       if (isArrayType(baseType) && expr.name.text === "length") {
@@ -1842,16 +2092,16 @@ class Emitter {
       }
       throw new CodegenError(
         expr,
-        `unsupported property access '.${expr.name.text}' on ${baseType}`,
+        `unsupported property access '.${expr.name.text}' on ${typeIdent(baseType)}`,
       );
     }
     if (ts.isElementAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
       const elem = arrayElem(baseType);
       if (!elem) {
-        throw new CodegenError(expr, `index access is only supported on Array (got ${baseType})`);
+        throw new CodegenError(expr, `index access is only supported on Array (got ${typeIdent(baseType)})`);
       }
-      this.expectType(expr.argumentExpression, "topaz_number");
+      this.expectType(expr.argumentExpression, T_NUMBER);
       const name = arrayShortName(baseType);
       return `topaz_array_${name}_at(${this.emitExpression(expr.expression)}, ${this.emitExpression(expr.argumentExpression)})`;
     }
@@ -1934,7 +2184,7 @@ class Emitter {
       if (tok === ts.SyntaxKind.EqualsToken) {
         const lt = this.inferType(expr.left);
         const rt = this.inferType(expr.right);
-        if (lt !== rt && this.isAssignableTo(rt, lt)) {
+        if (!typeEq(lt, rt) && this.isAssignableTo(rt, lt)) {
           const lhsStr = this.emitExpression(expr.left);
           const rhsStr = this.emitWithExpected(expr.right, lt);
           return `(${lhsStr} = ${rhsStr})`;
@@ -1948,12 +2198,12 @@ class Emitter {
         const lhs = this.emitExpression(expr.left);
         return `(${lhs} = topaz_fmod(${lhs}, ${this.emitExpression(expr.right)}))`;
       }
-      if (tok === ts.SyntaxKind.PlusToken && this.inferType(expr.left) === "topaz_string") {
+      if (tok === ts.SyntaxKind.PlusToken && this.inferType(expr.left).kind === "string") {
         return `topaz_string_concat(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
       }
       if (
         tok === ts.SyntaxKind.PlusEqualsToken &&
-        this.inferType(expr.left) === "topaz_string"
+        this.inferType(expr.left).kind === "string"
       ) {
         const lhs = this.emitExpression(expr.left);
         return `(${lhs} = topaz_string_concat(${lhs}, ${this.emitExpression(expr.right)}))`;
@@ -1961,7 +2211,7 @@ class Emitter {
       if (
         (tok === ts.SyntaxKind.EqualsEqualsEqualsToken ||
           tok === ts.SyntaxKind.ExclamationEqualsEqualsToken) &&
-        this.inferType(expr.left) === "topaz_string"
+        this.inferType(expr.left).kind === "string"
       ) {
         const inner = `topaz_string_eq(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
         return tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? inner : `(!${inner})`;
@@ -2009,7 +2259,7 @@ class Emitter {
       }
       const arr = arrayOf(elem);
       if (!arr) {
-        throw new CodegenError(expr, `no Array monomorph for element type ${elem}`);
+        throw new CodegenError(expr, `no Array monomorph for element type ${typeIdent(elem)}`);
       }
       arrType = arr;
       this.recordArrayMonomorph(arrType);
@@ -2057,10 +2307,10 @@ class Emitter {
         const v = this.typeFromAnnotation(expr.typeArguments[1]!, expr);
         const t = mapOf(k, v);
         if (!t) {
-          throw new CodegenError(expr, `no Map monomorph for key=${k}, value=${v}`);
+          throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         }
-        if (expected && expected !== t) {
-          throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+        if (expected && !typeEq(expected, t)) {
+          throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
         }
         mapType = t;
       } else if (expr.typeArguments && expr.typeArguments.length !== 2) {
@@ -2083,10 +2333,10 @@ class Emitter {
         const elem = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
         const t = setOf(elem);
         if (!t) {
-          throw new CodegenError(expr, `no Set monomorph for element type ${elem}`);
+          throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
         }
-        if (expected && expected !== t) {
-          throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+        if (expected && !typeEq(expected, t)) {
+          throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
         }
         setType = t;
       } else if (expr.typeArguments && expr.typeArguments.length !== 1) {
@@ -2106,18 +2356,26 @@ class Emitter {
     if (this.interfaces.has(name)) {
       throw new CodegenError(expr, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
     }
-    if (this.classes.has(name)) {
-      if (expr.typeArguments && expr.typeArguments.length > 0) {
+    // Phase 1.4c-3: `new Box<number>()` mangles to the substituted class
+    // name and dispatches through the same path as concrete classes.
+    let className = name;
+    if (this.genericClasses.has(name)) {
+      const t = this.instantiateGenericClass(name, expr.typeArguments, expr);
+      className = classNameOf(t)!;
+    } else if (expr.typeArguments && expr.typeArguments.length > 0) {
+      if (this.classes.has(name)) {
         throw new CodegenError(expr, `class '${name}' takes no type arguments`);
       }
-      const cls = this.classes.get(name)!;
+    }
+    if (this.classes.has(className)) {
+      const cls = this.classes.get(className)!;
       const args = expr.arguments ?? ([] as readonly ts.Expression[]);
-      const t = classOf(name);
+      const t = classOf(className);
       // Class -> interface coercion happens at the caller's site (the
       // surrounding emitWithExpected); here we only need to confirm the new
       // expression isn't being asked to produce a different concrete type.
-      if (expected && expected !== t && !this.isAssignableTo(t, expected)) {
-        throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${t}`);
+      if (expected && !typeEq(expected, t) && !this.isAssignableTo(t, expected)) {
+        throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       if (!cls.ctor) {
         // Reachable only when a class has no fields (we require a ctor when
@@ -2125,7 +2383,7 @@ class Emitter {
         if (args.length !== 0) {
           throw new CodegenError(expr, `${cls.name}() takes no arguments`);
         }
-        return `topaz_class_${name}_new()`;
+        return `topaz_class_${className}_new()`;
       }
       const params = cls.ctor.params;
       if (args.length !== params.length) {
@@ -2137,7 +2395,7 @@ class Emitter {
       const argStr = args
         .map((a, i) => this.emitWithExpected(a, params[i]!.type))
         .join(", ");
-      return `topaz_class_${name}_new(${argStr})`;
+      return `topaz_class_${className}_new(${argStr})`;
     }
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
   }
@@ -2237,8 +2495,8 @@ class Emitter {
         throw new CodegenError(arg, `console.log on ${t} is unsupported`);
       }
       const fn =
-        t === "topaz_boolean" ? "topaz_console_log_boolean"
-        : t === "topaz_string" ? "topaz_console_log_string"
+        t.kind === "boolean" ? "topaz_console_log_boolean"
+        : t.kind === "string" ? "topaz_console_log_string"
         : "topaz_console_log_number";
       return `${fn}(${this.emitExpression(arg)})`;
     }
@@ -2260,7 +2518,7 @@ class Emitter {
       if (isInterfaceType(baseType)) {
         return this.emitInterfaceMethodCall(expr, callee, baseType);
       }
-      throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
+      throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
     }
 
     if (ts.isIdentifier(callee)) {
@@ -2311,7 +2569,7 @@ class Emitter {
       }
       return `topaz_array_${name}_pop(${base})`;
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
+    throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
   private emitMapMethodCall(
@@ -2353,7 +2611,7 @@ class Emitter {
       }
       return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
+    throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
   private emitClassMethodCall(
@@ -2441,13 +2699,13 @@ class Emitter {
       }
       return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on ${baseType}`);
+    throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
   private inferType(expr: ts.Expression): TopazType {
-    if (ts.isNumericLiteral(expr)) return "topaz_number";
+    if (ts.isNumericLiteral(expr)) return T_NUMBER;
     if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
-      return "topaz_boolean";
+      return T_BOOLEAN;
     }
     if (expr.kind === ts.SyntaxKind.ThisKeyword) {
       if (!this.currentClass) {
@@ -2456,7 +2714,7 @@ class Emitter {
       return classOf(this.currentClass);
     }
     if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
-      return "topaz_string";
+      return T_STRING;
     }
     if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
     if (ts.isIdentifier(expr)) {
@@ -2466,14 +2724,14 @@ class Emitter {
     }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
-      if (baseType === "topaz_string" && expr.name.text === "length") {
-        return "topaz_number";
+      if (baseType.kind === "string" && expr.name.text === "length") {
+        return T_NUMBER;
       }
       if (isArrayType(baseType) && expr.name.text === "length") {
-        return "topaz_number";
+        return T_NUMBER;
       }
       if ((isMapType(baseType) || isSetType(baseType)) && expr.name.text === "size") {
-        return "topaz_number";
+        return T_NUMBER;
       }
       if (isClassType(baseType)) {
         const cls = this.classes.get(classNameOf(baseType)!)!;
@@ -2507,16 +2765,16 @@ class Emitter {
       }
       throw new CodegenError(
         expr,
-        `unsupported property access '.${expr.name.text}' on ${baseType}`,
+        `unsupported property access '.${expr.name.text}' on ${typeIdent(baseType)}`,
       );
     }
     if (ts.isElementAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
       const elem = arrayElem(baseType);
       if (!elem) {
-        throw new CodegenError(expr, `index access is only supported on Array (got ${baseType})`);
+        throw new CodegenError(expr, `index access is only supported on Array (got ${typeIdent(baseType)})`);
       }
-      this.expectType(expr.argumentExpression, "topaz_number");
+      this.expectType(expr.argumentExpression, T_NUMBER);
       return elem;
     }
     if (ts.isArrayLiteralExpression(expr)) {
@@ -2533,7 +2791,7 @@ class Emitter {
       }
       const arr = arrayOf(elem);
       if (!arr) {
-        throw new CodegenError(expr, `no Array monomorph for element type ${elem}`);
+        throw new CodegenError(expr, `no Array monomorph for element type ${typeIdent(elem)}`);
       }
       this.recordArrayMonomorph(arr);
       return arr;
@@ -2542,63 +2800,63 @@ class Emitter {
       switch (expr.operator) {
         case ts.SyntaxKind.MinusToken:
         case ts.SyntaxKind.PlusToken:
-          this.expectType(expr.operand, "topaz_number");
-          return "topaz_number";
+          this.expectType(expr.operand, T_NUMBER);
+          return T_NUMBER;
         case ts.SyntaxKind.ExclamationToken:
-          this.expectType(expr.operand, "topaz_boolean");
-          return "topaz_boolean";
+          this.expectType(expr.operand, T_BOOLEAN);
+          return T_BOOLEAN;
         case ts.SyntaxKind.PlusPlusToken:
         case ts.SyntaxKind.MinusMinusToken:
           this.checkAssignTarget(expr.operand, expr);
-          this.expectType(expr.operand, "topaz_number");
-          return "topaz_number";
+          this.expectType(expr.operand, T_NUMBER);
+          return T_NUMBER;
         default:
           unsupported(expr, "prefix unary operator");
       }
     }
     if (ts.isPostfixUnaryExpression(expr)) {
       this.checkAssignTarget(expr.operand, expr);
-      this.expectType(expr.operand, "topaz_number");
-      return "topaz_number";
+      this.expectType(expr.operand, T_NUMBER);
+      return T_NUMBER;
     }
     if (ts.isBinaryExpression(expr)) {
       const kind = expr.operatorToken.kind;
       switch (kind) {
         case ts.SyntaxKind.PlusToken: {
           const lt = this.inferType(expr.left);
-          if (lt === "topaz_string") {
-            this.expectType(expr.right, "topaz_string");
-            return "topaz_string";
+          if (lt.kind === "string") {
+            this.expectType(expr.right, T_STRING);
+            return T_STRING;
           }
-          this.expectType(expr.left, "topaz_number");
-          this.expectType(expr.right, "topaz_number");
-          return "topaz_number";
+          this.expectType(expr.left, T_NUMBER);
+          this.expectType(expr.right, T_NUMBER);
+          return T_NUMBER;
         }
         case ts.SyntaxKind.MinusToken:
         case ts.SyntaxKind.AsteriskToken:
         case ts.SyntaxKind.SlashToken:
         case ts.SyntaxKind.PercentToken:
-          this.expectType(expr.left, "topaz_number");
-          this.expectType(expr.right, "topaz_number");
-          return "topaz_number";
+          this.expectType(expr.left, T_NUMBER);
+          this.expectType(expr.right, T_NUMBER);
+          return T_NUMBER;
         case ts.SyntaxKind.LessThanToken:
         case ts.SyntaxKind.LessThanEqualsToken:
         case ts.SyntaxKind.GreaterThanToken:
         case ts.SyntaxKind.GreaterThanEqualsToken:
-          this.expectType(expr.left, "topaz_number");
-          this.expectType(expr.right, "topaz_number");
-          return "topaz_boolean";
+          this.expectType(expr.left, T_NUMBER);
+          this.expectType(expr.right, T_NUMBER);
+          return T_BOOLEAN;
         case ts.SyntaxKind.EqualsEqualsEqualsToken:
         case ts.SyntaxKind.ExclamationEqualsEqualsToken: {
           const lt = this.inferType(expr.left);
           this.expectType(expr.right, lt);
-          return "topaz_boolean";
+          return T_BOOLEAN;
         }
         case ts.SyntaxKind.AmpersandAmpersandToken:
         case ts.SyntaxKind.BarBarToken:
-          this.expectType(expr.left, "topaz_boolean");
-          this.expectType(expr.right, "topaz_boolean");
-          return "topaz_boolean";
+          this.expectType(expr.left, T_BOOLEAN);
+          this.expectType(expr.right, T_BOOLEAN);
+          return T_BOOLEAN;
         case ts.SyntaxKind.EqualsToken: {
           this.checkAssignTarget(expr.left, expr);
           const lt = this.inferType(expr.left);
@@ -2608,22 +2866,22 @@ class Emitter {
         case ts.SyntaxKind.PlusEqualsToken: {
           this.checkAssignTarget(expr.left, expr);
           const lt = this.inferType(expr.left);
-          if (lt === "topaz_string") {
-            this.expectType(expr.right, "topaz_string");
-            return "topaz_string";
+          if (lt.kind === "string") {
+            this.expectType(expr.right, T_STRING);
+            return T_STRING;
           }
-          this.expectType(expr.left, "topaz_number");
-          this.expectType(expr.right, "topaz_number");
-          return "topaz_number";
+          this.expectType(expr.left, T_NUMBER);
+          this.expectType(expr.right, T_NUMBER);
+          return T_NUMBER;
         }
         case ts.SyntaxKind.MinusEqualsToken:
         case ts.SyntaxKind.AsteriskEqualsToken:
         case ts.SyntaxKind.SlashEqualsToken:
         case ts.SyntaxKind.PercentEqualsToken:
           this.checkAssignTarget(expr.left, expr);
-          this.expectType(expr.left, "topaz_number");
-          this.expectType(expr.right, "topaz_number");
-          return "topaz_number";
+          this.expectType(expr.left, T_NUMBER);
+          this.expectType(expr.right, T_NUMBER);
+          return T_NUMBER;
         case ts.SyntaxKind.EqualsEqualsToken:
         case ts.SyntaxKind.ExclamationEqualsToken:
           throw new CodegenError(
@@ -2654,7 +2912,7 @@ class Emitter {
           if (callee.name.text === "pop") {
             return elem;
           }
-          throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
+          throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
         }
         if (isMapType(baseType)) {
           const v = mapValue(baseType)!;
@@ -2663,16 +2921,16 @@ class Emitter {
             throw new CodegenError(expr, "Map.set returns void in this dialect and cannot be used as a value");
           }
           if (m === "get") return v;
-          if (m === "has" || m === "delete") return "topaz_boolean";
-          throw new CodegenError(callee, `unsupported method '.${m}' on ${baseType}`);
+          if (m === "has" || m === "delete") return T_BOOLEAN;
+          throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isSetType(baseType)) {
           const m = callee.name.text;
           if (m === "add") {
             throw new CodegenError(expr, "Set.add returns void in this dialect and cannot be used as a value");
           }
-          if (m === "has" || m === "delete") return "topaz_boolean";
-          throw new CodegenError(callee, `unsupported method '.${m}' on ${baseType}`);
+          if (m === "has" || m === "delete") return T_BOOLEAN;
+          throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isClassType(baseType)) {
           const cls = this.classes.get(classNameOf(baseType)!)!;
@@ -2690,7 +2948,7 @@ class Emitter {
           }
           return sig.returnType;
         }
-        throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${baseType}`);
+        throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
       }
       if (ts.isIdentifier(callee)) {
         if (this.genericFunctions.has(callee.text)) {
@@ -2715,7 +2973,7 @@ class Emitter {
         const k = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
         const v = this.typeFromAnnotation(expr.typeArguments[1]!, expr);
         const t = mapOf(k, v);
-        if (!t) throw new CodegenError(expr, `no Map monomorph for key=${k}, value=${v}`);
+        if (!t) throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         this.recordMapMonomorph(t);
         return t;
       }
@@ -2725,9 +2983,12 @@ class Emitter {
         }
         const elem = this.typeFromAnnotation(expr.typeArguments[0]!, expr);
         const t = setOf(elem);
-        if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${elem}`);
+        if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
         this.recordSetMonomorph(t);
         return t;
+      }
+      if (this.genericClasses.has(name)) {
+        return this.instantiateGenericClass(name, expr.typeArguments, expr);
       }
       if (this.classes.has(name)) {
         if (expr.typeArguments && expr.typeArguments.length > 0) {
@@ -2759,7 +3020,7 @@ class Emitter {
       // assignment mutates through the pointer and is always allowed.
       const baseType = this.inferType(target.expression);
       if (!isArrayType(baseType)) {
-        throw new CodegenError(target, `index assignment is only supported on Array (got ${baseType})`);
+        throw new CodegenError(target, `index assignment is only supported on Array (got ${typeIdent(baseType)})`);
       }
       return;
     }
@@ -2782,7 +3043,7 @@ class Emitter {
         return;
       }
       if (!isClassType(baseType)) {
-        throw new CodegenError(target, `property assignment is only supported on class instances or interface values (got ${baseType})`);
+        throw new CodegenError(target, `property assignment is only supported on class instances or interface values (got ${typeIdent(baseType)})`);
       }
       const cls = this.classes.get(classNameOf(baseType)!)!;
       if (!cls.fields.has(target.name.text)) {
@@ -2806,9 +3067,9 @@ class Emitter {
 
   private expectType(expr: ts.Expression, expected: TopazType): void {
     const actual = this.inferType(expr);
-    if (actual === expected) return;
+    if (typeEq(actual, expected)) return;
     if (this.isAssignableTo(actual, expected)) return;
-    throw new CodegenError(expr, `type mismatch: expected ${expected}, got ${actual}`);
+    throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
   }
 
   // Phase 1.4b: class implementing an interface is the only implicit
@@ -2816,7 +3077,7 @@ class Emitter {
   // count as assignable. (No interface -> interface, no narrowing, no scalar
   // widening — divergence from TS structural typing.)
   private isAssignableTo(actual: TopazType, expected: TopazType): boolean {
-    if (actual === expected) return true;
+    if (typeEq(actual, expected)) return true;
     if (isInterfaceType(expected) && isClassType(actual)) {
       return this.classImplements(classNameOf(actual)!, interfaceNameOf(expected)!);
     }
@@ -2858,7 +3119,7 @@ class Emitter {
   }
 
   private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: ts.Node): string {
-    if (actual === expected) return raw;
+    if (typeEq(actual, expected)) return raw;
     if (isInterfaceType(expected) && isClassType(actual)) {
       const iname = interfaceNameOf(expected)!;
       const cname = classNameOf(actual)!;
@@ -2870,7 +3131,7 @@ class Emitter {
       }
       return `((topaz_iface_${iname}){ .data = ${raw}, .vt = &topaz_iface_${iname}_for_${cname}_vt })`;
     }
-    throw new CodegenError(anchor, `type mismatch: expected ${expected}, got ${actual}`);
+    throw new CodegenError(anchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
   }
 }
 

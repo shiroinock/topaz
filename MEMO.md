@@ -195,9 +195,8 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 ### Phase 1: Self-hosting 可能なサブセット
 
-- [x] **1.1〜1.4c-2** — 制御フロー / `boolean` / `string` / shortest number / `switch` / `Array<T>` / `Map<K,V>` / `Set<T>` / `class` / `interface` / コンテナの class / interface 要素 / generic function まで着地済み。詳細は `CLAUDE.md` 参照。`TopazType` の structured 表現への移行は 1.4c-3 で `Array<Box<number>>` のような型パラメータネストが顕在化するタイミングまで延命。
-- [ ] **1.4c-3** — generic class(`class Box<T> { ... }`、`new Box<number>()` でインスタンス化、コンテナ自前定義が可能になる)。値型コンテナを書けるようになるので、Set の構造的等値の必要性を再評価する。同タイミングで `TopazType` を string union から structured 表現(`{ kind: "array", elem: TopazType }` 等)へ移行する。
-- [ ] **1.5** — 例外、ES module 静的解決、全プログラム型検証(多態検出 → エラー、`Map.get` の `V | undefined` narrowing、`--strictPropertyInitialization` 相当)、ヒープ管理(GC/arena)、self-hosting 通過。
+- [x] **1.1〜1.4c-3** — 制御フロー / `boolean` / `string` / shortest number / `switch` / `Array<T>` / `Map<K,V>` / `Set<T>` / `class` / `interface` / コンテナの class / interface 要素 / generic function / generic class まで着地済み。`TopazType` の structured 表現への移行も 1.4c-3 と同じタイミングで PoC として完了(`Array<Box<number>>` のようなネストが書けるようになった)。詳細は `CLAUDE.md` 参照。
+- [ ] **1.5** — 例外、ES module 静的解決、全プログラム型検証(多態検出 → エラー、`Map.get` の `V | undefined` narrowing、`--strictPropertyInitialization` 相当)、ヒープ管理(GC/arena)、self-hosting 通過。値型コンテナが書けるようになったので、Set の構造的等値の必要性をここで再評価する。
 
 順序はあくまで現時点の見立てで、self-hosting に必要な機能から逆算して入れ替える。新機能を入れる時は **「コンパイラが自分自身をコンパイルできる範囲」がサブセットの下限**(`§3.3`)であることを忘れない。
 
@@ -245,7 +244,7 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 ## 9. 直近のアクション(未完了)
 
-- [ ] Phase 1.4c-3(generic class)着手前に、`TopazType` を structured 表現(`{ kind, ... }` の object)へ移行する PoC を切る。1.4c-2 までで string union のままどこまで行けるかは確認済みなので、移行コストの実測が次の焦点。
+- [ ] Phase 1.5 着手前に、generic class のサブセットで未対応となっている領域(`class Box<T> implements I` / generic method / type parameter constraint / default type parameter / generic class を Map / Set の key にする方向)が self-hosting に必要かを棚卸し。necessary なら 1.4c-4 として小さく切る、self-hosting に不要なら 1.5 に組み込んで全プログラム検証と一緒に取り扱う。
 - [ ] generic 関数の戻り値が `Array<T>` の場合の monomorph 収集を、generic 関数経路と非 generic 経路で確実に同じ slot へ流すパスをドキュメント化(現状は self-hosting で踏むまで顕在化しない領域)。
 
 ---
