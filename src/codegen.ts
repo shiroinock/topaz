@@ -1772,7 +1772,161 @@ class Emitter {
       return out;
     }
 
+    if (ts.isThrowStatement(stmt)) {
+      return this.emitThrowStatement(stmt, indent);
+    }
+
+    if (ts.isTryStatement(stmt)) {
+      return this.emitTryStatement(stmt, indent);
+    }
+
     unsupported(stmt, "statement");
+  }
+
+  // Phase 1.5-1: throw a class instance. The runtime helper expects `void *`
+  // (implicit conversion from any object pointer), so no explicit cast on the
+  // emitting side. We require the thrown value to be a class type so the
+  // catch site has a single C type to cast back to.
+  private emitThrowStatement(stmt: ts.ThrowStatement, indent: number): string {
+    const pad = "  ".repeat(indent);
+    if (!stmt.expression) {
+      throw new CodegenError(stmt, "bare `throw;` is unsupported; throw an explicit value");
+    }
+    const t = this.inferType(stmt.expression);
+    if (!isClassType(t)) {
+      throw new CodegenError(
+        stmt.expression,
+        `throw value must be a class instance (got ${typeIdent(t)})`,
+      );
+    }
+    return `${pad}topaz_throw(${this.emitExpression(stmt.expression)});`;
+  }
+
+  // Phase 1.5-1: try/catch. setjmp returns 0 on the initial call (run body
+  // then pop the frame), nonzero after a longjmp from topaz_throw (frame is
+  // already popped by topaz_throw; catch body just rebinds the global
+  // throw_value to the annotated class type). finally and bare-binding catch
+  // are deferred; return/break/continue inside the try body are rejected
+  // because they would skip the pop.
+  private emitTryStatement(stmt: ts.TryStatement, indent: number): string {
+    const pad = "  ".repeat(indent);
+    if (stmt.finallyBlock) {
+      throw new CodegenError(stmt.finallyBlock, "`finally` is unsupported (Phase 1.5-1)");
+    }
+    if (!stmt.catchClause) {
+      throw new CodegenError(stmt, "`try` without a `catch` clause is unsupported");
+    }
+    const catchClause = stmt.catchClause;
+    if (!catchClause.variableDeclaration) {
+      throw new CodegenError(
+        catchClause,
+        "`catch` clause requires a binding (e.g. `catch (e: ClassName)`)",
+      );
+    }
+    const vd = catchClause.variableDeclaration;
+    if (!ts.isIdentifier(vd.name)) {
+      throw new CodegenError(vd, "catch binding name must be a simple identifier");
+    }
+    if (!vd.type) {
+      throw new CodegenError(
+        vd,
+        "`catch` binding requires an explicit type annotation `catch (e: ClassName)` (divergence from TS, which would type e as `unknown`)",
+      );
+    }
+    const errType = this.typeFromAnnotation(vd.type, vd);
+    if (!isClassType(errType)) {
+      throw new CodegenError(
+        vd.type,
+        `\`catch\` binding type must be a class (got ${typeIdent(errType)})`,
+      );
+    }
+    this.checkTryBodyNoEscape(stmt.tryBlock);
+
+    const errClass = classNameOf(errType)!;
+    const id = this.tmpCounter++;
+    const frame = `__topaz_try_${id}`;
+    const eName = vd.name.text;
+
+    this.scope.push();
+    let tryBodyLines: string[];
+    try {
+      tryBodyLines = stmt.tryBlock.statements.map((s) => this.emitStatement(s, indent + 2));
+    } finally {
+      this.scope.pop();
+    }
+
+    this.scope.push();
+    let catchBodyStr: string;
+    try {
+      this.scope.declare(eName, errType, /* isConst */ false, vd);
+      const catchBodyLines = catchClause.block.statements.map((s) =>
+        this.emitStatement(s, indent + 2),
+      );
+      catchBodyStr = catchBodyLines.join("\n");
+    } finally {
+      this.scope.pop();
+    }
+
+    const lines: string[] = [];
+    lines.push(`${pad}{`);
+    lines.push(`${pad}  topaz_try_frame ${frame};`);
+    lines.push(`${pad}  topaz_try_push(&${frame});`);
+    lines.push(`${pad}  if (setjmp(${frame}.env) == 0) {`);
+    if (tryBodyLines.length > 0) lines.push(tryBodyLines.join("\n"));
+    lines.push(`${pad}    topaz_try_pop();`);
+    lines.push(`${pad}  } else {`);
+    lines.push(
+      `${pad}    topaz_class_${errClass} *${eName} = (topaz_class_${errClass} *)topaz_throw_value;`,
+    );
+    if (catchBodyStr) lines.push(catchBodyStr);
+    lines.push(`${pad}  }`);
+    lines.push(`${pad}}`);
+    return lines.join("\n");
+  }
+
+  // Reject return/break/continue inside the try body — those exit the
+  // surrounding C block before `topaz_try_pop()` runs, which would leave the
+  // frame on the stack pointing at a dead jmp_buf. Skips into nested
+  // functions/classes/methods since their control flow doesn't cross the try
+  // boundary. Lazy/conservative: doesn't try to distinguish break/continue
+  // confined to a loop *inside* the try body — those are technically safe,
+  // but we forbid them uniformly to keep the rule one sentence long.
+  private checkTryBodyNoEscape(block: ts.Block): void {
+    const walk = (node: ts.Node): void => {
+      if (ts.isReturnStatement(node)) {
+        throw new CodegenError(
+          node,
+          "`return` inside a `try` body is unsupported (would skip topaz_try_pop)",
+        );
+      }
+      if (ts.isBreakStatement(node)) {
+        throw new CodegenError(
+          node,
+          "`break` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
+        );
+      }
+      if (ts.isContinueStatement(node)) {
+        throw new CodegenError(
+          node,
+          "`continue` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
+        );
+      }
+      if (
+        ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isClassExpression(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isConstructorDeclaration(node) ||
+        ts.isGetAccessorDeclaration(node) ||
+        ts.isSetAccessorDeclaration(node)
+      ) {
+        return;
+      }
+      ts.forEachChild(node, walk);
+    };
+    for (const s of block.statements) walk(s);
   }
 
   private emitStatementAsBlock(stmt: ts.Statement, indent: number): string {

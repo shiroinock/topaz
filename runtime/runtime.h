@@ -2,6 +2,7 @@
 #define TOPAZ_RUNTIME_H
 
 #include <math.h>
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -466,5 +467,43 @@ TOPAZ_MAP_DEFINE(string_string,   topaz_string,  topaz_string,  topaz_hash_strin
 TOPAZ_SET_DEFINE(number,  topaz_number,  topaz_hash_number,  topaz_key_eq_number)
 TOPAZ_SET_DEFINE(boolean, topaz_boolean, topaz_hash_boolean, topaz_key_eq_boolean)
 TOPAZ_SET_DEFINE(string,  topaz_string,  topaz_hash_string,  topaz_string_eq)
+
+// Phase 1.5-1: exceptions. setjmp/longjmp + a linked-list frame stack rooted
+// at `topaz_try_top`. The thrown value is a class-instance pointer cast to
+// `void *` and parked in a global until the catch site reads it (catch body
+// binds it back to the annotated class type, no per-frame storage needed).
+// Single-TU runtime, so the globals don't need _Thread_local.
+typedef struct topaz_try_frame {
+  jmp_buf env;
+  struct topaz_try_frame *prev;
+} topaz_try_frame;
+
+static topaz_try_frame *topaz_try_top = NULL;
+static void *topaz_throw_value = NULL;
+
+static inline void topaz_try_push(topaz_try_frame *f) {
+  f->prev = topaz_try_top;
+  topaz_try_top = f;
+}
+
+static inline void topaz_try_pop(void) {
+  topaz_try_top = topaz_try_top->prev;
+}
+
+// topaz_throw pops its own frame before longjmp so the catch body never has
+// to. Volatile-pinned locals aren't needed since the catch body reads only
+// the global `topaz_throw_value` — frame-local state is untouched after
+// setjmp returns nonzero. `static inline` matches the other runtime helpers
+// and keeps -Wunused-function quiet for programs that don't throw.
+static inline void topaz_throw(void *v) {
+  if (!topaz_try_top) {
+    fputs("topaz: uncaught exception\n", stderr);
+    abort();
+  }
+  topaz_throw_value = v;
+  topaz_try_frame *f = topaz_try_top;
+  topaz_try_top = f->prev;
+  longjmp(f->env, 1);
+}
 
 #endif
