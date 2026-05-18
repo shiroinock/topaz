@@ -197,12 +197,13 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 - [x] **1.1〜1.4c-3** — 制御フロー / `boolean` / `string` / shortest number / `switch` / `Array<T>` / `Map<K,V>` / `Set<T>` / `class` / `interface` / コンテナの class / interface 要素 / generic function / generic class まで着地済み。`TopazType` の structured 表現への移行も 1.4c-3 と同じタイミングで PoC として完了(`Array<Box<number>>` のようなネストが書けるようになった)。詳細は `CLAUDE.md` 参照。
 - [x] **1.5-1** — 例外(`throw` / `try` / `catch`)。setjmp/longjmp + linked-list frame stack。throw 値は class instance に限定、catch binding は `catch (e: ClassName)` の明示型注釈必須、`finally` と try body 内 return / break / continue は未対応(1.5 残作業として cleanup と一緒に解禁する)。
-- [ ] **1.5 残り** — 以下を 1.5-N サブフェーズに分けて進める。順序は self-hosting に必要なものから逆算で入れ替える。
-  - [ ] **1.5-2 (仮)** — ES module 静的解決。`import` / `export` を AST 単位で flatten、循環検出、宣言の topological 順序付け。self-hosting に必須(`src/codegen.ts` 単独でも import を持っているため)。
-  - [ ] **1.5-3 (仮)** — 全プログラム型検証層。式単位の `inferType` を TypedAST 層に切り出し、多態(同じ識別子が異なる型で使われる)を検出してエラー、`Map.get` の戻り値を `V | undefined` に変えて narrowing 必須化、`--strictPropertyInitialization` 相当の class field 未初期化検査、catch binding の `unknown` narrowing(これが入ると `catch (e: ClassName)` の型注釈を optional にできる)。
-  - [ ] **1.5-4 (仮)** — ヒープ管理。`string +` の連結結果 / `throw` した class instance / `Array` / `Map` / `Set` の slot buffer の leak を一気に回収。GC(BDW conservative)か arena(per-scope / per-request)かは self-hosting で踏むパターンを見てから決める。値型コンテナ(自前 Box / List 等)が書けるようになったので、Set の構造的等値の必要性もここで再評価する。
-  - [ ] **1.5-5 (仮)** — generic method(`class C { f<U>(...) {} }`)/ generic interface。class 全体の monomorph と method 単独の monomorph が直交するので、`classMonomorphs` の構造を method 単位に拡張する必要あり。
-  - [ ] **1.5-6 (仮)** — self-hosting 通過。`src/*.ts` を Topaz 自身でコンパイルできる状態にする。途中で踏んだ未対応機能を 1.5-N に折り返してフィードバックループを回す。
+- [ ] **1.5 残り** — 以下を 1.5-N サブフェーズに分けて進める。順序は self-hosting に必要なものから逆算で入れ替える。詳細な棚卸し根拠は `docs/archive/self-hosting-inventory.md`。
+  - [ ] **1.5-2** — ES module 静的解決。`import` / `export` を AST 単位で flatten、循環検出、宣言の topological 順序付け。スコープは **ユーザー定義 module (`./foo.js`) 限定** に絞り、`node:*` / npm パッケージ依存は parser 戦略(1.5-6)側に降ろす。`src/` 内の import 関係は `parser ← cli → codegen` の DAG で循環は無いため、循環検出は `examples/` に専用の 2 ファイル分割サンプルを足して回帰させる。
+  - [ ] **1.5-3** — 全プログラム型検証層 + **discriminated union narrowing** + **`T \| undefined` narrowing** + strict field init。式単位の `inferType` を TypedAST 層に切り出し、多態(同じ識別子が異なる型で使われる)を検出してエラー、`switch (t.kind)` で discriminated union を狭める narrowing(`TopazType` 自身がこの形なので self-hosting の中核)、ヘルパ関数戻り値の `T | undefined` を狭める narrowing、`Map.get` の戻り値を `V | undefined` に変えて narrowing 必須化、`--strictPropertyInitialization` 相当の class field 未初期化検査、catch binding の `unknown` narrowing(これが入ると `catch (e: ClassName)` の型注釈を optional にできる)。
+  - [ ] **1.5-3.5 (新設)** — **syntactic sugar 集中投入**。`src/codegen.ts` の棚卸しで 1.5-3 単独では self-hosting に届かないことが判明したため、別サブフェーズに切る。中身: `for-of`(58 箇所、Iterator interface の最小形と一緒に設計)、arrow function + closure キャプチャ(22 箇所、`Array.map` のため)、template literal(280 箇所)、destructuring、optional chaining(`?.`)、nullish coalescing(`??`)、non-null assertion(`!`)、spread(`...x`、関数 args 渡しのみ)、`Array.map` / `.filter` / `.join` / `.includes` / `.slice`、`Map.values()`。**1.5-4 (ヒープ管理)と一緒に検討する**: template literal を `+` に lowering すると毎回 malloc が走るため、arena の前にこれを入れると leak が劇的に増える。
+  - [ ] **1.5-4** — ヒープ管理。`string +` の連結結果 / `throw` した class instance / `Array` / `Map` / `Set` の slot buffer の leak を一気に回収。**per-process arena 推奨**(コンパイラは「1 プロセス = 1 コンパイル」のためグローバル arena + プロセス終了で OS が回収で十分、free は no-op)。BDW conservative GC は self-hosting の範囲では過剰。値型コンテナ(自前 Box / List 等)が書けるようになったので、Set の構造的等値の必要性もここで再評価する。
+  - [ ] **1.5-5** — generic method(`class C { f<U>(...) {} }`)/ generic interface。`class` 全体の monomorph と method 単独の monomorph が直交するので、`classMonomorphs` の構造を method 単位に拡張する必要あり。**`src/` では未使用なので self-hosting (1.5-6) の前提ではない**ため、1.5-6 の後ろに回しても良い。
+  - [ ] **1.5-6** — self-hosting 通過。`src/*.ts` を Topaz 自身でコンパイルできる状態にする。**parser 戦略をここで確定**(`src/codegen.ts` が `import * as ts from "typescript"` で TS の AST API そのものを使っているため、(a) parser を自前で書き直す、(b) `typescript` を opaque FFI として扱う、(c) parser だけ Node で走らせて AST を JSON で渡す、の三択を実装作業の中で選ぶ)。途中で踏んだ未対応機能は 1.5-N に折り返してフィードバックループを回す。
   - [ ] **1.5-X (オプション)** — `finally` 句および try body 内 return / break / continue 解禁。cleanup の lowering(`__cleanup__` attribute or 手書きの dispatch tree)とセット。self-hosting で実際に欲しくなった時点で着手、不要なら Phase 2 に持ち越し。
 
 順序はあくまで現時点の見立てで、self-hosting に必要な機能から逆算して入れ替える。新機能を入れる時は **「コンパイラが自分自身をコンパイルできる範囲」がサブセットの下限**(`§3.3`)であることを忘れない。
@@ -251,8 +252,11 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 
 ## 9. 直近のアクション(未完了)
 
-- [ ] **1.5-2 着手前に self-hosting の最小到達点を割り出す**。`src/parser.ts` / `src/cli.ts` / `src/codegen.ts` を実際に Topaz でコンパイルしようとしたとき、`import` 解決 / 型検証 / ヒープ管理 / generic method のうちどれが先にブロッカーになるかを、生 AST を読みながら棚卸し。1.5-N の順序付けはこれを根拠に確定する(現状の (2) ES module → (3) 型検証 → (4) ヒープ → (5) generic method → (6) self-hosting 通過は仮置き)。
-- [ ] **generic class の未対応領域の棚卸し**(`class Box<T> implements I` / type parameter constraint / default type parameter / generic class を Map / Set の key にする方向)。self-hosting で踏むものが 1 つでもあれば 1.5-N のいずれかに組み込む、踏まないなら Phase 2 に降ろす。
+- [x] **1.5-2 着手前に self-hosting の最小到達点を割り出す**。完了。結果は `docs/archive/self-hosting-inventory.md`。要点:
+  - 1.5-N の順序は (1) `node:*` / typescript パッケージ依存(parser 戦略)を **1.5-6 まで遅延**、(2) **1.5-3.5 新設**(`for-of` / arrow / template literal / destructuring / optional chaining / `??` / `!` / spread + `Array.map` 系 / `Map.values` を集中投入)、(3) **1.5-3 で discriminated union narrowing と `T | undefined` narrowing を明示**、(4) **1.5-5 (generic method / generic interface) は src/ で未使用のため self-hosting の前提ブロッカーではない**(1.5-6 の後ろに回せる)、で確定。
+  - `src/` を Topaz で通すには、合計で `for-of` 58 / arrow 22 / template literal 280 / non-null `!` 18 / access modifier 84 / `as Extract<T, U>` narrowing 5 / discriminated union(`TopazType`)1 中核 / `T | undefined` 14+ ヘルパ戻り値、を片付ける必要がある。
+  - **parser 戦略の決断は 1.5-6 に集約**(`import * as ts from "typescript"` を: (a) 自前 parser に置換、(b) opaque FFI、(c) parser だけ Node で走らせて AST を JSON 受け渡し、の三択を実装作業の中で選ぶ)。1.5-2 〜 1.5-5 のスコープには含めない。
+- [ ] **generic class の未対応領域の棚卸し**(`class Box<T> implements I` / type parameter constraint / default type parameter / generic class を Map / Set の key にする方向)。self-hosting で踏むものが 1 つでもあれば 1.5-N のいずれかに組み込む、踏まないなら Phase 2 に降ろす。src/ では generic class / generic function はユーザー定義 0 件のため、self-hosting からの逆流は今のところ無い。
 - [ ] generic 関数の戻り値が `Array<T>` の場合の monomorph 収集を、generic 関数経路と非 generic 経路で確実に同じ slot へ流すパスをドキュメント化(現状は self-hosting で踏むまで顕在化しない領域)。
 
 ---

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-TypeScript-syntax AOT native compiler. TS の構文をフロントエンドにして、JS のセマンティクスを切り捨てた上で真の AOT ネイティブコンパイルを狙う。設計検討資料・ロードマップ・落とし穴は `MEMO.md`、Phase 0〜直近 Phase までの「なぜそう実装したか」の決定ログは `docs/archive/implementation-log.md`、Phase 0 のパーサ選定根拠は `docs/parser-choice.md` を参照。
+TypeScript-syntax AOT native compiler. TS の構文をフロントエンドにして、JS のセマンティクスを切り捨てた上で真の AOT ネイティブコンパイルを狙う。設計検討資料・ロードマップ・落とし穴は `MEMO.md`、Phase 0〜直近 Phase までの「なぜそう実装したか」の決定ログは `docs/archive/implementation-log.md`、Phase 0 のパーサ選定根拠は `docs/parser-choice.md`、Phase 1.5-2 着手前の self-hosting 棚卸しは `docs/archive/self-hosting-inventory.md` を参照。
 
-**現在のステータス**: Phase 1.5-1 完了(例外 `throw` / `try` / `catch`、setjmp/longjmp + linked-list frame stack で着地。throw 値は class instance に限定、catch binding は明示型注釈 `catch (e: ClassName)` 必須、try body 内の return / break / continue は明示エラー、`finally` は未対応)。**次は Phase 1.5 の残り(ES module 静的解決、全プログラム型検証、ヒープ管理、generic method / generic interface、self-hosting 通過)** を 1.5-N サブフェーズに分けて進める。残タスクの全体像は `MEMO.md §6` を参照。
+**現在のステータス**: Phase 1.5-1 完了(例外 `throw` / `try` / `catch`、setjmp/longjmp + linked-list frame stack で着地。throw 値は class instance に限定、catch binding は明示型注釈 `catch (e: ClassName)` 必須、try body 内の return / break / continue は明示エラー、`finally` は未対応)。**次は Phase 1.5-2 (ES module 静的解決、ユーザー定義 module 限定)**。`src/` の self-hosting 棚卸しを `docs/archive/self-hosting-inventory.md` に格納済みで、1.5-N の順序は (2) ES module → (3) 型検証 + discriminated union / `T | undefined` narrowing → **(3.5) syntactic sugar 集中投入(新設、`for-of` / arrow / template literal / `Array.map` 系等)** → (4) ヒープ管理 (arena) → (5) generic method / interface → (6) self-hosting 通過(ここで parser 戦略確定)で確定。残タスクの全体像は `MEMO.md §6`。
 
 ## Commands
 
