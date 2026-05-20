@@ -6,19 +6,30 @@ import * as ts from "typescript";
 // generic class monomorph plumbing painful. Helpers below preserve the same
 // C identifier surface (typeIdent / cTypeName / arrayShortName / ...) so the
 // generated C is byte-identical to the pre-refactor output.
+// Phase 1.5-3b: `undefined` と `T | undefined` 形式の union を導入。
+// - `undefined`: 単独の sentinel 型。値としては T | undefined 変数の初期化と
+//   `===` / `!==` 比較のみで使い、変数の C 表現は持たない(`cTypeName` で reject)。
+// - `union`: variants は typeKey ソート + 重複排除済みで canonical。1.5-3b では
+//   `T | undefined` で T が reference (array/map/set/class) または interface の
+//   形のみ受理する(scalar | undefined は 1.5-3c で Map.get の `V | undefined`
+//   と一緒に struct 表現を入れて対応する)。general union (A | B) は 1.5-3e の
+//   discriminated union narrowing で対応する。
 type TopazType =
   | { kind: "number" }
   | { kind: "boolean" }
   | { kind: "string" }
+  | { kind: "undefined" }
   | { kind: "array"; elem: TopazType }
   | { kind: "map"; key: TopazType; value: TopazType }
   | { kind: "set"; elem: TopazType }
   | { kind: "class"; name: string }
-  | { kind: "iface"; name: string };
+  | { kind: "iface"; name: string }
+  | { kind: "union"; variants: readonly TopazType[] };
 
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
+const T_UNDEFINED: TopazType = { kind: "undefined" };
 
 const TOPAZ_THIS = "__topaz_this";
 
@@ -31,6 +42,7 @@ function isMapType(t: TopazType): boolean { return t.kind === "map"; }
 function isSetType(t: TopazType): boolean { return t.kind === "set"; }
 function isClassType(t: TopazType): boolean { return t.kind === "class"; }
 function isInterfaceType(t: TopazType): boolean { return t.kind === "iface"; }
+function isUndefinedType(t: TopazType): boolean { return t.kind === "undefined"; }
 
 function classNameOf(t: TopazType): string | undefined {
   return t.kind === "class" ? t.name : undefined;
@@ -52,8 +64,43 @@ function interfaceOf(name: string): TopazType {
 // fat-pointer structs passed by value, so they're handled separately by
 // cTypeName even though their semantics (shared underlying data) are
 // reference-like.
+// Phase 1.5-3b: `T | undefined` for reference T is also reference (T * with
+// NULL meaning undefined). `T | undefined` for interface T is NOT reference
+// (still a fat pointer value, with data == NULL meaning undefined).
 function isReferenceType(t: TopazType): boolean {
+  if (t.kind === "union") {
+    const nonUndef = t.variants.filter((v) => v.kind !== "undefined");
+    if (nonUndef.length === 1) return isReferenceType(nonUndef[0]!);
+    return false;
+  }
   return isArrayType(t) || isMapType(t) || isSetType(t) || isClassType(t);
+}
+
+// Phase 1.5-3b: helpers for union/undefined.
+function containsUndefined(t: TopazType): boolean {
+  if (t.kind === "undefined") return true;
+  if (t.kind === "union") return t.variants.some(isUndefinedType);
+  return false;
+}
+
+// Strip the `undefined` variant from a union (used by narrowing in 1.5-3d).
+// If `t` is just `undefined`, returns undefined (no usable narrowed type).
+function withoutUndefined(t: TopazType): TopazType | undefined {
+  if (t.kind === "undefined") return undefined;
+  if (t.kind !== "union") return t;
+  const rest = t.variants.filter((v) => v.kind !== "undefined");
+  if (rest.length === 0) return undefined;
+  return makeUnion(rest);
+}
+
+// Structural overlap check used by `===` / `!==`: do `a` and `b` share at
+// least one common variant? `Point | undefined` and `undefined` overlap;
+// `Point | undefined` and `Circle` do not.
+function typesOverlap(a: TopazType, b: TopazType): boolean {
+  if (typeEq(a, b)) return true;
+  if (a.kind === "union") return a.variants.some((v) => typesOverlap(v, b));
+  if (b.kind === "union") return b.variants.some((v) => typesOverlap(a, v));
+  return false;
 }
 
 function arrayElem(t: TopazType): TopazType | undefined {
@@ -96,6 +143,7 @@ function typeEq(a: TopazType, b: TopazType): boolean {
     case "number":
     case "boolean":
     case "string":
+    case "undefined":
       return true;
     case "array":
       return typeEq(a.elem, (b as Extract<TopazType, { kind: "array" }>).elem);
@@ -109,13 +157,49 @@ function typeEq(a: TopazType, b: TopazType): boolean {
       return a.name === (b as Extract<TopazType, { kind: "class" }>).name;
     case "iface":
       return a.name === (b as Extract<TopazType, { kind: "iface" }>).name;
+    case "union": {
+      const bu = b as Extract<TopazType, { kind: "union" }>;
+      if (a.variants.length !== bu.variants.length) return false;
+      // variants are canonical-sorted by makeUnion, so positional compare.
+      for (let i = 0; i < a.variants.length; i++) {
+        if (!typeEq(a.variants[i]!, bu.variants[i]!)) return false;
+      }
+      return true;
+    }
   }
+}
+
+// Phase 1.5-3b: build a union, flattening nested unions, deduplicating by
+// typeKey, and sorting variants for canonical comparison. Single-variant
+// "unions" collapse to the inner type. Throws on empty input.
+function makeUnion(variants: readonly TopazType[]): TopazType {
+  const flat: TopazType[] = [];
+  for (const v of variants) {
+    if (v.kind === "union") {
+      for (const sub of v.variants) flat.push(sub);
+    } else {
+      flat.push(v);
+    }
+  }
+  const dedup = new Map<string, TopazType>();
+  for (const v of flat) dedup.set(typeKey(v), v);
+  const sorted = Array.from(dedup.values()).sort((a, b) => {
+    const ka = typeKey(a);
+    const kb = typeKey(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  if (sorted.length === 0) throw new Error("makeUnion: empty variants");
+  if (sorted.length === 1) return sorted[0]!;
+  return { kind: "union", variants: sorted };
 }
 
 // Element/value "tag" used to compose C identifiers (the bit after
 // `topaz_array_`, `topaz_set_`, the value half of `topaz_map_<K>_<V>`). For
 // scalars it's the bare name; for class/iface it carries the `class_`/`iface_`
 // prefix so we never collide with scalars or with each other.
+// Phase 1.5-3b: undefined / union cannot be a container element (the runtime
+// has no monomorph for `Array<T | undefined>` etc.); reject at this layer so
+// any caller hits a clear error rather than producing garbage identifiers.
 function elemTag(t: TopazType): string {
   switch (t.kind) {
     case "number":
@@ -126,8 +210,12 @@ function elemTag(t: TopazType): string {
       return `class_${t.name}`;
     case "iface":
       return `iface_${t.name}`;
+    case "undefined":
+      throw new Error("elemTag: bare undefined cannot be a container element");
+    case "union":
+      throw new Error(`elemTag: union ${typeIdent(t)} cannot be a container element (1.5-3b)`);
     default:
-      throw new Error(`elemTag: container element kind=${t.kind} is unsupported (no nested containers yet)`);
+      throw new Error(`elemTag: container element kind=${(t as TopazType).kind} is unsupported (no nested containers yet)`);
   }
 }
 
@@ -159,12 +247,17 @@ function setShortName(t: TopazType): string {
 // Canonical C identifier for a type — the same string the pre-1.4c-3 string
 // union used as its value. Used both as the C type name (for non-reference
 // types) and as the display form in error messages and Map/Set keys.
+// Phase 1.5-3b: `topaz_undefined` for the sentinel, `topaz_union_a_or_b` for
+// canonical-sorted unions (used as a typeKey, not as a C type — the C side
+// for `T | undefined` collapses to T's representation in cTypeName).
 function typeIdent(t: TopazType): string {
   switch (t.kind) {
     case "number":
     case "boolean":
     case "string":
       return `topaz_${t.kind}`;
+    case "undefined":
+      return `topaz_undefined`;
     case "array":
       return `topaz_array_${arrayShortName(t)}`;
     case "map":
@@ -175,6 +268,8 @@ function typeIdent(t: TopazType): string {
       return `topaz_class_${t.name}`;
     case "iface":
       return `topaz_iface_${t.name}`;
+    case "union":
+      return `topaz_union_${t.variants.map((v) => typeIdent(v).slice("topaz_".length)).join("_or_")}`;
   }
 }
 
@@ -186,7 +281,28 @@ function typeKey(t: TopazType): string {
 // C type used in declarations and signatures. Reference types (Array/Map/Set
 // /Class) are pointers so assignment shares storage. Interfaces are passed by
 // value as fat pointer structs (struct topaz_iface_X with embedded data ptr).
+// Phase 1.5-3b: `T | undefined` collapses to T's C representation — reference
+// T uses NULL pointer as undefined; interface T uses { data == NULL, vt == 0 }
+// as undefined (the fat pointer keeps both fields zero on undefined). scalar
+// T | undefined is rejected here (no usable sentinel; 1.5-3c will introduce a
+// struct for `Map.get` to return). Bare `undefined` has no C representation.
 function cTypeName(t: TopazType): string {
+  if (t.kind === "undefined") {
+    throw new Error("cTypeName: bare `undefined` has no C representation (only `T | undefined` does)");
+  }
+  if (t.kind === "union") {
+    const nonUndef = t.variants.filter((v) => v.kind !== "undefined");
+    if (nonUndef.length !== 1) {
+      throw new Error(`cTypeName: union ${typeIdent(t)} is not \`T | undefined\` (1.5-3b only supports T | undefined)`);
+    }
+    const inner = nonUndef[0]!;
+    if (!isReferenceType(inner) && inner.kind !== "iface") {
+      throw new Error(
+        `cTypeName: \`T | undefined\` requires T to be a reference type (array/map/set/class) or interface; got ${typeIdent(inner)} (scalar | undefined is deferred to 1.5-3c)`,
+      );
+    }
+    return cTypeName(inner);
+  }
   if (isInterfaceType(t)) return typeIdent(t);
   return isReferenceType(t) ? `${typeIdent(t)} *` : typeIdent(t);
 }
@@ -231,13 +347,19 @@ function validateExportableModifiers(
 
 class Scope {
   private stack: Map<string, Binding>[] = [new Map()];
+  // Phase 1.5-3d: parallel narrowing overlay. Each frame holds optional
+  // narrowed types for already-declared identifiers; lookup prefers the
+  // innermost narrowing at-or-above the binding's frame.
+  private narrowings: Map<string, TopazType>[] = [new Map()];
 
   push(): void {
     this.stack.push(new Map());
+    this.narrowings.push(new Map());
   }
 
   pop(): void {
     this.stack.pop();
+    this.narrowings.pop();
   }
 
   declare(name: string, type: TopazType, isConst: boolean, node: ts.Node): void {
@@ -251,9 +373,22 @@ class Scope {
   lookup(name: string): Binding | undefined {
     for (let i = this.stack.length - 1; i >= 0; i--) {
       const b = this.stack[i]!.get(name);
-      if (b) return b;
+      if (b) {
+        for (let j = this.narrowings.length - 1; j >= i; j--) {
+          const n = this.narrowings[j]!.get(name);
+          if (n) return { type: n, isConst: b.isConst };
+        }
+        return b;
+      }
     }
     return undefined;
+  }
+
+  // Phase 1.5-3d: install a narrowed type for an existing identifier on the
+  // current top frame. Caller is responsible for pushing a new frame first
+  // (typically via `push()` before entering an if-branch).
+  narrow(name: string, type: TopazType): void {
+    this.narrowings[this.narrowings.length - 1]!.set(name, type);
   }
 }
 
@@ -1020,8 +1155,45 @@ class Emitter {
         `class '${info.name}' has fields but no constructor; add an explicit constructor`,
       );
     }
+    // Phase 1.5-3a: --strictPropertyInitialization 相当。constructor body の
+    // top-level で `this.f = ...` 代入される field を集め、全 field がカバー
+    // されていなければエラー。制御フロー (if/for/while/try/switch) 内の代入
+    // は保守的に「無代入」扱い (1.5-3 で flow narrowing が入った後で再評価)。
+    // generic class の monomorph 経路 (infoOverride) は同じ ctor decl を見る
+    // ので結果が同じになるため skip する。
+    if (!infoOverride) {
+      this.verifyDefiniteFieldInit(info);
+    }
     for (const ifaceName of info.implements) {
       this.verifyImplements(info, this.interfaces.get(ifaceName)!, cls);
+    }
+  }
+
+  private verifyDefiniteFieldInit(info: ClassInfo): void {
+    if (info.fields.size === 0) return;
+    if (!info.ctor) return; // field-without-ctor は上で報告済み
+    const assigned = new Set<string>();
+    this.collectDefiniteFieldAssignments(info.ctor.decl.body!, assigned);
+    for (const fname of info.fieldOrder) {
+      if (!assigned.has(fname)) {
+        throw new CodegenError(
+          info.ctor.decl,
+          `field '${info.name}.${fname}' is not definitely assigned in the constructor (assign it directly under the constructor body — control-flow inside if/for/while/try is not analyzed yet)`,
+        );
+      }
+    }
+  }
+
+  private collectDefiniteFieldAssignments(body: ts.Block, out: Set<string>): void {
+    for (const s of body.statements) {
+      if (!ts.isExpressionStatement(s)) continue;
+      if (!ts.isBinaryExpression(s.expression)) continue;
+      const e = s.expression;
+      if (e.operatorToken.kind !== ts.SyntaxKind.EqualsToken) continue;
+      if (!ts.isPropertyAccessExpression(e.left)) continue;
+      if (e.left.expression.kind !== ts.SyntaxKind.ThisKeyword) continue;
+      if (!ts.isIdentifier(e.left.name)) continue;
+      out.add(e.left.name.text);
     }
   }
 
@@ -1337,6 +1509,17 @@ class Emitter {
     if (node.kind === ts.SyntaxKind.NumberKeyword) return T_NUMBER;
     if (node.kind === ts.SyntaxKind.BooleanKeyword) return T_BOOLEAN;
     if (node.kind === ts.SyntaxKind.StringKeyword) return T_STRING;
+    if (node.kind === ts.SyntaxKind.UndefinedKeyword) return T_UNDEFINED;
+    if (ts.isParenthesizedTypeNode(node)) {
+      return this.typeFromAnnotation(node.type, anchor);
+    }
+    // Phase 1.5-3b: `T | undefined` only. cTypeName enforces the shape; we
+    // accept any union here so error messages can say "scalar | undefined is
+    // deferred to 1.5-3c" instead of "unsupported type".
+    if (ts.isUnionTypeNode(node)) {
+      const variants = node.types.map((t) => this.typeFromAnnotation(t, t));
+      return makeUnion(variants);
+    }
     if (ts.isArrayTypeNode(node)) {
       const elem = this.typeFromAnnotation(node.elementType, node);
       const arr = arrayOf(elem);
@@ -1740,8 +1923,84 @@ class Emitter {
 
   private emitBlock(block: ts.Block, indent: number): string {
     const pad = "  ".repeat(indent);
-    const lines = block.statements.map((s) => this.emitStatement(s, indent + 1));
+    const lines: string[] = [];
+    for (const s of block.statements) {
+      lines.push(this.emitStatement(s, indent + 1));
+      // Phase 1.5-3d: early-exit narrowing. If `s` is `if (cond) { exits }`
+      // (and optionally an else that does not exit), the rest of this block
+      // sees `cond`'s opposite polarity narrowing.
+      this.applyCarryNarrowing(s);
+    }
     return `${pad}{\n${lines.join("\n")}\n${pad}}`;
+  }
+
+  // Phase 1.5-3d: when an `if` (without continuation) always exits one branch,
+  // any narrowing implied by the opposite polarity carries forward in the
+  // enclosing block.
+  private applyCarryNarrowing(stmt: ts.Statement): void {
+    if (!ts.isIfStatement(stmt)) return;
+    const thenExits = this.alwaysExits(stmt.thenStatement);
+    const elseExits = stmt.elseStatement ? this.alwaysExits(stmt.elseStatement) : false;
+    let carryPolarity: boolean | undefined;
+    if (thenExits && !stmt.elseStatement) carryPolarity = false;
+    else if (thenExits && !elseExits) carryPolarity = false;
+    else if (!thenExits && elseExits) carryPolarity = true;
+    else return;
+    const n = this.extractNarrowing(stmt.expression, carryPolarity);
+    if (n) this.scope.narrow(n.name, n.type);
+  }
+
+  // Phase 1.5-3d: conservative "this statement always exits the enclosing
+  // function/loop" predicate. Used for early-return narrowing only — false
+  // negatives just disable narrowing, never produce wrong code.
+  private alwaysExits(stmt: ts.Statement): boolean {
+    if (ts.isReturnStatement(stmt)) return true;
+    if (ts.isThrowStatement(stmt)) return true;
+    if (ts.isBreakStatement(stmt)) return true;
+    if (ts.isContinueStatement(stmt)) return true;
+    if (ts.isBlock(stmt)) {
+      if (stmt.statements.length === 0) return false;
+      return this.alwaysExits(stmt.statements[stmt.statements.length - 1]!);
+    }
+    if (ts.isIfStatement(stmt) && stmt.elseStatement) {
+      return this.alwaysExits(stmt.thenStatement) && this.alwaysExits(stmt.elseStatement);
+    }
+    return false;
+  }
+
+  // Phase 1.5-3d: parse `x !== undefined` / `x === undefined` (either argument
+  // order) into a single-identifier narrowing. `polarity = true` means the
+  // expression is true (then-branch); `false` is else-branch / inverted carry.
+  // Returns undefined when no narrowing can be inferred.
+  private extractNarrowing(
+    cond: ts.Expression,
+    polarity: boolean,
+  ): { name: string; type: TopazType } | undefined {
+    if (!ts.isBinaryExpression(cond)) return undefined;
+    const tok = cond.operatorToken.kind;
+    if (
+      tok !== ts.SyntaxKind.EqualsEqualsEqualsToken &&
+      tok !== ts.SyntaxKind.ExclamationEqualsEqualsToken
+    ) {
+      return undefined;
+    }
+    const leftIsUndef = ts.isIdentifier(cond.left) && cond.left.text === "undefined";
+    const rightIsUndef = ts.isIdentifier(cond.right) && cond.right.text === "undefined";
+    if (leftIsUndef === rightIsUndef) return undefined;
+    const varNode = leftIsUndef ? cond.right : cond.left;
+    if (!ts.isIdentifier(varNode)) return undefined;
+    const b = this.scope.lookup(varNode.text);
+    if (!b) return undefined;
+    if (!containsUndefined(b.type)) return undefined;
+    // Strip-undefined when `(x !== undefined)` is true, or `(x === undefined)` is false.
+    const stripUndef =
+      (tok === ts.SyntaxKind.ExclamationEqualsEqualsToken) === polarity;
+    if (stripUndef) {
+      const inner = withoutUndefined(b.type);
+      if (!inner) return undefined;
+      return { name: varNode.text, type: inner };
+    }
+    return { name: varNode.text, type: T_UNDEFINED };
   }
 
   private emitStatement(stmt: ts.Statement, indent: number): string {
@@ -1766,10 +2025,14 @@ class Emitter {
     if (ts.isIfStatement(stmt)) {
       this.expectType(stmt.expression, T_BOOLEAN);
       const cond = this.emitExpression(stmt.expression);
-      const thenStr = this.emitStatementAsBlock(stmt.thenStatement, indent);
+      // Phase 1.5-3d: extract narrowings BEFORE emitting branches so each
+      // side sees the right narrowed view of the variable.
+      const thenN = this.extractNarrowing(stmt.expression, true);
+      const elseN = this.extractNarrowing(stmt.expression, false);
+      const thenStr = this.emitStatementAsBlock(stmt.thenStatement, indent, thenN);
       let out = `${pad}if (${cond}) ${thenStr.trimStart()}`;
       if (stmt.elseStatement) {
-        const elseStr = this.emitStatementAsBlock(stmt.elseStatement, indent);
+        const elseStr = this.emitStatementAsBlock(stmt.elseStatement, indent, elseN);
         out += ` else ${elseStr.trimStart()}`;
       }
       return out;
@@ -1972,15 +2235,21 @@ class Emitter {
     for (const s of block.statements) walk(s);
   }
 
-  private emitStatementAsBlock(stmt: ts.Statement, indent: number): string {
+  private emitStatementAsBlock(
+    stmt: ts.Statement,
+    indent: number,
+    narrow?: { name: string; type: TopazType },
+  ): string {
     const pad = "  ".repeat(indent);
     if (ts.isBlock(stmt)) {
       this.scope.push();
+      if (narrow) this.scope.narrow(narrow.name, narrow.type);
       const out = this.emitBlock(stmt, indent);
       this.scope.pop();
       return out;
     }
     this.scope.push();
+    if (narrow) this.scope.narrow(narrow.name, narrow.type);
     const inner = this.emitStatement(stmt, indent + 1);
     this.scope.pop();
     return `${pad}{\n${inner}\n${pad}}`;
@@ -2413,6 +2682,27 @@ class Emitter {
         const inner = `topaz_string_eq(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
         return tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? inner : `(!${inner})`;
       }
+      // Phase 1.5-3b: `x === undefined` / `x !== undefined` on `T | undefined`.
+      // For interface | undefined the fat pointer's .data is the sentinel;
+      // for reference T | undefined the pointer itself is.
+      if (
+        tok === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+        tok === ts.SyntaxKind.ExclamationEqualsEqualsToken
+      ) {
+        const leftIsUndef = ts.isIdentifier(expr.left) && expr.left.text === "undefined";
+        const rightIsUndef = ts.isIdentifier(expr.right) && expr.right.text === "undefined";
+        if (leftIsUndef !== rightIsUndef) {
+          const valueExpr = leftIsUndef ? expr.right : expr.left;
+          const t = this.inferType(valueExpr);
+          const inner = withoutUndefined(t);
+          const op = tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? "==" : "!=";
+          const valStr = this.emitExpression(valueExpr);
+          if (inner && isInterfaceType(inner)) {
+            return `((${valStr}).data ${op} NULL)`;
+          }
+          return `((${valStr}) ${op} NULL)`;
+        }
+      }
       const op = this.binaryOp(expr.operatorToken);
       return `(${this.emitExpression(expr.left)} ${op} ${this.emitExpression(expr.right)})`;
     }
@@ -2688,8 +2978,14 @@ class Emitter {
       }
       const arg = expr.arguments[0]!;
       const t = this.inferType(arg);
+      if (t.kind === "undefined" || t.kind === "union") {
+        throw new CodegenError(
+          arg,
+          `console.log on ${typeIdent(t)} is unsupported (narrow it first; full narrowing arrives in 1.5-3d)`,
+        );
+      }
       if (isReferenceType(t) || isInterfaceType(t)) {
-        throw new CodegenError(arg, `console.log on ${t} is unsupported`);
+        throw new CodegenError(arg, `console.log on ${typeIdent(t)} is unsupported`);
       }
       const fn =
         t.kind === "boolean" ? "topaz_console_log_boolean"
@@ -2915,12 +3211,19 @@ class Emitter {
     }
     if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
     if (ts.isIdentifier(expr)) {
+      if (expr.text === "undefined") return T_UNDEFINED;
       const b = this.scope.lookup(expr.text);
       if (!b) throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
       return b.type;
     }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
+      if (baseType.kind === "union") {
+        throw new CodegenError(
+          expr,
+          `cannot access '.${expr.name.text}' on union type ${typeIdent(baseType)} — narrow it first with \`if (x !== undefined)\` (full narrowing arrives in 1.5-3d)`,
+        );
+      }
       if (baseType.kind === "string" && expr.name.text === "length") {
         return T_NUMBER;
       }
@@ -3046,7 +3349,13 @@ class Emitter {
         case ts.SyntaxKind.EqualsEqualsEqualsToken:
         case ts.SyntaxKind.ExclamationEqualsEqualsToken: {
           const lt = this.inferType(expr.left);
-          this.expectType(expr.right, lt);
+          const rt = this.inferType(expr.right);
+          if (!typesOverlap(lt, rt)) {
+            throw new CodegenError(
+              expr,
+              `type mismatch: cannot compare ${typeIdent(lt)} === ${typeIdent(rt)} (no common variant)`,
+            );
+          }
           return T_BOOLEAN;
         }
         case ts.SyntaxKind.AmpersandAmpersandToken:
@@ -3273,8 +3582,17 @@ class Emitter {
   // conversion in the language. Same-type and class -> declared-interface
   // count as assignable. (No interface -> interface, no narrowing, no scalar
   // widening — divergence from TS structural typing.)
+  // Phase 1.5-3b: union widening (T assignable to `T | undefined`) and
+  // narrowing-free union actual (every variant must be assignable to expected,
+  // used mainly to reject `T | undefined` flowing into a non-optional sink).
   private isAssignableTo(actual: TopazType, expected: TopazType): boolean {
     if (typeEq(actual, expected)) return true;
+    if (expected.kind === "union") {
+      return expected.variants.some((v) => this.isAssignableTo(actual, v));
+    }
+    if (actual.kind === "union") {
+      return actual.variants.every((v) => this.isAssignableTo(v, expected));
+    }
     if (isInterfaceType(expected) && isClassType(actual)) {
       return this.classImplements(classNameOf(actual)!, interfaceNameOf(expected)!);
     }
@@ -3286,6 +3604,12 @@ class Emitter {
   // helper at every value-passing site (variable init, call argument, return
   // statement, assignment RHS) where the expected type is known.
   private emitWithExpected(expr: ts.Expression, expected: TopazType): string {
+    // Phase 1.5-3b: the literal `undefined` lowers based on the expected
+    // container type (NULL pointer for reference, fat pointer with .data=NULL
+    // for interface). Without a `T | undefined` expected this is a type error.
+    if (ts.isIdentifier(expr) && expr.text === "undefined") {
+      return this.emitUndefinedLiteral(expected, expr);
+    }
     if (ts.isArrayLiteralExpression(expr)) {
       // Array literal element types aren't interfaces (no Array<Interface> in
       // 1.4b), so no coercion is needed at the array itself.
@@ -3315,8 +3639,49 @@ class Emitter {
     return this.applyCoercion(raw, actual, expected, expr);
   }
 
+  // Phase 1.5-3b: lower the literal `undefined` for an expected `T | undefined`
+  // (or bare `undefined`) target. Caller must have already type-checked.
+  private emitUndefinedLiteral(expected: TopazType, anchor: ts.Node): string {
+    if (expected.kind === "undefined") {
+      // Bare `undefined` target has no observable C representation; emit NULL
+      // as a placeholder (the value is never read because nothing else can be
+      // assigned to a bare-undefined slot).
+      return "NULL";
+    }
+    if (expected.kind === "union" && containsUndefined(expected)) {
+      const inner = withoutUndefined(expected);
+      if (!inner) {
+        throw new CodegenError(anchor, `cannot lower \`undefined\` for type ${typeIdent(expected)}`);
+      }
+      if (isInterfaceType(inner)) {
+        const iname = interfaceNameOf(inner)!;
+        return `((topaz_iface_${iname}){ .data = NULL, .vt = NULL })`;
+      }
+      if (isReferenceType(inner)) {
+        return `((${cTypeName(inner)})NULL)`;
+      }
+      throw new CodegenError(
+        anchor,
+        `cannot use \`undefined\` for type ${typeIdent(expected)} (scalar | undefined is deferred to 1.5-3c)`,
+      );
+    }
+    throw new CodegenError(
+      anchor,
+      `type mismatch: expected ${typeIdent(expected)}, got undefined`,
+    );
+  }
+
   private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: ts.Node): string {
     if (typeEq(actual, expected)) return raw;
+    // Phase 1.5-3b: widening T -> `T | undefined`. For reference/interface
+    // representations the C value is identical (a pointer or a fat pointer),
+    // so coercion is a no-op once the inner type matches.
+    if (expected.kind === "union" && containsUndefined(expected)) {
+      const inner = withoutUndefined(expected);
+      if (inner && this.isAssignableTo(actual, inner)) {
+        return this.applyCoercion(raw, actual, inner, anchor);
+      }
+    }
     if (isInterfaceType(expected) && isClassType(actual)) {
       const iname = interfaceNameOf(expected)!;
       const cname = classNameOf(actual)!;
