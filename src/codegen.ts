@@ -283,9 +283,11 @@ function typeKey(t: TopazType): string {
 // value as fat pointer structs (struct topaz_iface_X with embedded data ptr).
 // Phase 1.5-3b: `T | undefined` collapses to T's C representation — reference
 // T uses NULL pointer as undefined; interface T uses { data == NULL, vt == 0 }
-// as undefined (the fat pointer keeps both fields zero on undefined). scalar
-// T | undefined is rejected here (no usable sentinel; 1.5-3c will introduce a
-// struct for `Map.get` to return). Bare `undefined` has no C representation.
+// as undefined (the fat pointer keeps both fields zero on undefined).
+// Phase 1.5-3c: scalar `T | undefined` is represented by the sentinel struct
+// `topaz_opt_<scalar>` (defined in runtime.h). `.present` carries the bit,
+// `.value` carries the scalar; identifier emission appends `.value` after
+// narrowing strips the undefined variant.
 function cTypeName(t: TopazType): string {
   if (t.kind === "undefined") {
     throw new Error("cTypeName: bare `undefined` has no C representation (only `T | undefined` does)");
@@ -296,15 +298,27 @@ function cTypeName(t: TopazType): string {
       throw new Error(`cTypeName: union ${typeIdent(t)} is not \`T | undefined\` (1.5-3b only supports T | undefined)`);
     }
     const inner = nonUndef[0]!;
+    if (isScalarType(inner)) {
+      return `topaz_opt_${inner.kind}`;
+    }
     if (!isReferenceType(inner) && inner.kind !== "iface") {
       throw new Error(
-        `cTypeName: \`T | undefined\` requires T to be a reference type (array/map/set/class) or interface; got ${typeIdent(inner)} (scalar | undefined is deferred to 1.5-3c)`,
+        `cTypeName: \`T | undefined\` requires T to be a scalar, reference (array/map/set/class), or interface; got ${typeIdent(inner)}`,
       );
     }
     return cTypeName(inner);
   }
   if (isInterfaceType(t)) return typeIdent(t);
   return isReferenceType(t) ? `${typeIdent(t)} *` : typeIdent(t);
+}
+
+// Phase 1.5-3c: helpers for the scalar `T | undefined` representation. The
+// underlying C type is the `topaz_opt_<scalar>` struct, so narrowed reads
+// need a `.value` accessor and `=== undefined` lowers to `.present == false`.
+function isScalarOptUnion(t: TopazType): boolean {
+  if (t.kind !== "union") return false;
+  const inner = withoutUndefined(t);
+  return inner !== undefined && isScalarType(inner);
 }
 
 type Binding = { type: TopazType; isConst: boolean };
@@ -380,6 +394,18 @@ class Scope {
         }
         return b;
       }
+    }
+    return undefined;
+  }
+
+  // Phase 1.5-3c: look up the original (un-narrowed) binding. Identifier
+  // emission needs both: `lookup` for the logical type, `lookupBase` to know
+  // the C representation (for scalar opt structs, narrowed reads append
+  // `.value` while assignments target the whole struct).
+  lookupBase(name: string): Binding | undefined {
+    for (let i = this.stack.length - 1; i >= 0; i--) {
+      const b = this.stack[i]!.get(name);
+      if (b) return b;
     }
     return undefined;
   }
@@ -719,6 +745,13 @@ class Emitter {
         out.push(
           `typedef struct topaz_iface_${n} { void *data; const struct topaz_iface_${n}_vt *vt; } topaz_iface_${n};`,
         );
+        // Phase 1.5-3c: per-iface "absent" macro for Map<K, I> _get's miss
+        // sentinel. Defined here so any map monomorph below can reference it
+        // by token without re-emitting the compound literal (which would
+        // mis-parse inside the TOPAZ_MAP_DEFINE arg list due to the comma).
+        out.push(
+          `#define topaz_iface_${n}_absent ((topaz_iface_${n}){ NULL, NULL })`,
+        );
       }
       out.push("");
     }
@@ -969,6 +1002,11 @@ class Emitter {
   // Phase 1.4c-1b: expand TOPAZ_MAP_DEFINE for scalar-keyed maps whose value
   // type is a class or interface. The key still uses the scalar hash/eq from
   // runtime.h; only the value type changes.
+  // Phase 1.5-3c: scalar V monomorphs are pre-expanded in runtime.h, so this
+  // path only sees class / interface V. Both reuse the same C type as the
+  // optional (NULL ptr / .data == NULL is the sentinel), so `opt_t = val_t`
+  // and `opt_wrap = topaz_opt_passthrough`. Iface absent uses the per-iface
+  // helper macro emitted alongside the iface typedef.
   private emitMapMonomorphMacro(t: TopazType): string {
     const tag = mapShortName(t);
     const k = mapKey(t)!;
@@ -979,7 +1017,15 @@ class Emitter {
     // SameValueZero-aware topaz_key_eq_* wrappers from runtime.h.
     const eqFn = kShort === "string" ? "topaz_string_eq" : `topaz_key_eq_${kShort}`;
     const cVal = this.cElemTypeForContainer(v);
-    return `TOPAZ_MAP_DEFINE(${tag}, ${typeIdent(k)}, ${cVal}, ${hashFn}, ${eqFn})`;
+    let optAbsent: string;
+    if (isClassType(v)) {
+      optAbsent = "NULL";
+    } else if (isInterfaceType(v)) {
+      optAbsent = `topaz_iface_${interfaceNameOf(v)!}_absent`;
+    } else {
+      throw new Error(`emitMapMonomorphMacro: scalar V should be pre-expanded in runtime.h, got ${typeIdent(v)}`);
+    }
+    return `TOPAZ_MAP_DEFINE(${tag}, ${typeIdent(k)}, ${cVal}, ${cVal}, topaz_opt_passthrough, ${optAbsent}, ${hashFn}, ${eqFn})`;
   }
 
   // Phase 1.4c-1b: expand TOPAZ_SET_DEFINE for class/interface element sets.
@@ -2501,8 +2547,17 @@ class Emitter {
       return this.emitStringLiteral(expr);
     }
     if (ts.isIdentifier(expr)) {
-      if (!this.scope.lookup(expr.text)) {
+      const b = this.scope.lookup(expr.text);
+      if (!b) {
         throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
+      }
+      // Phase 1.5-3c: when the binding's C representation is the scalar opt
+      // struct (`topaz_opt_<scalar>`) but narrowing has stripped the
+      // `undefined` variant, reads must reach through `.value`. Reference /
+      // interface T | undefined share T's C type, so no accessor is needed.
+      const base = this.scope.lookupBase(expr.text)!;
+      if (isScalarOptUnion(base.type) && !typeEq(base.type, b.type)) {
+        return `(${expr.text}).value`;
       }
       return expr.text;
     }
@@ -2685,6 +2740,12 @@ class Emitter {
       // Phase 1.5-3b: `x === undefined` / `x !== undefined` on `T | undefined`.
       // For interface | undefined the fat pointer's .data is the sentinel;
       // for reference T | undefined the pointer itself is.
+      // Phase 1.5-3c: scalar `T | undefined` is an opt struct whose `.present`
+      // bit carries the sentinel — `x === undefined` lowers to
+      // `.present == false`. The check only fires on unnarrowed values
+      // (narrowing strips the undefined variant first, after which the
+      // typesOverlap guard in inferType rejects the comparison), so
+      // emitExpression on an identifier always yields the bare struct.
       if (
         tok === ts.SyntaxKind.EqualsEqualsEqualsToken ||
         tok === ts.SyntaxKind.ExclamationEqualsEqualsToken
@@ -2697,10 +2758,14 @@ class Emitter {
           const inner = withoutUndefined(t);
           const op = tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? "==" : "!=";
           const valStr = this.emitExpression(valueExpr);
-          if (inner && isInterfaceType(inner)) {
-            return `((${valStr}).data ${op} NULL)`;
+          if (inner && isScalarType(inner)) {
+            const want = tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? "false" : "true";
+            return `${valStr}.present == ${want}`;
           }
-          return `((${valStr}) ${op} NULL)`;
+          if (inner && isInterfaceType(inner)) {
+            return `${valStr}.data ${op} NULL`;
+          }
+          return `${valStr} ${op} NULL`;
         }
       }
       const op = this.binaryOp(expr.operatorToken);
@@ -2981,7 +3046,7 @@ class Emitter {
       if (t.kind === "undefined" || t.kind === "union") {
         throw new CodegenError(
           arg,
-          `console.log on ${typeIdent(t)} is unsupported (narrow it first; full narrowing arrives in 1.5-3d)`,
+          `console.log on ${typeIdent(t)} is unsupported (narrow it with \`if (x !== undefined)\` first)`,
         );
       }
       if (isReferenceType(t) || isInterfaceType(t)) {
@@ -3221,7 +3286,7 @@ class Emitter {
       if (baseType.kind === "union") {
         throw new CodegenError(
           expr,
-          `cannot access '.${expr.name.text}' on union type ${typeIdent(baseType)} — narrow it first with \`if (x !== undefined)\` (full narrowing arrives in 1.5-3d)`,
+          `cannot access '.${expr.name.text}' on union type ${typeIdent(baseType)} — narrow it first with \`if (x !== undefined)\``,
         );
       }
       if (baseType.kind === "string" && expr.name.text === "length") {
@@ -3426,7 +3491,11 @@ class Emitter {
           if (m === "set") {
             throw new CodegenError(expr, "Map.set returns void in this dialect and cannot be used as a value");
           }
-          if (m === "get") return v;
+          // Phase 1.5-3c: Map.get returns `V | undefined`. Callers must narrow
+          // with `if (x !== undefined)` before using as V; the runtime returns
+          // an opt struct for scalar V and a NULL-sentinel pointer / fat
+          // pointer for class / iface V.
+          if (m === "get") return makeUnion([v, T_UNDEFINED]);
           if (m === "has" || m === "delete") return T_BOOLEAN;
           throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
@@ -3641,6 +3710,8 @@ class Emitter {
 
   // Phase 1.5-3b: lower the literal `undefined` for an expected `T | undefined`
   // (or bare `undefined`) target. Caller must have already type-checked.
+  // Phase 1.5-3c: scalar `T | undefined` lowers to the predefined absent opt
+  // struct (`topaz_opt_absent_<scalar>`).
   private emitUndefinedLiteral(expected: TopazType, anchor: ts.Node): string {
     if (expected.kind === "undefined") {
       // Bare `undefined` target has no observable C representation; emit NULL
@@ -3653,16 +3724,19 @@ class Emitter {
       if (!inner) {
         throw new CodegenError(anchor, `cannot lower \`undefined\` for type ${typeIdent(expected)}`);
       }
+      if (isScalarType(inner)) {
+        return `topaz_opt_absent_${inner.kind}`;
+      }
       if (isInterfaceType(inner)) {
         const iname = interfaceNameOf(inner)!;
-        return `((topaz_iface_${iname}){ .data = NULL, .vt = NULL })`;
+        return `topaz_iface_${iname}_absent`;
       }
       if (isReferenceType(inner)) {
         return `((${cTypeName(inner)})NULL)`;
       }
       throw new CodegenError(
         anchor,
-        `cannot use \`undefined\` for type ${typeIdent(expected)} (scalar | undefined is deferred to 1.5-3c)`,
+        `cannot use \`undefined\` for type ${typeIdent(expected)}`,
       );
     }
     throw new CodegenError(
@@ -3673,13 +3747,19 @@ class Emitter {
 
   private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: ts.Node): string {
     if (typeEq(actual, expected)) return raw;
-    // Phase 1.5-3b: widening T -> `T | undefined`. For reference/interface
+    // Phase 1.5-3b: widening T -> `T | undefined`. For reference / interface
     // representations the C value is identical (a pointer or a fat pointer),
     // so coercion is a no-op once the inner type matches.
+    // Phase 1.5-3c: widening a scalar T into `T | undefined` wraps the value
+    // in the opt struct via `topaz_opt_wrap_<scalar>`.
     if (expected.kind === "union" && containsUndefined(expected)) {
       const inner = withoutUndefined(expected);
       if (inner && this.isAssignableTo(actual, inner)) {
-        return this.applyCoercion(raw, actual, inner, anchor);
+        const coerced = this.applyCoercion(raw, actual, inner, anchor);
+        if (isScalarType(inner)) {
+          return `topaz_opt_wrap_${inner.kind}(${coerced})`;
+        }
+        return coerced;
       }
     }
     if (isInterfaceType(expected) && isClassType(actual)) {

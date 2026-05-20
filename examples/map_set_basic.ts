@@ -1,14 +1,22 @@
+// Phase 1.5-3c: Map.get returns `V | undefined`. Narrow with `if (x !== undefined)`
+// before using; bare reads are now a type error.
 let m: Map<string, number> = new Map<string, number>();
 m.set("alpha", 1);
 m.set("beta", 2);
 m.set("gamma", 3);
 console.log(m.size);
-console.log(m.get("beta"));
+const g1: number | undefined = m.get("beta");
+if (g1 !== undefined) {
+  console.log(g1);
+}
 console.log(m.has("alpha"));
 console.log(m.has("delta"));
 
 m.set("alpha", 10);
-console.log(m.get("alpha"));
+const g2: number | undefined = m.get("alpha");
+if (g2 !== undefined) {
+  console.log(g2);
+}
 
 let removed: boolean = m.delete("beta");
 console.log(removed);
@@ -32,8 +40,14 @@ console.log(s.has(2));
 let bm: Map<boolean, string> = new Map<boolean, string>();
 bm.set(true, "yes");
 bm.set(false, "no");
-console.log(bm.get(true));
-console.log(bm.get(false));
+const gbt: string | undefined = bm.get(true);
+if (gbt !== undefined) {
+  console.log(gbt);
+}
+const gbf: string | undefined = bm.get(false);
+if (gbf !== undefined) {
+  console.log(gbf);
+}
 
 let ns: Set<string> = new Set<string>();
 ns.add("a");
@@ -50,9 +64,18 @@ for (let i: number = 0; i < 50; i++) {
   big.set(i, i * 10);
 }
 console.log(big.size);
-console.log(big.get(25));
-console.log(big.get(49));
+const g25: number | undefined = big.get(25);
+if (g25 !== undefined) {
+  console.log(g25);
+}
+const g49: number | undefined = big.get(49);
+if (g49 !== undefined) {
+  console.log(g49);
+}
 
 let inferred: Map<string, number> = new Map();
 inferred.set("x", 7);
-console.log(inferred.get("x"));
+const gx: number | undefined = inferred.get("x");
+if (gx !== undefined) {
+  console.log(gx);
+}

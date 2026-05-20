@@ -22,6 +22,26 @@ typedef struct {
   size_t len;
 } topaz_string;
 
+// Phase 1.5-3c: sentinel-struct optionals for scalar `T | undefined`. Reference
+// and interface T | undefined collapse to T's own C representation (NULL ptr /
+// .data == NULL), so only scalars need a struct. `_wrap_*` builds a present
+// optional from a value; `_absent_*` is the missing sentinel. `_passthrough`
+// is the identity wrapper used by class/interface Map values where the
+// optional shares the underlying C type.
+typedef struct { topaz_boolean present; topaz_number  value; } topaz_opt_number;
+typedef struct { topaz_boolean present; topaz_boolean value; } topaz_opt_boolean;
+typedef struct { topaz_boolean present; topaz_string  value; } topaz_opt_string;
+
+#define topaz_opt_wrap_number(v)  ((topaz_opt_number){  true,  (v) })
+#define topaz_opt_wrap_boolean(v) ((topaz_opt_boolean){ true,  (v) })
+#define topaz_opt_wrap_string(v)  ((topaz_opt_string){  true,  (v) })
+
+#define topaz_opt_absent_number  ((topaz_opt_number){  false, 0 })
+#define topaz_opt_absent_boolean ((topaz_opt_boolean){ false, false })
+#define topaz_opt_absent_string  ((topaz_opt_string){  false, { NULL, 0 } })
+
+#define topaz_opt_passthrough(v) (v)
+
 static inline topaz_string topaz_string_concat(topaz_string a, topaz_string b) {
   size_t total = a.len + b.len;
   char *buf = (char *)malloc(total + 1);
@@ -270,7 +290,13 @@ static inline size_t topaz_hash_string(topaz_string s) {
 // Open-addressing hash table, linear probing, tombstones on delete. Grows when
 // (size + tombstones + 1) > cap * 3/4. If size hasn't grown but tombstones
 // have, rehash in place at the current cap instead of doubling.
-#define TOPAZ_MAP_DEFINE(name, key_t, val_t, hash_fn, eq_fn)                            \
+// Phase 1.5-3c: `_get` returns `opt_t`, the optional representation of `val_t`:
+// scalar V → `topaz_opt_<scalar>`, class V → `val_t` itself (NULL = absent),
+// iface V → `val_t` itself (.data == NULL = absent). `opt_wrap(v)` builds the
+// present optional from a stored slot value; `opt_absent` is the missing
+// sentinel. Macro args carry the wiring so the same macro body covers all
+// three V categories.
+#define TOPAZ_MAP_DEFINE(name, key_t, val_t, opt_t, opt_wrap, opt_absent, hash_fn, eq_fn) \
 typedef struct {                                                                       \
   uint8_t state;                                                                       \
   key_t key;                                                                           \
@@ -350,15 +376,11 @@ static inline topaz_boolean topaz_map_##name##_has(topaz_map_##name *m, key_t k)
   return m->slots[i].state == TOPAZ_HASH_SLOT_OCCUPIED;                                \
 }                                                                                      \
                                                                                        \
-static inline val_t topaz_map_##name##_get(topaz_map_##name *m, key_t k) {             \
-  if (m->cap == 0) {                                                                   \
-    fputs("topaz: map key not found\n", stderr); abort();                              \
-  }                                                                                    \
+static inline opt_t topaz_map_##name##_get(topaz_map_##name *m, key_t k) {             \
+  if (m->cap == 0) return opt_absent;                                                  \
   size_t i = topaz_map_##name##_find_slot(m->slots, m->cap, k);                        \
-  if (m->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) {                                 \
-    fputs("topaz: map key not found\n", stderr); abort();                              \
-  }                                                                                    \
-  return m->slots[i].value;                                                            \
+  if (m->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) return opt_absent;                \
+  return opt_wrap(m->slots[i].value);                                                  \
 }                                                                                      \
                                                                                        \
 static inline topaz_boolean topaz_map_##name##_delete(topaz_map_##name *m, key_t k) {  \
@@ -454,15 +476,15 @@ static inline topaz_boolean topaz_set_##name##_delete(topaz_set_##name *s, elem_
   return true;                                                                         \
 }
 
-TOPAZ_MAP_DEFINE(number_number,   topaz_number,  topaz_number,  topaz_hash_number,  topaz_key_eq_number)
-TOPAZ_MAP_DEFINE(number_boolean,  topaz_number,  topaz_boolean, topaz_hash_number,  topaz_key_eq_number)
-TOPAZ_MAP_DEFINE(number_string,   topaz_number,  topaz_string,  topaz_hash_number,  topaz_key_eq_number)
-TOPAZ_MAP_DEFINE(boolean_number,  topaz_boolean, topaz_number,  topaz_hash_boolean, topaz_key_eq_boolean)
-TOPAZ_MAP_DEFINE(boolean_boolean, topaz_boolean, topaz_boolean, topaz_hash_boolean, topaz_key_eq_boolean)
-TOPAZ_MAP_DEFINE(boolean_string,  topaz_boolean, topaz_string,  topaz_hash_boolean, topaz_key_eq_boolean)
-TOPAZ_MAP_DEFINE(string_number,   topaz_string,  topaz_number,  topaz_hash_string,  topaz_string_eq)
-TOPAZ_MAP_DEFINE(string_boolean,  topaz_string,  topaz_boolean, topaz_hash_string,  topaz_string_eq)
-TOPAZ_MAP_DEFINE(string_string,   topaz_string,  topaz_string,  topaz_hash_string,  topaz_string_eq)
+TOPAZ_MAP_DEFINE(number_number,   topaz_number,  topaz_number,  topaz_opt_number,  topaz_opt_wrap_number,  topaz_opt_absent_number,  topaz_hash_number,  topaz_key_eq_number)
+TOPAZ_MAP_DEFINE(number_boolean,  topaz_number,  topaz_boolean, topaz_opt_boolean, topaz_opt_wrap_boolean, topaz_opt_absent_boolean, topaz_hash_number,  topaz_key_eq_number)
+TOPAZ_MAP_DEFINE(number_string,   topaz_number,  topaz_string,  topaz_opt_string,  topaz_opt_wrap_string,  topaz_opt_absent_string,  topaz_hash_number,  topaz_key_eq_number)
+TOPAZ_MAP_DEFINE(boolean_number,  topaz_boolean, topaz_number,  topaz_opt_number,  topaz_opt_wrap_number,  topaz_opt_absent_number,  topaz_hash_boolean, topaz_key_eq_boolean)
+TOPAZ_MAP_DEFINE(boolean_boolean, topaz_boolean, topaz_boolean, topaz_opt_boolean, topaz_opt_wrap_boolean, topaz_opt_absent_boolean, topaz_hash_boolean, topaz_key_eq_boolean)
+TOPAZ_MAP_DEFINE(boolean_string,  topaz_boolean, topaz_string,  topaz_opt_string,  topaz_opt_wrap_string,  topaz_opt_absent_string,  topaz_hash_boolean, topaz_key_eq_boolean)
+TOPAZ_MAP_DEFINE(string_number,   topaz_string,  topaz_number,  topaz_opt_number,  topaz_opt_wrap_number,  topaz_opt_absent_number,  topaz_hash_string,  topaz_string_eq)
+TOPAZ_MAP_DEFINE(string_boolean,  topaz_string,  topaz_boolean, topaz_opt_boolean, topaz_opt_wrap_boolean, topaz_opt_absent_boolean, topaz_hash_string,  topaz_string_eq)
+TOPAZ_MAP_DEFINE(string_string,   topaz_string,  topaz_string,  topaz_opt_string,  topaz_opt_wrap_string,  topaz_opt_absent_string,  topaz_hash_string,  topaz_string_eq)
 
 TOPAZ_SET_DEFINE(number,  topaz_number,  topaz_hash_number,  topaz_key_eq_number)
 TOPAZ_SET_DEFINE(boolean, topaz_boolean, topaz_hash_boolean, topaz_key_eq_boolean)

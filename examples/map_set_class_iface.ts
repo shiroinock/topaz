@@ -1,3 +1,6 @@
+// Phase 1.5-3c: Map.get returns V | undefined; class / interface V come back
+// as the underlying pointer / fat pointer with NULL sentinel for "absent",
+// then narrow to V via `if (got !== undefined)`.
 class Counter {
   value: number;
   constructor(v: number) {
@@ -44,9 +47,15 @@ counters.set("a", new Counter(1));
 counters.set("b", new Counter(2));
 counters.set("c", new Counter(3));
 console.log(counters.size);
-console.log(counters.get("b").value);
-console.log(counters.get("a").bump(10));
-console.log(counters.get("a").value);
+const cb: Counter | undefined = counters.get("b");
+if (cb !== undefined) {
+  console.log(cb.value);
+}
+const ca: Counter | undefined = counters.get("a");
+if (ca !== undefined) {
+  console.log(ca.bump(10));
+  console.log(ca.value);
+}
 console.log(counters.has("c"));
 console.log(counters.has("z"));
 counters.delete("b");
@@ -58,13 +67,22 @@ const shapes: Map<number, Named> = new Map<number, Named>();
 shapes.set(1, new Square(3));
 shapes.set(2, new Circle(5));
 console.log(shapes.size);
-console.log(shapes.get(1).name);
-console.log(shapes.get(1).area());
-console.log(shapes.get(2).name);
-console.log(shapes.get(2).area());
+const s1a: Named | undefined = shapes.get(1);
+if (s1a !== undefined) {
+  console.log(s1a.name);
+  console.log(s1a.area());
+}
+const s2a: Named | undefined = shapes.get(2);
+if (s2a !== undefined) {
+  console.log(s2a.name);
+  console.log(s2a.area());
+}
 shapes.set(1, new Circle(2));
-console.log(shapes.get(1).name);
-console.log(shapes.get(1).area());
+const s1b: Named | undefined = shapes.get(1);
+if (s1b !== undefined) {
+  console.log(s1b.name);
+  console.log(s1b.area());
+}
 
 // Set<ClassName> — dedup by instance pointer
 const seen: Set<Counter> = new Set<Counter>();
@@ -109,7 +127,10 @@ console.log(big.size);
 // new Map() / new Set() context typing with class / interface element types.
 const inferredMap: Map<string, Counter> = new Map();
 inferredMap.set("x", new Counter(99));
-console.log(inferredMap.get("x").value);
+const ix: Counter | undefined = inferredMap.get("x");
+if (ix !== undefined) {
+  console.log(ix.value);
+}
 
 const inferredSet: Set<Named> = new Set();
 inferredSet.add(new Circle(1));

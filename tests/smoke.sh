@@ -87,6 +87,7 @@ run_case try_catch_basic $'boom\n1\nnegative\n42\n10\n7\n100\n9\nrewrapped\n2\n0
 
 run_case optional_basic $'false\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue'
 run_case optional_narrow $'10\n0\n10\n-1\n10\n0\n16\n7\n20\n99'
+run_case optional_map_get $'10\n-1\n7\n0\nalpha\nabsent\n21\n-777'
 
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
