@@ -19,17 +19,21 @@ type TopazType =
   | { kind: "boolean" }
   | { kind: "string" }
   | { kind: "undefined" }
+  | { kind: "unknown" }
+  | { kind: "string_literal"; value: string }
   | { kind: "array"; elem: TopazType }
   | { kind: "map"; key: TopazType; value: TopazType }
   | { kind: "set"; elem: TopazType }
   | { kind: "class"; name: string }
   | { kind: "iface"; name: string }
+  | { kind: "dunion"; variants: readonly string[]; discriminator: string }
   | { kind: "union"; variants: readonly TopazType[] };
 
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
 const T_UNDEFINED: TopazType = { kind: "undefined" };
+const T_UNKNOWN: TopazType = { kind: "unknown" };
 
 const TOPAZ_THIS = "__topaz_this";
 
@@ -144,7 +148,10 @@ function typeEq(a: TopazType, b: TopazType): boolean {
     case "boolean":
     case "string":
     case "undefined":
+    case "unknown":
       return true;
+    case "string_literal":
+      return a.value === (b as Extract<TopazType, { kind: "string_literal" }>).value;
     case "array":
       return typeEq(a.elem, (b as Extract<TopazType, { kind: "array" }>).elem);
     case "map": {
@@ -157,6 +164,15 @@ function typeEq(a: TopazType, b: TopazType): boolean {
       return a.name === (b as Extract<TopazType, { kind: "class" }>).name;
     case "iface":
       return a.name === (b as Extract<TopazType, { kind: "iface" }>).name;
+    case "dunion": {
+      const bd = b as Extract<TopazType, { kind: "dunion" }>;
+      if (a.discriminator !== bd.discriminator) return false;
+      if (a.variants.length !== bd.variants.length) return false;
+      for (let i = 0; i < a.variants.length; i++) {
+        if (a.variants[i] !== bd.variants[i]) return false;
+      }
+      return true;
+    }
     case "union": {
       const bu = b as Extract<TopazType, { kind: "union" }>;
       if (a.variants.length !== bu.variants.length) return false;
@@ -258,6 +274,10 @@ function typeIdent(t: TopazType): string {
       return `topaz_${t.kind}`;
     case "undefined":
       return `topaz_undefined`;
+    case "unknown":
+      return `topaz_unknown`;
+    case "string_literal":
+      return `topaz_string_literal_${t.value}`;
     case "array":
       return `topaz_array_${arrayShortName(t)}`;
     case "map":
@@ -268,6 +288,8 @@ function typeIdent(t: TopazType): string {
       return `topaz_class_${t.name}`;
     case "iface":
       return `topaz_iface_${t.name}`;
+    case "dunion":
+      return `topaz_dunion_${[...t.variants].sort().join("_or_")}`;
     case "union":
       return `topaz_union_${t.variants.map((v) => typeIdent(v).slice("topaz_".length)).join("_or_")}`;
   }
@@ -291,6 +313,18 @@ function typeKey(t: TopazType): string {
 function cTypeName(t: TopazType): string {
   if (t.kind === "undefined") {
     throw new Error("cTypeName: bare `undefined` has no C representation (only `T | undefined` does)");
+  }
+  // Phase 1.5-3f: `unknown` is only legal as a catch binding annotation, where
+  // the throw payload is `void *`. Narrowing via `instanceof` casts to the
+  // concrete class type before any field/method access.
+  if (t.kind === "unknown") {
+    return "void *";
+  }
+  if (t.kind === "string_literal") {
+    return "topaz_string";
+  }
+  if (t.kind === "dunion") {
+    return typeIdent(t);
   }
   if (t.kind === "union") {
     const nonUndef = t.variants.filter((v) => v.kind !== "undefined");
@@ -523,6 +557,10 @@ class Emitter {
   // Maps are tracked by full (K, V) tuple so we get one expansion per combo.
   private mapMonomorphs = new Map<string, TopazType>();
   private setMonomorphs = new Map<string, TopazType>();
+  // Phase 1.5-3e: discriminated class unions like `Circle | Square` are
+  // emitted as a fat pointer `{ topaz_string kind; void *data; }`. Recorded
+  // when typeFromAnnotation lowers the union, expanded in the container slot.
+  private dunionMonomorphs = new Map<string, TopazType>();
   // Phase 1.4c-2: generic function declarations (registered but not signed
   // until a call site supplies type arguments), realized monomorphs keyed by
   // mangled name, and a worklist for monomorphs whose body still needs to be
@@ -556,6 +594,59 @@ class Emitter {
     if (!isSetType(t)) return;
     if (isScalarType(setElem(t)!)) return; // runtime.h preexpands scalar element sets
     this.setMonomorphs.set(typeKey(t), t);
+  }
+
+  private recordDunionMonomorph(t: TopazType): void {
+    if (t.kind !== "dunion") return;
+    this.dunionMonomorphs.set(typeKey(t), t);
+  }
+
+  // Phase 1.5-3e: union of class types with shared `kind: "literal"`
+  // discriminator collapses into a `dunion`. Returns undefined if the union
+  // is not a discriminated class union (caller falls back to general union).
+  private tryMakeDiscriminatedUnion(
+    variants: readonly TopazType[],
+    anchor: ts.Node,
+  ): TopazType | undefined {
+    if (variants.length < 2) return undefined;
+    if (!variants.every((v) => v.kind === "class")) return undefined;
+    const discriminator = "kind";
+    const classNames: string[] = [];
+    const seenLiterals = new Set<string>();
+    for (const v of variants) {
+      const name = (v as Extract<TopazType, { kind: "class" }>).name;
+      const cls = this.classes.get(name);
+      if (!cls) return undefined;
+      const field = cls.fields.get(discriminator);
+      if (!field || field.kind !== "string_literal") return undefined;
+      if (seenLiterals.has(field.value)) {
+        throw new CodegenError(
+          anchor,
+          `discriminated union: classes '${[...seenLiterals].join("', '")}' and '${name}' both use kind=\"${field.value}\"`,
+        );
+      }
+      seenLiterals.add(field.value);
+      classNames.push(name);
+    }
+    classNames.sort();
+    const d: TopazType = { kind: "dunion", variants: classNames, discriminator };
+    this.recordDunionMonomorph(d);
+    return d;
+  }
+
+  // Lookup the string literal value that class `cls` assigns to its
+  // discriminator field. Validated at field collection (string_literal type).
+  private dunionLiteralFor(unionType: TopazType, cls: string): string {
+    if (unionType.kind !== "dunion") {
+      throw new Error("dunionLiteralFor: not a dunion");
+    }
+    const info = this.classes.get(cls);
+    if (!info) throw new Error(`dunionLiteralFor: unknown class '${cls}'`);
+    const field = info.fields.get(unionType.discriminator);
+    if (!field || field.kind !== "string_literal") {
+      throw new Error(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
+    }
+    return field.value;
   }
 
   emit(sourceFiles: readonly ts.SourceFile[]): string {
@@ -943,9 +1034,20 @@ class Emitter {
     if (
       this.arrayMonomorphs.size > 0 ||
       this.mapMonomorphs.size > 0 ||
-      this.setMonomorphs.size > 0
+      this.setMonomorphs.size > 0 ||
+      this.dunionMonomorphs.size > 0
     ) {
       const sections: string[] = [];
+      // Phase 1.5-3e: discriminated class unions lower to a `{ topaz_string
+      // kind; void *data; }` fat pointer. Emit the typedef before any
+      // container macros so map/array monomorphs can carry dunion values
+      // (not used yet, but cheap insurance against ordering surprises).
+      const dunionLines: string[] = [];
+      for (const t of this.dunionMonomorphs.values()) {
+        dunionLines.push(this.emitDunionTypedef(t));
+      }
+      if (dunionLines.length > 0) sections.push(dunionLines.join("\n"));
+
       // Set<class>/Set<interface> need a typed hash/eq pair before
       // TOPAZ_SET_DEFINE can reference them; emit those first.
       const setElemKeys = new Set<string>();
@@ -1048,6 +1150,18 @@ class Emitter {
       throw new Error(`unexpected set element type ${typeIdent(elem)} for monomorph emission`);
     }
     return `TOPAZ_SET_DEFINE(${tag}, ${cElem}, ${hashFn}, ${eqFn})`;
+  }
+
+  // Phase 1.5-3e: emit `typedef struct { topaz_string kind; void *data; }
+  // topaz_dunion_A_or_B;` for a class union with a shared string-literal
+  // discriminator. The `data` field holds the underlying class instance
+  // pointer; case-narrowing casts it back via `(topaz_class_<C> *)d.data`.
+  private emitDunionTypedef(t: TopazType): string {
+    if (t.kind !== "dunion") {
+      throw new Error(`emitDunionTypedef: not a dunion (${typeIdent(t)})`);
+    }
+    const name = typeIdent(t);
+    return `typedef struct { topaz_string ${t.discriminator}; void *data; } ${name};`;
   }
 
   // Per-(class|interface) hash and key-equality wrappers used by
@@ -1385,17 +1499,17 @@ class Emitter {
   private emitClassStruct(info: ClassInfo): string {
     const lines: string[] = [];
     lines.push(`struct topaz_class_${info.name} {`);
-    if (info.fieldOrder.length === 0) {
-      // Empty struct (no fields). C requires at least one member in a struct,
-      // and zero-field classes are corner cases (tag types). Add a dummy.
-      lines.push("  char __topaz_empty;");
-    } else {
-      for (const f of info.fieldOrder) {
-        const t = info.fields.get(f)!;
-        lines.push(`  ${cTypeName(t)} ${f};`);
-      }
+    // Phase 1.5-3f: every class struct carries a tag pointer at offset 0 so
+    // `instanceof` can read the runtime type from a `void *` (catch payload)
+    // without knowing the concrete class up front. The tag itself is a static
+    // sentinel per class; the constructor sets the field.
+    lines.push("  const char *__topaz_class_tag;");
+    for (const f of info.fieldOrder) {
+      const t = info.fields.get(f)!;
+      lines.push(`  ${cTypeName(t)} ${f};`);
     }
     lines.push("};");
+    lines.push(`static const char topaz_class_${info.name}_tag = 0;`);
     return lines.join("\n");
   }
 
@@ -1448,6 +1562,9 @@ class Emitter {
         `  topaz_class_${info.name} *${TOPAZ_THIS} = (topaz_class_${info.name} *)calloc(1, sizeof(*${TOPAZ_THIS}));`,
       );
       bodyLines.push(`  if (!${TOPAZ_THIS}) { fputs("topaz: out of memory\\n", stderr); abort(); }`);
+      bodyLines.push(
+        `  ${TOPAZ_THIS}->__topaz_class_tag = &topaz_class_${info.name}_tag;`,
+      );
       for (const s of ctor.decl.body!.statements) {
         if (ts.isReturnStatement(s)) {
           throw new CodegenError(s, "`return` inside a constructor is unsupported");
@@ -1556,14 +1673,30 @@ class Emitter {
     if (node.kind === ts.SyntaxKind.BooleanKeyword) return T_BOOLEAN;
     if (node.kind === ts.SyntaxKind.StringKeyword) return T_STRING;
     if (node.kind === ts.SyntaxKind.UndefinedKeyword) return T_UNDEFINED;
+    if (node.kind === ts.SyntaxKind.UnknownKeyword) return T_UNKNOWN;
     if (ts.isParenthesizedTypeNode(node)) {
       return this.typeFromAnnotation(node.type, anchor);
+    }
+    // Phase 1.5-3e: string literal type (`kind: "circle"`) for discriminators.
+    if (ts.isLiteralTypeNode(node) && ts.isStringLiteral(node.literal)) {
+      const v = node.literal.text;
+      for (let i = 0; i < v.length; i++) {
+        const code = v.charCodeAt(i);
+        if (code > 0x7e) {
+          throw new CodegenError(node, "string literal type must be ASCII (1.5-3e)");
+        }
+      }
+      return { kind: "string_literal", value: v };
     }
     // Phase 1.5-3b: `T | undefined` only. cTypeName enforces the shape; we
     // accept any union here so error messages can say "scalar | undefined is
     // deferred to 1.5-3c" instead of "unsupported type".
+    // Phase 1.5-3e: class union with a shared `kind: "literal"` discriminator
+    // collapses into a `dunion` (tagged fat pointer) at this site.
     if (ts.isUnionTypeNode(node)) {
       const variants = node.types.map((t) => this.typeFromAnnotation(t, t));
+      const dunion = this.tryMakeDiscriminatedUnion(variants, node);
+      if (dunion) return dunion;
       return makeUnion(variants);
     }
     if (ts.isArrayTypeNode(node)) {
@@ -2024,6 +2157,19 @@ class Emitter {
   ): { name: string; type: TopazType } | undefined {
     if (!ts.isBinaryExpression(cond)) return undefined;
     const tok = cond.operatorToken.kind;
+    // Phase 1.5-3f: `<id> instanceof ClassName` narrows id from `unknown` to
+    // the concrete class on the positive branch. The negative branch can't
+    // narrow (id could still be any other class), so we only return for
+    // polarity === true.
+    if (tok === ts.SyntaxKind.InstanceOfKeyword) {
+      if (!polarity) return undefined;
+      if (!ts.isIdentifier(cond.left)) return undefined;
+      if (!ts.isIdentifier(cond.right)) return undefined;
+      const b = this.scope.lookup(cond.left.text);
+      if (!b || b.type.kind !== "unknown") return undefined;
+      if (!this.classes.has(cond.right.text)) return undefined;
+      return { name: cond.left.text, type: classOf(cond.right.text) };
+    }
     if (
       tok !== ts.SyntaxKind.EqualsEqualsEqualsToken &&
       tok !== ts.SyntaxKind.ExclamationEqualsEqualsToken
@@ -2179,22 +2325,24 @@ class Emitter {
     if (!ts.isIdentifier(vd.name)) {
       throw new CodegenError(vd, "catch binding name must be a simple identifier");
     }
+    // Phase 1.5-3f: missing annotation defaults to `unknown`, matching TS's
+    // strict-mode `catch (e)` type. `: unknown` is also accepted explicitly.
+    // The user must then narrow with `if (e instanceof ClassName)` before
+    // touching fields/methods.
+    let errType: TopazType;
     if (!vd.type) {
-      throw new CodegenError(
-        vd,
-        "`catch` binding requires an explicit type annotation `catch (e: ClassName)` (divergence from TS, which would type e as `unknown`)",
-      );
-    }
-    const errType = this.typeFromAnnotation(vd.type, vd);
-    if (!isClassType(errType)) {
-      throw new CodegenError(
-        vd.type,
-        `\`catch\` binding type must be a class (got ${typeIdent(errType)})`,
-      );
+      errType = T_UNKNOWN;
+    } else {
+      errType = this.typeFromAnnotation(vd.type, vd);
+      if (errType.kind !== "unknown" && !isClassType(errType)) {
+        throw new CodegenError(
+          vd.type,
+          `\`catch\` binding type must be a class or \`unknown\` (got ${typeIdent(errType)})`,
+        );
+      }
     }
     this.checkTryBodyNoEscape(stmt.tryBlock);
 
-    const errClass = classNameOf(errType)!;
     const id = this.tmpCounter++;
     const frame = `__topaz_try_${id}`;
     const eName = vd.name.text;
@@ -2227,9 +2375,14 @@ class Emitter {
     if (tryBodyLines.length > 0) lines.push(tryBodyLines.join("\n"));
     lines.push(`${pad}    topaz_try_pop();`);
     lines.push(`${pad}  } else {`);
-    lines.push(
-      `${pad}    topaz_class_${errClass} *${eName} = (topaz_class_${errClass} *)topaz_throw_value;`,
-    );
+    if (errType.kind === "unknown") {
+      lines.push(`${pad}    void *${eName} = topaz_throw_value;`);
+    } else {
+      const errClass = classNameOf(errType)!;
+      lines.push(
+        `${pad}    topaz_class_${errClass} *${eName} = (topaz_class_${errClass} *)topaz_throw_value;`,
+      );
+    }
     if (catchBodyStr) lines.push(catchBodyStr);
     lines.push(`${pad}  }`);
     lines.push(`${pad}}`);
@@ -2412,6 +2565,22 @@ class Emitter {
     const discType = this.inferType(stmt.expression);
     const clauses = stmt.caseBlock.clauses;
 
+    // Phase 1.5-3e: detect `switch (<id>.<discriminator>)` on a dunion-typed
+    // identifier. When matched, each case body sees `<id>` narrowed to the
+    // class whose discriminator literal equals the case label. Reuses the
+    // ordinary scope.narrow path so identifier emit casts via `.data`.
+    let dunionTarget: { name: string; dunion: Extract<TopazType, { kind: "dunion" }> } | undefined;
+    if (
+      ts.isPropertyAccessExpression(stmt.expression) &&
+      ts.isIdentifier(stmt.expression.expression)
+    ) {
+      const idName = stmt.expression.expression.text;
+      const b = this.scope.lookup(idName);
+      if (b && b.type.kind === "dunion" && stmt.expression.name.text === b.type.discriminator) {
+        dunionTarget = { name: idName, dunion: b.type };
+      }
+    }
+
     let defaultClause: ts.DefaultClause | undefined;
     for (let i = 0; i < clauses.length; i++) {
       const c = clauses[i]!;
@@ -2454,6 +2623,34 @@ class Emitter {
       }
     }
 
+    // Phase 1.5-3e: pre-compute, for a dunion switch, which class each case
+    // narrows to. A case label that matches multiple variants (impossible
+    // under tryMakeDiscriminatedUnion's uniqueness check) or none falls back
+    // to no narrowing. Multi-label fall-through groups only narrow if every
+    // label points at the same class.
+    const groupNarrowClass: (string | undefined)[] = [];
+    if (dunionTarget) {
+      const literalToClass = new Map<string, string>();
+      for (const cname of dunionTarget.dunion.variants) {
+        literalToClass.set(this.dunionLiteralFor(dunionTarget.dunion, cname), cname);
+      }
+      for (const g of groups) {
+        let acc: string | undefined;
+        let agree = true;
+        for (const c of g.conds) {
+          if (!ts.isStringLiteral(c.expression) && !ts.isNoSubstitutionTemplateLiteral(c.expression)) {
+            agree = false;
+            break;
+          }
+          const cls = literalToClass.get(c.expression.text);
+          if (!cls) { agree = false; break; }
+          if (acc === undefined) acc = cls;
+          else if (acc !== cls) { agree = false; break; }
+        }
+        groupNarrowClass.push(agree ? acc : undefined);
+      }
+    }
+
     const id = this.switchCounter++;
     const tmp = `__topaz_sw_${id}`;
     const discExpr = this.emitExpression(stmt.expression);
@@ -2470,15 +2667,25 @@ class Emitter {
           ? `topaz_string_eq(${tmp}, ${rhs})`
           : `${tmp} == ${rhs}`;
       let first = true;
-      for (const g of groups) {
+      for (let gi = 0; gi < groups.length; gi++) {
+        const g = groups[gi]!;
         const conds = g.conds.map((c) => cmp(this.emitExpression(c.expression))).join(" || ");
         const head = first ? "if" : "else if";
         if (g.body.length === 0) {
           out.push(`${pad}    ${head} (${conds}) { break; }`);
         } else {
           out.push(`${pad}    ${head} (${conds}) {`);
-          for (const s of g.body) {
-            out.push(this.emitStatement(s, indent + 3));
+          this.scope.push();
+          try {
+            const narrowCls = groupNarrowClass[gi];
+            if (dunionTarget && narrowCls) {
+              this.scope.narrow(dunionTarget.name, classOf(narrowCls));
+            }
+            for (const s of g.body) {
+              out.push(this.emitStatement(s, indent + 3));
+            }
+          } finally {
+            this.scope.pop();
           }
           out.push(`${pad}    }`);
         }
@@ -2559,6 +2766,20 @@ class Emitter {
       if (isScalarOptUnion(base.type) && !typeEq(base.type, b.type)) {
         return `(${expr.text}).value`;
       }
+      // Phase 1.5-3e: narrowed dunion -> class. The fat struct's `data` slot
+      // holds the underlying class instance pointer; cast it back to the
+      // concrete class type for downstream uses.
+      if (base.type.kind === "dunion" && isClassType(b.type)) {
+        const cname = classNameOf(b.type)!;
+        return `((topaz_class_${cname} *)(${expr.text}).data)`;
+      }
+      // Phase 1.5-3f: narrowed unknown -> class. The base C type is `void *`
+      // (the catch payload); cast to the concrete class pointer so field /
+      // method access type-checks at the C level.
+      if (base.type.kind === "unknown" && isClassType(b.type)) {
+        const cname = classNameOf(b.type)!;
+        return `((topaz_class_${cname} *)(${expr.text}))`;
+      }
       return expr.text;
     }
     if (ts.isParenthesizedExpression(expr)) {
@@ -2566,6 +2787,12 @@ class Emitter {
     }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
+      // Phase 1.5-3e: `dunion.kind` reads the discriminator string from the
+      // fat struct. inferType already enforced that only the discriminator
+      // field is accessible.
+      if (baseType.kind === "dunion") {
+        return `((${this.emitExpression(expr.expression)}).${baseType.discriminator})`;
+      }
       if (baseType.kind === "string" && expr.name.text === "length") {
         return `((topaz_number)(${this.emitExpression(expr.expression)}).len)`;
       }
@@ -2736,6 +2963,17 @@ class Emitter {
       ) {
         const inner = `topaz_string_eq(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
         return tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? inner : `(!${inner})`;
+      }
+      // Phase 1.5-3f: `x instanceof ClassName` lowers to a tag-pointer
+      // comparison. Every class struct carries `__topaz_class_tag` at offset
+      // 0, set by the constructor to a per-class sentinel address; the check
+      // dereferences the void* payload through that field.
+      if (tok === ts.SyntaxKind.InstanceOfKeyword) {
+        const cls = (expr.right as ts.Identifier).text;
+        const id = this.tmpCounter++;
+        const tmp = `__topaz_io_${id}`;
+        const left = this.emitExpression(expr.left);
+        return `({ void *${tmp} = (void *)(${left}); ${tmp} != NULL && *((const char * const *)${tmp}) == &topaz_class_${cls}_tag; })`;
       }
       // Phase 1.5-3b: `x === undefined` / `x !== undefined` on `T | undefined`.
       // For interface | undefined the fat pointer's .data is the sentinel;
@@ -3049,6 +3287,12 @@ class Emitter {
           `console.log on ${typeIdent(t)} is unsupported (narrow it with \`if (x !== undefined)\` first)`,
         );
       }
+      if (t.kind === "unknown") {
+        throw new CodegenError(
+          arg,
+          "console.log on `unknown` is unsupported (narrow it with `if (x instanceof ClassName)` first)",
+        );
+      }
       if (isReferenceType(t) || isInterfaceType(t)) {
         throw new CodegenError(arg, `console.log on ${typeIdent(t)} is unsupported`);
       }
@@ -3289,6 +3533,26 @@ class Emitter {
           `cannot access '.${expr.name.text}' on union type ${typeIdent(baseType)} — narrow it first with \`if (x !== undefined)\``,
         );
       }
+      // Phase 1.5-3f: unknown values (catch payload) need `instanceof` to
+      // be readable. Surfacing the error here so identifier-level access
+      // gets a clear hint instead of a generic "unsupported property" trip.
+      if (baseType.kind === "unknown") {
+        throw new CodegenError(
+          expr,
+          `cannot access '.${expr.name.text}' on \`unknown\` — narrow it first with \`if (x instanceof ClassName)\``,
+        );
+      }
+      // Phase 1.5-3e: dunion exposes only the discriminator field; everything
+      // else requires narrowing via `switch (d.kind)`.
+      if (baseType.kind === "dunion") {
+        if (expr.name.text === baseType.discriminator) {
+          return T_STRING;
+        }
+        throw new CodegenError(
+          expr,
+          `cannot access '.${expr.name.text}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``,
+        );
+      }
       if (baseType.kind === "string" && expr.name.text === "length") {
         return T_NUMBER;
       }
@@ -3459,6 +3723,33 @@ class Emitter {
             expr.operatorToken,
             "loose equality (== / !=) is unsupported; use === / !==",
           );
+        case ts.SyntaxKind.InstanceOfKeyword: {
+          // Phase 1.5-3f: `instanceof` runtime type test for catch payloads.
+          // Left must be `unknown` (the catch binding's type) or a class
+          // instance (tautology, but allowed for symmetry). Right must be a
+          // declared concrete class name; interface/generic targets need
+          // separate plumbing not in scope for 1.5-3f.
+          const lt = this.inferType(expr.left);
+          if (lt.kind !== "unknown" && !isClassType(lt)) {
+            throw new CodegenError(
+              expr.left,
+              `\`instanceof\` requires left side to be \`unknown\` or a class instance (got ${typeIdent(lt)})`,
+            );
+          }
+          if (!ts.isIdentifier(expr.right)) {
+            throw new CodegenError(
+              expr.right,
+              "`instanceof` right side must be a class name",
+            );
+          }
+          if (!this.classes.has(expr.right.text)) {
+            throw new CodegenError(
+              expr.right,
+              `unknown class '${expr.right.text}' on right side of \`instanceof\``,
+            );
+          }
+          return T_BOOLEAN;
+        }
         default:
           unsupported(expr.operatorToken, "binary operator");
       }
@@ -3641,6 +3932,18 @@ class Emitter {
   }
 
   private expectType(expr: ts.Expression, expected: TopazType): void {
+    // Phase 1.5-3e: string literal types accept a matching string literal
+    // expression directly (inferType returns T_STRING for literals, so the
+    // assignability check would otherwise fail). Discriminator-field assigns
+    // in constructors and discriminated-union case labels both flow through
+    // here.
+    if (
+      expected.kind === "string_literal" &&
+      (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) &&
+      expr.text === expected.value
+    ) {
+      return;
+    }
     const actual = this.inferType(expr);
     if (typeEq(actual, expected)) return;
     if (this.isAssignableTo(actual, expected)) return;
@@ -3665,6 +3968,19 @@ class Emitter {
     if (isInterfaceType(expected) && isClassType(actual)) {
       return this.classImplements(classNameOf(actual)!, interfaceNameOf(expected)!);
     }
+    // Phase 1.5-3e: string_literal "X" widens to string. Narrowing the other
+    // direction (string -> string_literal) is rejected here; emitWithExpected
+    // accepts a matching string-literal expression separately.
+    if (actual.kind === "string_literal" && expected.kind === "string") {
+      return true;
+    }
+    // Phase 1.5-3e: a class is assignable to a discriminated union when the
+    // dunion's variants list it AND the class's discriminator field matches
+    // the dunion's. Coercion wraps the class pointer in the fat struct.
+    if (expected.kind === "dunion" && isClassType(actual)) {
+      const cname = classNameOf(actual)!;
+      return expected.variants.includes(cname);
+    }
     return false;
   }
 
@@ -3678,6 +3994,21 @@ class Emitter {
     // for interface). Without a `T | undefined` expected this is a type error.
     if (ts.isIdentifier(expr) && expr.text === "undefined") {
       return this.emitUndefinedLiteral(expected, expr);
+    }
+    // Phase 1.5-3e: an expected string_literal accepts the matching literal
+    // expression (the value flows in as plain string at runtime, so the
+    // generated C is identical to the literal emit).
+    if (
+      expected.kind === "string_literal" &&
+      (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr))
+    ) {
+      if (expr.text !== expected.value) {
+        throw new CodegenError(
+          expr,
+          `type mismatch: expected ${typeIdent(expected)}, got string literal "${expr.text}"`,
+        );
+      }
+      return this.emitStringLiteral(expr);
     }
     if (ts.isArrayLiteralExpression(expr)) {
       // Array literal element types aren't interfaces (no Array<Interface> in
@@ -3773,7 +4104,55 @@ class Emitter {
       }
       return `((topaz_iface_${iname}){ .data = ${raw}, .vt = &topaz_iface_${iname}_for_${cname}_vt })`;
     }
+    // Phase 1.5-3e: class -> dunion. Read the discriminator literal from the
+    // class's field type and synthesize the fat struct. Validation
+    // (variants.includes(cname) + literal lookup) already happened in
+    // tryMakeDiscriminatedUnion at the union construction site.
+    if (expected.kind === "dunion" && isClassType(actual)) {
+      const cname = classNameOf(actual)!;
+      if (!expected.variants.includes(cname)) {
+        throw new CodegenError(
+          anchor,
+          `class '${cname}' is not a variant of ${typeIdent(expected)}`,
+        );
+      }
+      const literal = this.dunionLiteralFor(expected, cname);
+      const litExpr = this.encodeStringLiteralCompound(literal);
+      return `((${typeIdent(expected)}){ ${litExpr}, (void *)(${raw}) })`;
+    }
+    // Phase 1.5-3e: string_literal "X" widens to plain string (the literal
+    // already has the right C representation, so no transformation needed).
+    if (actual.kind === "string_literal" && expected.kind === "string") {
+      return raw;
+    }
     throw new CodegenError(anchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+  }
+
+  // Helper for emitting a topaz_string compound literal for an ASCII string
+  // value. Shared between dunion construction and (future) literal sites.
+  private encodeStringLiteralCompound(value: string): string {
+    let escaped = '"';
+    let byteLen = 0;
+    for (let i = 0; i < value.length; i++) {
+      const c = value.charCodeAt(i);
+      if (c >= 0x80) {
+        throw new Error(`encodeStringLiteralCompound: non-ASCII byte in '${value}'`);
+      }
+      if (c === 0x22) escaped += '\\"';
+      else if (c === 0x5c) escaped += "\\\\";
+      else if (c === 0x0a) escaped += "\\n";
+      else if (c === 0x0d) escaped += "\\r";
+      else if (c === 0x09) escaped += "\\t";
+      else if (c === 0x00) escaped += "\\0";
+      else if (c < 0x20 || c === 0x7f) {
+        escaped += `\\x${c.toString(16).padStart(2, "0")}`;
+      } else {
+        escaped += String.fromCharCode(c);
+      }
+      byteLen++;
+    }
+    escaped += '"';
+    return `((topaz_string){ ${escaped}, ${byteLen} })`;
   }
 }
 
