@@ -93,6 +93,8 @@ run_case dunion_basic $'12\n9\ncircle\nsquare\ncircle\nsquare\n5\n7'
 
 run_case catch_unknown $'kaboom\n42\nfizz\nrethrow\ntrue\n99\nfalse'
 
+run_case arena_stress $'1000\n0\n999\n1000\n42\n1200\n500\ntrue\n500'
+
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
 run_fail_case strict_field_init_fail examples/strict_field_init_fail.ts "is not definitely assigned in the constructor"

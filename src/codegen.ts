@@ -1559,9 +1559,8 @@ class Emitter {
       const bodyLines: string[] = [];
       bodyLines.push("{");
       bodyLines.push(
-        `  topaz_class_${info.name} *${TOPAZ_THIS} = (topaz_class_${info.name} *)calloc(1, sizeof(*${TOPAZ_THIS}));`,
+        `  topaz_class_${info.name} *${TOPAZ_THIS} = (topaz_class_${info.name} *)topaz_arena_calloc(1, sizeof(*${TOPAZ_THIS}));`,
       );
-      bodyLines.push(`  if (!${TOPAZ_THIS}) { fputs("topaz: out of memory\\n", stderr); abort(); }`);
       bodyLines.push(
         `  ${TOPAZ_THIS}->__topaz_class_tag = &topaz_class_${info.name}_tag;`,
       );

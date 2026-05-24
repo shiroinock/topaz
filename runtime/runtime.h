@@ -13,10 +13,60 @@
 typedef double topaz_number;
 typedef bool topaz_boolean;
 
+// Phase 1.5-4: per-process arena. "1 process = 1 compilation", so a global
+// bump allocator with no per-allocation free is enough — process exit reclaims
+// everything. Chunks are 64KB minimum, larger when a single allocation exceeds
+// that. Payload alignment is 16 bytes, matching max_align_t on x86_64/arm64;
+// the chunk header is padded to 32 bytes so `(char *)(chunk + 1)` is also
+// 16-byte aligned. realloc just allocates a new block and memcpys — Array's
+// doubling strategy keeps amortized cost O(1), and the old block lives until
+// process exit.
+typedef struct topaz_arena_chunk {
+  struct topaz_arena_chunk *next;
+  size_t cap;
+  size_t used;
+  size_t _pad;
+} topaz_arena_chunk;
+
+static topaz_arena_chunk *topaz_arena_head = NULL;
+
+static void *topaz_arena_alloc(size_t size) {
+  size_t aligned = (size + 15u) & ~(size_t)15u;
+  if (aligned == 0) aligned = 16;
+  if (!topaz_arena_head || topaz_arena_head->used + aligned > topaz_arena_head->cap) {
+    size_t cap = aligned > (size_t)(64 * 1024) ? aligned : (size_t)(64 * 1024);
+    topaz_arena_chunk *c = (topaz_arena_chunk *)malloc(sizeof(*c) + cap);
+    if (!c) {
+      fputs("topaz: out of memory\n", stderr);
+      abort();
+    }
+    c->next = topaz_arena_head;
+    c->cap = cap;
+    c->used = 0;
+    topaz_arena_head = c;
+  }
+  void *p = (char *)(topaz_arena_head + 1) + topaz_arena_head->used;
+  topaz_arena_head->used += aligned;
+  return p;
+}
+
+static void *topaz_arena_calloc(size_t n, size_t size) {
+  size_t total = n * size;
+  void *p = topaz_arena_alloc(total);
+  if (total) memset(p, 0, total);
+  return p;
+}
+
+static void *topaz_arena_realloc(void *old_ptr, size_t old_size, size_t new_size) {
+  void *p = topaz_arena_alloc(new_size);
+  if (old_ptr && old_size) memcpy(p, old_ptr, old_size);
+  return p;
+}
+
 // Phase 1.2: immutable byte string. ASCII-only for now — JS .length is in
 // UTF-16 code units, but we store UTF-8, so non-ASCII would diverge.
-// `data` is either a literal (static lifetime) or malloc'd by concat (leaked;
-// GC/arena lands with the rest of the heap story).
+// `data` is either a literal (static lifetime) or arena-allocated by concat
+// (released at process exit, see topaz_arena_alloc above).
 typedef struct {
   const char *data;
   size_t len;
@@ -44,11 +94,7 @@ typedef struct { topaz_boolean present; topaz_string  value; } topaz_opt_string;
 
 static inline topaz_string topaz_string_concat(topaz_string a, topaz_string b) {
   size_t total = a.len + b.len;
-  char *buf = (char *)malloc(total + 1);
-  if (!buf) {
-    fputs("topaz: out of memory\n", stderr);
-    abort();
-  }
+  char *buf = (char *)topaz_arena_alloc(total + 1);
   if (a.len) memcpy(buf, a.data, a.len);
   if (b.len) memcpy(buf + a.len, b.data, b.len);
   buf[total] = '\0';
@@ -165,7 +211,9 @@ static inline void topaz_console_log_number(topaz_number n) {
 
 // Phase 1.3: monomorphized growable arrays. Reference semantics — variables
 // hold `topaz_array_<elem> *` and share storage on assignment. Bounds-checked
-// with abort on violation; no GC, malloc/leak until Phase 1.5.
+// with abort on violation. Arena-allocated; the old buffer left behind by
+// grow() lives until process exit, which the Array's doubling strategy bounds
+// to at most 2× peak memory.
 #define TOPAZ_ARRAY_DEFINE(name, elem_t)                                              \
 typedef struct {                                                                       \
   elem_t *data;                                                                        \
@@ -174,8 +222,7 @@ typedef struct {                                                                
 } topaz_array_##name;                                                                  \
                                                                                        \
 static inline topaz_array_##name *topaz_array_##name##_new(void) {                     \
-  topaz_array_##name *a = (topaz_array_##name *)malloc(sizeof(*a));                    \
-  if (!a) { fputs("topaz: out of memory\n", stderr); abort(); }                        \
+  topaz_array_##name *a = (topaz_array_##name *)topaz_arena_alloc(sizeof(*a));         \
   a->data = NULL;                                                                      \
   a->len = 0;                                                                          \
   a->cap = 0;                                                                          \
@@ -186,8 +233,8 @@ static inline void topaz_array_##name##_reserve(topaz_array_##name *a, size_t wa
   if (a->cap >= want) return;                                                          \
   size_t new_cap = a->cap == 0 ? 4 : a->cap * 2;                                       \
   while (new_cap < want) new_cap *= 2;                                                 \
-  elem_t *new_data = (elem_t *)realloc(a->data, new_cap * sizeof(elem_t));             \
-  if (!new_data) { fputs("topaz: out of memory\n", stderr); abort(); }                 \
+  elem_t *new_data = (elem_t *)topaz_arena_realloc(                                    \
+      a->data, a->cap * sizeof(elem_t), new_cap * sizeof(elem_t));                     \
   a->data = new_data;                                                                  \
   a->cap = new_cap;                                                                    \
 }                                                                                      \
@@ -311,8 +358,7 @@ typedef struct {                                                                
 } topaz_map_##name;                                                                    \
                                                                                        \
 static inline topaz_map_##name *topaz_map_##name##_new(void) {                         \
-  topaz_map_##name *m = (topaz_map_##name *)malloc(sizeof(*m));                        \
-  if (!m) { fputs("topaz: out of memory\n", stderr); abort(); }                        \
+  topaz_map_##name *m = (topaz_map_##name *)topaz_arena_alloc(sizeof(*m));             \
   m->slots = NULL; m->cap = 0; m->size = 0; m->tombstones = 0;                         \
   return m;                                                                            \
 }                                                                                      \
@@ -335,8 +381,7 @@ static inline size_t topaz_map_##name##_find_slot(                              
                                                                                        \
 static inline void topaz_map_##name##_rehash(topaz_map_##name *m, size_t new_cap) {    \
   topaz_map_##name##_slot *new_slots =                                                 \
-      (topaz_map_##name##_slot *)calloc(new_cap, sizeof(*new_slots));                  \
-  if (!new_slots) { fputs("topaz: out of memory\n", stderr); abort(); }                \
+      (topaz_map_##name##_slot *)topaz_arena_calloc(new_cap, sizeof(*new_slots));      \
   for (size_t i = 0; i < m->cap; i++) {                                                \
     if (m->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;                       \
     size_t idx = topaz_map_##name##_find_slot(new_slots, new_cap, m->slots[i].key);    \
@@ -344,7 +389,6 @@ static inline void topaz_map_##name##_rehash(topaz_map_##name *m, size_t new_cap
     new_slots[idx].key = m->slots[i].key;                                              \
     new_slots[idx].value = m->slots[i].value;                                          \
   }                                                                                    \
-  free(m->slots);                                                                      \
   m->slots = new_slots;                                                                \
   m->cap = new_cap;                                                                    \
   m->tombstones = 0;                                                                   \
@@ -407,8 +451,7 @@ typedef struct {                                                                
 } topaz_set_##name;                                                                    \
                                                                                        \
 static inline topaz_set_##name *topaz_set_##name##_new(void) {                         \
-  topaz_set_##name *s = (topaz_set_##name *)malloc(sizeof(*s));                        \
-  if (!s) { fputs("topaz: out of memory\n", stderr); abort(); }                        \
+  topaz_set_##name *s = (topaz_set_##name *)topaz_arena_alloc(sizeof(*s));             \
   s->slots = NULL; s->cap = 0; s->size = 0; s->tombstones = 0;                         \
   return s;                                                                            \
 }                                                                                      \
@@ -431,15 +474,13 @@ static inline size_t topaz_set_##name##_find_slot(                              
                                                                                        \
 static inline void topaz_set_##name##_rehash(topaz_set_##name *s, size_t new_cap) {    \
   topaz_set_##name##_slot *new_slots =                                                 \
-      (topaz_set_##name##_slot *)calloc(new_cap, sizeof(*new_slots));                  \
-  if (!new_slots) { fputs("topaz: out of memory\n", stderr); abort(); }                \
+      (topaz_set_##name##_slot *)topaz_arena_calloc(new_cap, sizeof(*new_slots));      \
   for (size_t i = 0; i < s->cap; i++) {                                                \
     if (s->slots[i].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;                       \
     size_t idx = topaz_set_##name##_find_slot(new_slots, new_cap, s->slots[i].key);    \
     new_slots[idx].state = TOPAZ_HASH_SLOT_OCCUPIED;                                   \
     new_slots[idx].key = s->slots[i].key;                                              \
   }                                                                                    \
-  free(s->slots);                                                                      \
   s->slots = new_slots;                                                                \
   s->cap = new_cap;                                                                    \
   s->tombstones = 0;                                                                   \
