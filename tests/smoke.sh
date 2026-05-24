@@ -156,4 +156,11 @@ run_fail_case array_join_class_elem_fail examples/array_join_class_elem_fail.ts 
 run_fail_case array_join_sep_type_fail examples/array_join_sep_type_fail.ts "Array.join separator must be string"
 run_fail_case array_join_too_many_args_fail examples/array_join_too_many_args_fail.ts "Array.join expects at most one argument"
 
+run_case spread_basic $'3\n6\n3\n4\n4\n100\n6\n115\n2\n15\n0\n10\n3\n14\n6\n5\n159\n4\n10\n3\n9\n7'
+run_fail_case spread_call_args_fail examples/spread_call_args_fail.ts "spread in call arguments is unsupported"
+run_fail_case spread_new_args_fail examples/spread_new_args_fail.ts "spread in \`new\` arguments is unsupported"
+run_fail_case spread_set_fail examples/spread_set_fail.ts "spread source in array literal must be an Array<T>"
+run_fail_case spread_elem_mismatch_fail examples/spread_elem_mismatch_fail.ts "spread element type topaz_string does not match destination element type topaz_number"
+run_fail_case spread_non_array_fail examples/spread_non_array_fail.ts "spread source in array literal must be an Array<T>"
+
 echo "all tests passed"

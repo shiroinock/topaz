@@ -4602,10 +4602,14 @@ class Emitter {
     expected: TopazType | undefined,
   ): string {
     for (const e of expr.elements) {
-      if (ts.isSpreadElement(e) || e.kind === ts.SyntaxKind.OmittedExpression) {
-        throw new CodegenError(e, "spread / holes in array literals are unsupported");
+      if (e.kind === ts.SyntaxKind.OmittedExpression) {
+        throw new CodegenError(e, "holes in array literals are unsupported");
       }
     }
+    // Phase 1.5-3.5h-spread: spread (`...x`) is allowed when the source is an
+    // Array<T> whose elem type matches the destination's elem type EXACTLY.
+    // Set / Iterator sources stay rejected here (tracked in future sub-steps).
+    const hasSpread = expr.elements.some((e) => ts.isSpreadElement(e));
     let arrType: TopazType;
     if (expr.elements.length === 0) {
       if (!expected || !isArrayType(expected)) {
@@ -4617,14 +4621,24 @@ class Emitter {
       arrType = expected;
     } else if (expected && isArrayType(expected)) {
       // With a known expected Array<T>, use T as the element type so each
-      // element can coerce to it (class -> interface). This is required for
-      // mixed-class Array<Interface> literals, where elements can have
-      // different concrete types as long as they all implement T.
+      // fixed element can coerce to it (class -> interface). Spread sources
+      // still require EXACT elem match (no per-element coercion through spread).
       arrType = expected;
     } else {
-      const elem = this.inferType(expr.elements[0]!);
-      for (let i = 1; i < expr.elements.length; i++) {
-        this.expectType(expr.elements[i]!, elem);
+      // Infer from the first element: spread -> source's elem, fixed -> its type.
+      const first = expr.elements[0]!;
+      let elem: TopazType;
+      if (ts.isSpreadElement(first)) {
+        const srcType = this.inferType(first.expression);
+        if (!isArrayType(srcType)) {
+          throw new CodegenError(
+            first,
+            `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
+          );
+        }
+        elem = arrayElem(srcType)!;
+      } else {
+        elem = this.inferType(first as ts.Expression);
       }
       const arr = arrayOf(elem);
       if (!arr) {
@@ -4640,11 +4654,55 @@ class Emitter {
     // GCC/clang statement-expression: build, fill, yield the pointer.
     const parts: string[] = [];
     parts.push(`topaz_array_${name} *${tmp} = topaz_array_${name}_new();`);
-    if (expr.elements.length > 0) {
-      parts.push(`topaz_array_${name}_reserve(${tmp}, ${expr.elements.length});`);
-    }
-    for (const e of expr.elements) {
-      parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e as ts.Expression, elemType)});`);
+    if (!hasSpread) {
+      if (expr.elements.length > 0) {
+        parts.push(`topaz_array_${name}_reserve(${tmp}, ${expr.elements.length});`);
+      }
+      for (const e of expr.elements) {
+        parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e as ts.Expression, elemType)});`);
+      }
+    } else {
+      // Snapshot every spread source first so the reserve sum / push loop see
+      // a stable .len and .data, and each source expression evaluates once.
+      const spreadTmps: string[] = [];
+      const fixedCount = expr.elements.filter((e) => !ts.isSpreadElement(e)).length;
+      for (const e of expr.elements) {
+        if (!ts.isSpreadElement(e)) continue;
+        const srcType = this.inferType(e.expression);
+        if (!isArrayType(srcType)) {
+          throw new CodegenError(
+            e,
+            `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
+          );
+        }
+        const srcElem = arrayElem(srcType)!;
+        if (!typeEq(srcElem, elemType)) {
+          throw new CodegenError(
+            e,
+            `spread element type ${typeIdent(srcElem)} does not match destination element type ${typeIdent(elemType)}`,
+          );
+        }
+        const spId = this.tmpCounter++;
+        const spTmp = `__topaz_sp_${spId}`;
+        const spName = arrayShortName(srcType);
+        parts.push(`topaz_array_${spName} *${spTmp} = ${this.emitExpression(e.expression)};`);
+        spreadTmps.push(spTmp);
+      }
+      const reserveSum = [String(fixedCount), ...spreadTmps.map((t) => `${t}->len`)].join(" + ");
+      parts.push(`topaz_array_${name}_reserve(${tmp}, ${reserveSum});`);
+      let spIdx = 0;
+      for (const e of expr.elements) {
+        if (ts.isSpreadElement(e)) {
+          const spTmp = spreadTmps[spIdx++]!;
+          const iterId = this.tmpCounter++;
+          const iVar = `__topaz_si_${iterId}`;
+          parts.push(
+            `for (size_t ${iVar} = 0; ${iVar} < ${spTmp}->len; ${iVar}++) topaz_array_${name}_push(${tmp}, ${spTmp}->data[${iVar}]);`,
+          );
+        } else {
+          parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e as ts.Expression, elemType)});`);
+        }
+      }
     }
     return `({ ${parts.join(" ")} ${tmp}; })`;
   }
@@ -4655,6 +4713,15 @@ class Emitter {
   ): string {
     if (!ts.isIdentifier(expr.expression)) {
       throw new CodegenError(expr, "only `new Map<K, V>()`, `new Set<T>()`, and class instantiation are supported");
+    }
+    // Phase 1.5-3.5h-spread: same positional-arguments invariant as emitCall.
+    for (const a of expr.arguments ?? []) {
+      if (ts.isSpreadElement(a)) {
+        throw new CodegenError(
+          a,
+          "spread in `new` arguments is unsupported",
+        );
+      }
     }
     const name = expr.expression.text;
     if (name === "Array") {
@@ -4910,6 +4977,17 @@ class Emitter {
         expr,
         "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
       );
+    }
+    // Phase 1.5-3.5h-spread: spread in call arguments is rejected up-front so
+    // every downstream callee can iterate `expr.arguments` positionally. Spread
+    // in array literals is supported separately by emitArrayLiteral.
+    for (const a of expr.arguments) {
+      if (ts.isSpreadElement(a)) {
+        throw new CodegenError(
+          a,
+          "spread in call arguments is unsupported (rewrite as a loop, e.g. `for (const x of xs) f(x)`)",
+        );
+      }
     }
 
     if (
@@ -5790,10 +5868,26 @@ class Emitter {
           "cannot infer element type of empty array literal; add an `Array<T>` annotation",
         );
       }
+      // Phase 1.5-3.5h-spread: infer elem from first element (spread -> source's
+      // elem, fixed -> its type). Subsequent elements are validated by emit-time
+      // type checks; inferType only needs the elem to look up the monomorph.
       const first = expr.elements[0]!;
-      const elem = this.inferType(first);
-      for (let i = 1; i < expr.elements.length; i++) {
-        this.expectType(expr.elements[i]!, elem);
+      let elem: TopazType;
+      if (ts.isSpreadElement(first)) {
+        const srcType = this.inferType(first.expression);
+        if (!isArrayType(srcType)) {
+          throw new CodegenError(
+            first,
+            `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
+          );
+        }
+        elem = arrayElem(srcType)!;
+      } else {
+        elem = this.inferType(first);
+        for (let i = 1; i < expr.elements.length; i++) {
+          const e = expr.elements[i]!;
+          if (!ts.isSpreadElement(e)) this.expectType(e, elem);
+        }
       }
       const arr = arrayOf(elem);
       if (!arr) {
