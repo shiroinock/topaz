@@ -17,6 +17,10 @@ import * as ts from "typescript";
 // Phase 1.5-3.5e: `fn` represents a closure value (function pointer + env
 // pointer fat pointer). Param names are stored for diagnostics but ignored by
 // `typeEq` / mangling — only positional types matter for type identity.
+// Phase 1.5-3.5g-iterator: `iter` represents an Iterator<T> value (state ptr
+// + next-fn ptr fat pointer). Only produced by `.values()` / `.keys()` on
+// Map / Set; never written as a type annotation. Two iters are equal when
+// elem types match — sources (map_values vs set_values) don't affect identity.
 type TopazType =
   | { kind: "number" }
   | { kind: "boolean" }
@@ -31,7 +35,8 @@ type TopazType =
   | { kind: "iface"; name: string }
   | { kind: "dunion"; variants: readonly string[]; discriminator: string }
   | { kind: "union"; variants: readonly TopazType[] }
-  | { kind: "fn"; params: readonly ParamInfo[]; returnType: TopazType };
+  | { kind: "fn"; params: readonly ParamInfo[]; returnType: TopazType }
+  | { kind: "iter"; elem: TopazType };
 
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
@@ -197,6 +202,8 @@ function typeEq(a: TopazType, b: TopazType): boolean {
       }
       return typeEq(a.returnType, bf.returnType);
     }
+    case "iter":
+      return typeEq(a.elem, (b as Extract<TopazType, { kind: "iter" }>).elem);
   }
 }
 
@@ -250,6 +257,11 @@ function elemTag(t: TopazType): string {
       // a runtime hash/eq strategy and per-fn-type monomorph expansion;
       // defer to 1.5-3.5f when Array.map / closures land in containers.
       throw new Error(`elemTag: function type ${typeIdent(t)} cannot be a container element (1.5-3.5e)`);
+    case "iter":
+      // Phase 1.5-3.5g-iterator: Iterator<T> values are single-pass and own
+      // arena-allocated state — storing them in Array / Map / Set would need
+      // ownership semantics we don't model. Always reject at container site.
+      throw new Error(`elemTag: iterator type ${typeIdent(t)} cannot be a container element (1.5-3.5g)`);
     default:
       throw new Error(`elemTag: container element kind=${(t as TopazType).kind} is unsupported (no nested containers yet)`);
   }
@@ -321,6 +333,8 @@ function typeIdent(t: TopazType): string {
       const paramSection = paramIds.length > 0 ? `__${paramIds}` : "";
       return `topaz_fn_a${t.params.length}${paramSection}__to__${retId}`;
     }
+    case "iter":
+      return `topaz_iter_${elemTag(t.elem)}`;
   }
 }
 
@@ -417,6 +431,10 @@ function cTypeName(t: TopazType): string {
   // Phase 1.5-3.5e: fn type is a fat-pointer struct `{ fn, env }` passed by
   // value. typeIdent matches the typedef name we synthesize in emit().
   if (t.kind === "fn") return typeIdent(t);
+  // Phase 1.5-3.5g-iterator: iter type is a fat-pointer struct `{ state, next }`
+  // passed by value; the state pointer keeps source-specific data on the arena
+  // so the iter struct itself can be copied freely.
+  if (t.kind === "iter") return typeIdent(t);
   return isReferenceType(t) ? `${typeIdent(t)} *` : typeIdent(t);
 }
 
@@ -427,6 +445,28 @@ function isScalarOptUnion(t: TopazType): boolean {
   if (t.kind !== "union") return false;
   const inner = withoutUndefined(t);
   return inner !== undefined && isScalarType(inner);
+}
+
+// Phase 1.5-3.5g-iterator: short identifier for the container backing an
+// iter (Map<K, V> -> "map_K_V", Set<T> -> "set_T"). Used to name the per-
+// container state struct and `_next` function.
+function iterContainerTag(t: TopazType): string {
+  if (isMapType(t)) return `map_${mapShortName(t)}`;
+  if (isSetType(t)) return `set_${setShortName(t)}`;
+  throw new Error(`iterContainerTag: unsupported container kind=${t.kind}`);
+}
+
+// Phase 1.5-3.5g-iterator: C expression for the "value to return when done"
+// in a `_next` function. C requires a return value even though callers must
+// ignore it after `*done = true`; we use a zero-initialized value per elem
+// shape (NULL for pointer types, zero for scalars, all-null for fat pointers).
+function zeroValueOfElem(elem: TopazType): string {
+  if (elem.kind === "number") return "(topaz_number)0";
+  if (elem.kind === "boolean") return "(topaz_boolean)0";
+  if (elem.kind === "string") return `(topaz_string){ "", 0 }`;
+  if (isClassType(elem)) return `(${cTypeName(elem)})NULL`;
+  if (isInterfaceType(elem)) return `(${cTypeName(elem)}){ NULL, NULL }`;
+  throw new Error(`zeroValueOfElem: unsupported ${typeIdent(elem)}`);
 }
 
 type Binding = { type: TopazType; isConst: boolean };
@@ -742,6 +782,42 @@ class Emitter {
     this.fnMonomorphs.set(typeKey(t), t);
   }
 
+  // Phase 1.5-3.5g-iterator: `Iterator<T>` values are produced by
+  // `.values()` / `.keys()` on Map / Set. Three layers of monomorph need to
+  // be emitted:
+  //   - per-elem `topaz_iter_<elem>` typedef (the fat pointer struct itself)
+  //   - per-container `topaz_iter_state_<container>` state struct
+  //   - per-(source, container) `_next` function
+  // Map.values() and Map.keys() share the state struct but have different
+  // _next functions; Set.values() and Set.keys() share both (Set yields the
+  // element for either, matching JS semantics).
+  private iterTypedefMonomorphs = new Map<string, TopazType>();
+  private iterStateMonomorphs = new Map<string, TopazType>();
+  private iterNextMonomorphs = new Map<
+    string,
+    {
+      containerType: TopazType;
+      source: "map_values" | "map_keys" | "set_values";
+      elemType: TopazType;
+      field: "key" | "value";
+    }
+  >();
+  private recordIterMonomorph(
+    elemType: TopazType,
+    containerType: TopazType,
+    source: "map_values" | "map_keys" | "set_values",
+    field: "key" | "value",
+  ): void {
+    // Containers themselves need their _new / _set / _add / etc helpers, so
+    // make sure the underlying monomorph is registered first.
+    if (isMapType(containerType)) this.recordMapMonomorph(containerType);
+    if (isSetType(containerType)) this.recordSetMonomorph(containerType);
+    this.iterTypedefMonomorphs.set(typeKey(elemType), elemType);
+    this.iterStateMonomorphs.set(typeKey(containerType), containerType);
+    const sourceKey = `${source}__${typeKey(containerType)}`;
+    this.iterNextMonomorphs.set(sourceKey, { containerType, source, elemType, field });
+  }
+
   // Phase 1.5-3e: union of class types with shared `kind: "literal"`
   // discriminator collapses into a `dunion`. Returns undefined if the union
   // is not a discriminated class union (caller falls back to general union).
@@ -836,7 +912,7 @@ class Emitter {
     for (const cls of classes) {
       if (!cls.name) throw new CodegenError(cls, "class must be named");
       const name = cls.name.text;
-      if (name === "Array" || name === "Map" || name === "Set") {
+      if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
         throw new CodegenError(cls, `cannot redefine built-in '${name}'`);
       }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
@@ -881,7 +957,7 @@ class Emitter {
     // Pass 1b: register interface names.
     for (const iface of interfaces) {
       const name = iface.name.text;
-      if (name === "Array" || name === "Map" || name === "Set") {
+      if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
         throw new CodegenError(iface, `cannot redefine built-in '${name}'`);
       }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
@@ -1018,6 +1094,16 @@ class Emitter {
     // typedefs exist) and before fn typedefs (so the helper signature can
     // reference `topaz_string`).
     const arrayJoinHelperSlot = out.length;
+    out.push("");
+
+    // Phase 1.5-3.5g-iterator: `Iterator<T>` infra. Placed after container
+    // monomorphs (state struct references `topaz_map_<K>_<V> *` /
+    // `topaz_set_<T> *`) and before fn typedefs (independent — fn typedefs
+    // don't reference iter and vice versa). Layout inside the slot is:
+    //   1. per-container state struct typedefs
+    //   2. per-elem iter typedefs (fat pointer struct with next fn pointer)
+    //   3. per-(source, container) static inline _next functions
+    const iterTypedefSlot = out.length;
     out.push("");
 
     // Phase 1.5-3.5e: fn typedefs for every distinct fn signature seen in
@@ -1291,6 +1377,31 @@ class Emitter {
         `#pragma GCC diagnostic pop\n`;
     }
 
+    if (
+      this.iterStateMonomorphs.size > 0 ||
+      this.iterTypedefMonomorphs.size > 0 ||
+      this.iterNextMonomorphs.size > 0
+    ) {
+      const iterLines: string[] = [];
+      // 1. state structs — depend on container monomorphs being defined above.
+      for (const t of this.iterStateMonomorphs.values()) {
+        iterLines.push(this.emitIterStateStruct(t));
+      }
+      // 2. iter typedefs — fat pointer struct, one per distinct elem type.
+      for (const t of this.iterTypedefMonomorphs.values()) {
+        iterLines.push(this.emitIterTypedef(t));
+      }
+      // 3. _next functions — reference both state struct and iter typedef.
+      for (const entry of this.iterNextMonomorphs.values()) {
+        iterLines.push(this.emitIterNextFunction(entry));
+      }
+      out[iterTypedefSlot] =
+        `#pragma GCC diagnostic push\n` +
+        `#pragma GCC diagnostic ignored "-Wunused-function"\n` +
+        `${iterLines.join("\n")}\n` +
+        `#pragma GCC diagnostic pop\n`;
+    }
+
     return out.join("\n") + "\n";
   }
 
@@ -1342,6 +1453,88 @@ class Emitter {
       `  return r;`,
       `}`,
     ].join("\n");
+  }
+
+  // Phase 1.5-3.5g-iterator: emit the per-container state struct used by every
+  // iter produced from this container. Holds a pointer to the source container
+  // and the current slot index; one struct shared by Map.values / Map.keys (or
+  // by Set.values / Set.keys, which iterate identically).
+  private emitIterStateStruct(t: TopazType): string {
+    const tag = iterContainerTag(t);
+    const cty = cTypeName(t);
+    return [
+      `typedef struct topaz_iter_state_${tag} {`,
+      `  ${cty} src;`,
+      `  size_t idx;`,
+      `} topaz_iter_state_${tag};`,
+    ].join("\n");
+  }
+
+  // Phase 1.5-3.5g-iterator: per-elem fat pointer `topaz_iter_<elem-tag>`. The
+  // `next` field's signature must reference the elem's C type, so we need a
+  // typedef per distinct elem (number / boolean / string / class<C> / iface<I>).
+  private emitIterTypedef(elem: TopazType): string {
+    const tag = elemTag(elem);
+    const cty = cTypeName(elem);
+    return [
+      `typedef struct topaz_iter_${tag} {`,
+      `  void *state;`,
+      `  ${cty} (*next)(void *state, bool *done);`,
+      `} topaz_iter_${tag};`,
+    ].join("\n");
+  }
+
+  // Phase 1.5-3.5g-iterator: per-(source, container) `_next` function. Linear
+  // probe over `src->cap`, skipping non-OCCUPIED slots (same walk as the
+  // hash-form for-of lowering in 1.5-3.5g-mapset); on exhaustion sets *done
+  // and returns the elem's zero value (caller ignores the value when done).
+  private emitIterNextFunction(entry: {
+    containerType: TopazType;
+    source: "map_values" | "map_keys" | "set_values";
+    elemType: TopazType;
+    field: "key" | "value";
+  }): string {
+    const containerTag = iterContainerTag(entry.containerType);
+    const cty = cTypeName(entry.elemType);
+    const suffix = entry.source.endsWith("_values") ? "values" : "keys";
+    const fnName = `topaz_iter_${containerTag}_${suffix}_next`;
+    const zero = zeroValueOfElem(entry.elemType);
+    return [
+      `static ${cty} ${fnName}(void *state, bool *done) {`,
+      `  topaz_iter_state_${containerTag} *s = (topaz_iter_state_${containerTag} *)state;`,
+      `  while (s->idx < s->src->cap) {`,
+      `    size_t i = s->idx;`,
+      `    s->idx = i + 1;`,
+      `    if (s->src->slots[i].state == TOPAZ_HASH_SLOT_OCCUPIED) {`,
+      `      return s->src->slots[i].${entry.field};`,
+      `    }`,
+      `  }`,
+      `  *done = true;`,
+      `  return ${zero};`,
+      `}`,
+    ].join("\n");
+  }
+
+  // Phase 1.5-3.5g-iterator: emit a stmt expression that allocates the iter
+  // state on the arena, snapshots the source container, and returns the fat
+  // pointer { .state, .next }. Used by standalone `.values()` / `.keys()` call
+  // sites (the for-of hash-form lowering bypasses this and walks slots in-line).
+  private emitIterConstruction(
+    recvExpr: ts.Expression,
+    containerType: TopazType,
+    source: "map_values" | "map_keys" | "set_values",
+    elemType: TopazType,
+    field: "key" | "value",
+  ): string {
+    this.recordIterMonomorph(elemType, containerType, source, field);
+    const containerTag = iterContainerTag(containerType);
+    const tag = elemTag(elemType);
+    const elemCty = cTypeName(elemType);
+    const suffix = source.endsWith("_values") ? "values" : "keys";
+    const id = this.tmpCounter++;
+    const stateTmp = `__topaz_iter_state_${id}`;
+    const recvStr = this.emitExpression(recvExpr);
+    return `({ topaz_iter_state_${containerTag} *${stateTmp} = topaz_arena_alloc(sizeof(topaz_iter_state_${containerTag})); ${stateTmp}->src = ${recvStr}; ${stateTmp}->idx = 0; (topaz_iter_${tag}){ .state = ${stateTmp}, .next = (${elemCty} (*)(void *, bool *))&topaz_iter_${containerTag}_${suffix}_next }; })`;
   }
 
   // Phase 1.4c-1a: expand TOPAZ_ARRAY_DEFINE for class/interface element types.
@@ -2031,6 +2224,30 @@ class Emitter {
         }
         this.recordSetMonomorph(s);
         return s;
+      }
+      // Phase 1.5-3.5g-iterator: Iterator<T> as first-class type. Elem must be
+      // scalar / class / interface (same shape constraint as Map / Set values).
+      // The typedef alone doesn't pull in a _next function — that's recorded
+      // at construction sites (Map.values / Map.keys / Set.values / Set.keys).
+      if (refName === "Iterator") {
+        if (!node.typeArguments || node.typeArguments.length !== 1) {
+          throw new CodegenError(node, "Iterator<T> requires exactly one type argument");
+        }
+        const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        if (
+          elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string"
+          && !isClassType(elem) && !isInterfaceType(elem)
+        ) {
+          throw new CodegenError(
+            node,
+            `Iterator<T>: element type ${typeIdent(elem)} is unsupported (must be scalar / class / interface)`,
+          );
+        }
+        // Reserve typedef so a bare `Iterator<T>` annotation (e.g. function
+        // return type) emits the struct even if no .values() / .keys() call
+        // appears in this TU.
+        this.iterTypedefMonomorphs.set(typeKey(elem), elem);
+        return { kind: "iter", elem };
       }
       if (this.genericClasses.has(refName)) {
         return this.instantiateGenericClass(refName, node.typeArguments, node);
@@ -3435,6 +3652,18 @@ class Emitter {
       );
     }
 
+    // Phase 1.5-3.5g-iterator: arbitrary Iterator<T> RHS (e.g. a bound iter,
+    // a function-returned iter, or a chained .values() left in a tmp) lowers
+    // to a while-loop driven by the iter's `next(state, &done)` callback. The
+    // hash-form lowering above stays as a fast-path optimization for direct
+    // .values() / .keys() / Set RHS — both forms are observationally equal.
+    if (rhsType.kind === "iter") {
+      return this.emitForOfIteratorLowering(
+        stmt, indent, rhsType, stmt.expression,
+        bindName, decl, isConst,
+      );
+    }
+
     if (!isArrayType(rhsType)) {
       let hint = "";
       if (isMapType(rhsType)) {
@@ -3444,7 +3673,7 @@ class Emitter {
       }
       throw new CodegenError(
         stmt.expression,
-        `for-of requires an Array<T>, Set<T>, Map.values(), or Map.keys() (got ${typeIdent(rhsType)})${hint}`,
+        `for-of requires an Array<T>, Set<T>, Iterator<T>, Map.values(), or Map.keys() (got ${typeIdent(rhsType)})${hint}`,
       );
     }
     this.recordArrayMonomorph(rhsType);
@@ -3567,6 +3796,77 @@ class Emitter {
         lines.push(
           `${innerPad}${bindCType} ${bindName} = ${htTmp}->slots[${idxTmp}].${field};`,
         );
+        if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+        lines.push(`${pad}  }`);
+        lines.push(`${pad}}`);
+        return lines.join("\n");
+      } finally {
+        this.scope.pop();
+      }
+    } finally {
+      this.scope.pop();
+    }
+  }
+
+  // Phase 1.5-3.5g-iterator: drive an arbitrary Iterator<T> via its `next`
+  // callback in a while-loop. The iter is snapshotted into a tmp so the RHS is
+  // evaluated once; each iteration calls `it.next(it.state, &done)` and stops
+  // when done. The return value when done is undefined-ish but ignored.
+  private emitForOfIteratorLowering(
+    stmt: ts.ForOfStatement,
+    indent: number,
+    iterType: Extract<TopazType, { kind: "iter" }>,
+    recvExpr: ts.Expression,
+    bindName: string,
+    decl: ts.VariableDeclaration,
+    isConst: boolean,
+  ): string {
+    const pad = "  ".repeat(indent);
+    const bindType = iterType.elem;
+
+    if (decl.type) {
+      const declared = this.typeFromAnnotation(decl.type, decl);
+      if (!typeEq(declared, bindType)) {
+        throw new CodegenError(
+          decl.type,
+          `for-of binding type ${typeIdent(declared)} does not match iterator element type ${typeIdent(bindType)}`,
+        );
+      }
+    }
+
+    const id = this.tmpCounter++;
+    const iterTmp = `__topaz_for_iter_${id}`;
+    const doneTmp = `__topaz_for_done_${id}`;
+    const valTmp = `__topaz_for_val_${id}`;
+    const iterCType = cTypeName(iterType);
+    const bindCType = cTypeName(bindType);
+    const recvStr = this.emitExpression(recvExpr);
+    const innerPad = "  ".repeat(indent + 2);
+
+    this.scope.push();
+    try {
+      this.scope.declare(bindName, bindType, isConst, decl);
+      this.scope.push();
+      try {
+        const stmtList: ts.Statement[] = ts.isBlock(stmt.statement)
+          ? Array.from(stmt.statement.statements)
+          : [stmt.statement];
+        const stmtLines: string[] = [];
+        for (const s of stmtList) {
+          stmtLines.push(this.emitStatement(s, indent + 2));
+          this.applyCarryNarrowing(s);
+        }
+
+        const lines: string[] = [];
+        lines.push(`${pad}{`);
+        lines.push(`${pad}  ${iterCType} ${iterTmp} = ${recvStr};`);
+        lines.push(`${pad}  for (;;) {`);
+        lines.push(`${innerPad}bool ${doneTmp} = false;`);
+        lines.push(
+          `${innerPad}${bindCType} ${valTmp} = ${iterTmp}.next(${iterTmp}.state, &${doneTmp});`,
+        );
+        lines.push(`${innerPad}if (${doneTmp}) break;`);
+        lines.push(`${innerPad}${bindCType} ${bindName} = ${valTmp};`);
         if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
         lines.push(`${pad}  }`);
         lines.push(`${pad}}`);
@@ -4828,15 +5128,22 @@ class Emitter {
       }
       return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
     }
-    // Phase 1.5-3.5g: .values() / .keys() are only meaningful as a for-of RHS;
-    // they have no standalone value representation (no Iterator interface yet).
-    // .entries() is also rejected because it requires destructuring on the
-    // binding side.
-    if (method === "values" || method === "keys") {
-      throw new CodegenError(
-        callee,
-        `Map.${method}() is only allowed as the right-hand side of a for-of statement`,
-      );
+    // Phase 1.5-3.5g-iterator: `.values()` / `.keys()` now yield an Iterator<T>
+    // value — a fat pointer struct allocated on the arena. The for-of dispatch
+    // recognizes the call as a special form for direct hash-walk lowering;
+    // standalone uses produce a real iter that can be bound / passed / consumed
+    // via for-of (which uses the while-form lowering instead).
+    if (method === "values") {
+      if (expr.arguments.length !== 0) {
+        throw new CodegenError(expr, "Map.values takes no arguments");
+      }
+      return this.emitIterConstruction(callee.expression, baseType, "map_values", v, "value");
+    }
+    if (method === "keys") {
+      if (expr.arguments.length !== 0) {
+        throw new CodegenError(expr, "Map.keys takes no arguments");
+      }
+      return this.emitIterConstruction(callee.expression, baseType, "map_keys", k, "key");
     }
     if (method === "entries") {
       throw new CodegenError(
@@ -4932,13 +5239,14 @@ class Emitter {
       }
       return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
     }
-    // Phase 1.5-3.5g: same restriction as Map — .values() / .keys() are only
-    // for for-of consumption, .entries() needs destructuring.
+    // Phase 1.5-3.5g-iterator: Set.values() / Set.keys() yield an Iterator<T>;
+    // both share `set_values` semantics (Set yields elem for either, matching
+    // JS), so we always pass source="set_values" + field="key".
     if (method === "values" || method === "keys") {
-      throw new CodegenError(
-        callee,
-        `Set.${method}() is only allowed as the right-hand side of a for-of statement`,
-      );
+      if (expr.arguments.length !== 0) {
+        throw new CodegenError(expr, `Set.${method} takes no arguments`);
+      }
+      return this.emitIterConstruction(callee.expression, baseType, "set_values", elem, "key");
     }
     if (method === "entries") {
       throw new CodegenError(
@@ -5637,12 +5945,8 @@ class Emitter {
           // pointer for class / iface V.
           if (m === "get") return makeUnion([v, T_UNDEFINED]);
           if (m === "has" || m === "delete") return T_BOOLEAN;
-          if (m === "values" || m === "keys") {
-            throw new CodegenError(
-              callee,
-              `Map.${m}() is only allowed as the right-hand side of a for-of statement`,
-            );
-          }
+          if (m === "values") return { kind: "iter", elem: v };
+          if (m === "keys") return { kind: "iter", elem: mapKey(baseType)! };
           if (m === "entries") {
             throw new CodegenError(
               callee,
@@ -5658,10 +5962,7 @@ class Emitter {
           }
           if (m === "has" || m === "delete") return T_BOOLEAN;
           if (m === "values" || m === "keys") {
-            throw new CodegenError(
-              callee,
-              `Set.${m}() is only allowed as the right-hand side of a for-of statement`,
-            );
+            return { kind: "iter", elem: setElem(baseType)! };
           }
           if (m === "entries") {
             throw new CodegenError(
