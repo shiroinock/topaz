@@ -121,7 +121,12 @@ function arrayElem(t: TopazType): TopazType | undefined {
 }
 
 function arrayOf(elem: TopazType): TopazType | undefined {
-  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)) return undefined;
+  // Phase 1.5-3.5g-array-fn: fn elems are accepted; Map / Set keep rejecting
+  // fn at their mapOf / setOf gates (fn equality / hashing is undefined).
+  if (
+    !isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)
+    && elem.kind !== "fn"
+  ) return undefined;
   return { kind: "array", elem };
 }
 
@@ -253,10 +258,10 @@ function elemTag(t: TopazType): string {
     case "union":
       throw new Error(`elemTag: union ${typeIdent(t)} cannot be a container element (1.5-3b)`);
     case "fn":
-      // Phase 1.5-3.5e: fn-typed container element / map value would need
-      // a runtime hash/eq strategy and per-fn-type monomorph expansion;
-      // defer to 1.5-3.5f when Array.map / closures land in containers.
-      throw new Error(`elemTag: function type ${typeIdent(t)} cannot be a container element (1.5-3.5e)`);
+      // Phase 1.5-3.5g-array-fn: fn elems are tagged like classes (the
+      // arity-prefixed identifier from typeIdent stripped of `topaz_`).
+      // Map / Set still reject fn at mapOf / setOf (eq / hash undefined).
+      return typeIdent(t).slice("topaz_".length);
     case "iter":
       // Phase 1.5-3.5g-iterator: Iterator<T> values are single-pass and own
       // arena-allocated state — storing them in Array / Map / Set would need
@@ -695,6 +700,12 @@ class Emitter {
   // header only preexpands the scalar monomorphs. Keyed by typeKey() so we
   // de-duplicate structurally (TopazType objects compare by reference).
   private arrayMonomorphs = new Map<string, TopazType>();
+  // Phase 1.5-3.5g-array-fn: Array<fn> monomorphs live in a separate slot
+  // because the TOPAZ_ARRAY_DEFINE expansion references the fn typedef, which
+  // is itself emitted after the regular container slot. Splitting them keeps
+  // the existing slot ordering invariants intact (container monomorphs ->
+  // arrayJoinHelpers -> iter -> fn typedef -> Array<fn> container).
+  private arrayFnMonomorphs = new Map<string, TopazType>();
   // Phase 1.5-3.5f-join: Array monomorphs that need a per-(elem) `_join` helper
   // emitted. Keyed by typeKey() of the Array<elem> type. Helpers are generated
   // for scalar elems (number / boolean / string) only; class / iface / nested
@@ -739,7 +750,16 @@ class Emitter {
 
   private recordArrayMonomorph(t: TopazType): void {
     if (!isArrayType(t)) return;
-    if (isScalarType(arrayElem(t)!)) return; // runtime.h preexpands these
+    const elem = arrayElem(t)!;
+    if (isScalarType(elem)) return; // runtime.h preexpands these
+    if (elem.kind === "fn") {
+      // Phase 1.5-3.5g-array-fn: defer to the post-fn-typedef slot. The
+      // underlying fn typedef must also be emitted so the macro expansion
+      // resolves `topaz_fn_<...>`.
+      this.recordFnMonomorph(elem);
+      this.arrayFnMonomorphs.set(typeKey(t), t);
+      return;
+    }
     this.arrayMonomorphs.set(typeKey(t), t);
   }
 
@@ -1115,6 +1135,13 @@ class Emitter {
     const fnTypedefSlot = out.length;
     out.push("");
 
+    // Phase 1.5-3.5g-array-fn: Array<fn> TOPAZ_ARRAY_DEFINE expansions. Must
+    // follow fnTypedefSlot so `topaz_fn_<...>` is a complete type, and must
+    // precede arrow / function fwd decls so any signature carrying
+    // `topaz_array_fn_<...> *` resolves.
+    const arrayFnContainerSlot = out.length;
+    out.push("");
+
     // Phase 1.5-3.5e: forward declarations for arrow functions + their env
     // structs. Goes before user function bodies so a function that returns an
     // arrow can reference `__topaz_arrow_<N>` / `__topaz_env_<N>` by name.
@@ -1377,6 +1404,18 @@ class Emitter {
         `#pragma GCC diagnostic pop\n`;
     }
 
+    if (this.arrayFnMonomorphs.size > 0) {
+      const fnArrayLines: string[] = [];
+      for (const t of this.arrayFnMonomorphs.values()) {
+        fnArrayLines.push(this.emitArrayFnMonomorphMacro(t));
+      }
+      out[arrayFnContainerSlot] =
+        `#pragma GCC diagnostic push\n` +
+        `#pragma GCC diagnostic ignored "-Wunused-function"\n` +
+        `${fnArrayLines.join("\n")}\n` +
+        `#pragma GCC diagnostic pop\n`;
+    }
+
     if (
       this.iterStateMonomorphs.size > 0 ||
       this.iterTypedefMonomorphs.size > 0 ||
@@ -1551,6 +1590,18 @@ class Emitter {
       throw new Error(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
     return `TOPAZ_ARRAY_DEFINE(${tag}, ${cElem})`;
+  }
+
+  // Phase 1.5-3.5g-array-fn: TOPAZ_ARRAY_DEFINE for fn-typed elements. Emitted
+  // in a separate slot after the fn typedef so the macro expansion sees the
+  // fat-pointer struct as a complete type.
+  private emitArrayFnMonomorphMacro(t: TopazType): string {
+    const tag = arrayShortName(t);
+    const elem = arrayElem(t)!;
+    if (elem.kind !== "fn") {
+      throw new Error(`emitArrayFnMonomorphMacro: not an fn-elem array, got ${typeIdent(elem)}`);
+    }
+    return `TOPAZ_ARRAY_DEFINE(${tag}, ${typeIdent(elem)})`;
   }
 
   // Phase 1.4c-1b: expand TOPAZ_MAP_DEFINE for scalar-keyed maps whose value
@@ -4879,15 +4930,9 @@ class Emitter {
       const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
       const u = fnType.returnType;
       // The result Array<U> reuses the same monomorph machinery as any other
-      // container. fn / undefined / union element types are rejected by
-      // elemTag, so an early check produces a clearer message than the
-      // downstream "no Array monomorph" error.
-      if (u.kind === "fn") {
-        throw new CodegenError(
-          cb,
-          "Array.map callback returning a fn type is unsupported (fn cannot be a container element yet)",
-        );
-      }
+      // container. undefined / union element types still lack a monomorph;
+      // fn return type is now accepted (Array<fn> uses the post-fn-typedef
+      // slot — see recordArrayMonomorph for fn-elem routing).
       if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
         throw new CodegenError(
           cb,
@@ -5505,8 +5550,17 @@ class Emitter {
       if (!local && this.captureContext && this.captureContext.captures.has(expr.text)) {
         return this.captureContext.captures.get(expr.text)!;
       }
-      if (!local) throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
-      return local.type;
+      if (local) return local.type;
+      // Phase 1.5-3.5g-array-fn: top-level functions are addressable as fn
+      // values when referenced by name (`seeds.map(makeAdder)`). Generic
+      // functions need a call-site type-arg list to monomorphize, so they
+      // stay rejected here.
+      const sig = this.functionSigs.get(expr.text);
+      if (sig) {
+        const fnType: TopazType = { kind: "fn", params: sig.params, returnType: sig.returnType };
+        return fnType;
+      }
+      throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
     }
     if (ts.isPropertyAccessExpression(expr) && expr.questionDotToken) {
       const { fieldType } = this.resolveOptionalFieldType(expr);
@@ -5834,12 +5888,8 @@ class Emitter {
             const cb = expr.arguments[0]!;
             const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
             const u = fnType.returnType;
-            if (u.kind === "fn") {
-              throw new CodegenError(
-                cb,
-                "Array.map callback returning a fn type is unsupported (fn cannot be a container element yet)",
-              );
-            }
+            // Phase 1.5-3.5g-array-fn: fn return type now routes to Array<fn>
+            // via recordArrayMonomorph -> arrayFnMonomorphs.
             if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
               throw new CodegenError(
                 cb,
@@ -6124,6 +6174,15 @@ class Emitter {
       expr.text === expected.value
     ) {
       return;
+    }
+    // Phase 1.5-3.5g-array-fn: arrows without annotations need the expected fn
+    // type to type-check (the unannotated `inferType` would throw). Mirror the
+    // contextual path in emitWithExpected so `=` / `[i] = ` / `.push(arrow)`
+    // see the same validation rules.
+    if (ts.isArrowFunction(expr) && expected.kind === "fn") {
+      const actual = this.inferArrowType(expr, expected);
+      if (typeEq(actual, expected)) return;
+      throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
     }
     const actual = this.inferType(expr);
     if (typeEq(actual, expected)) return;

@@ -137,7 +137,9 @@ run_fail_case coalesce_non_optional_fail examples/coalesce_non_optional_fail.ts 
 run_fail_case optional_chain_non_optional_fail examples/optional_chain_non_optional_fail.ts "optional chain \`?.\` requires a \`T | undefined\` receiver"
 run_fail_case optional_call_fail examples/optional_call_fail.ts "optional call \`f?.()\` is unsupported"
 run_fail_case arrow_unannotated_fail examples/arrow_unannotated_fail.ts "arrow function parameter requires a type annotation"
-run_fail_case arrow_in_container_fail examples/arrow_in_container_fail.ts "no Array monomorph for element type topaz_fn_"
+run_case array_of_fn $'6\n50\n2\n-95\n13\n16\n60\n3\n101\n102\n103\n19\n49\n0\nn=7\nn*2=14'
+run_fail_case map_of_fn_fail examples/map_of_fn_fail.ts "no Map monomorph for key=topaz_string, value=topaz_fn_"
+run_fail_case set_of_fn_fail examples/set_of_fn_fail.ts "no Set monomorph for element type topaz_fn_"
 run_fail_case arrow_nested_fn_type_fail examples/arrow_nested_fn_type_fail.ts "nested fn types in fn parameters are unsupported"
 run_fail_case array_map_callback_arity_fail examples/array_map_callback_arity_fail.ts "Array.map callback arity"
 run_fail_case array_map_callback_param_mismatch_fail examples/array_map_callback_param_mismatch_fail.ts "callback parameter type"
