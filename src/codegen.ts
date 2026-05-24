@@ -14,6 +14,9 @@ import * as ts from "typescript";
 //   形のみ受理する(scalar | undefined は 1.5-3c で Map.get の `V | undefined`
 //   と一緒に struct 表現を入れて対応する)。general union (A | B) は 1.5-3e の
 //   discriminated union narrowing で対応する。
+// Phase 1.5-3.5e: `fn` represents a closure value (function pointer + env
+// pointer fat pointer). Param names are stored for diagnostics but ignored by
+// `typeEq` / mangling — only positional types matter for type identity.
 type TopazType =
   | { kind: "number" }
   | { kind: "boolean" }
@@ -27,7 +30,8 @@ type TopazType =
   | { kind: "class"; name: string }
   | { kind: "iface"; name: string }
   | { kind: "dunion"; variants: readonly string[]; discriminator: string }
-  | { kind: "union"; variants: readonly TopazType[] };
+  | { kind: "union"; variants: readonly TopazType[] }
+  | { kind: "fn"; params: readonly ParamInfo[]; returnType: TopazType };
 
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
@@ -182,6 +186,17 @@ function typeEq(a: TopazType, b: TopazType): boolean {
       }
       return true;
     }
+    case "fn": {
+      // Phase 1.5-3.5e: positional param comparison; param names are
+      // informational only. Two fn types are equal when arity matches, each
+      // param type is equal positionally, and return types are equal.
+      const bf = b as Extract<TopazType, { kind: "fn" }>;
+      if (a.params.length !== bf.params.length) return false;
+      for (let i = 0; i < a.params.length; i++) {
+        if (!typeEq(a.params[i]!.type, bf.params[i]!.type)) return false;
+      }
+      return typeEq(a.returnType, bf.returnType);
+    }
   }
 }
 
@@ -230,6 +245,11 @@ function elemTag(t: TopazType): string {
       throw new Error("elemTag: bare undefined cannot be a container element");
     case "union":
       throw new Error(`elemTag: union ${typeIdent(t)} cannot be a container element (1.5-3b)`);
+    case "fn":
+      // Phase 1.5-3.5e: fn-typed container element / map value would need
+      // a runtime hash/eq strategy and per-fn-type monomorph expansion;
+      // defer to 1.5-3.5f when Array.map / closures land in containers.
+      throw new Error(`elemTag: function type ${typeIdent(t)} cannot be a container element (1.5-3.5e)`);
     default:
       throw new Error(`elemTag: container element kind=${(t as TopazType).kind} is unsupported (no nested containers yet)`);
   }
@@ -292,12 +312,63 @@ function typeIdent(t: TopazType): string {
       return `topaz_dunion_${[...t.variants].sort().join("_or_")}`;
     case "union":
       return `topaz_union_${t.variants.map((v) => typeIdent(v).slice("topaz_".length)).join("_or_")}`;
+    case "fn": {
+      // Phase 1.5-3.5e: arity prefix `a<N>` keeps different-arity signatures
+      // unambiguous even when param mangling contains `__`; the `__to__`
+      // separator splits param list from return type.
+      const paramIds = t.params.map((p) => typeIdent(p.type).slice("topaz_".length)).join("__");
+      const retId = typeIdent(t.returnType).slice("topaz_".length);
+      const paramSection = paramIds.length > 0 ? `__${paramIds}` : "";
+      return `topaz_fn_a${t.params.length}${paramSection}__to__${retId}`;
+    }
   }
 }
 
 // Stable key for using TopazType as a Map/Set key. Identical to typeIdent.
 function typeKey(t: TopazType): string {
   return typeIdent(t);
+}
+
+// Phase 1.5-3.5e: capture-analysis filter for identifiers that name compile-
+// time concepts rather than runtime values (so they should never be treated
+// as captures even if they appear inside an arrow body).
+function isBuiltinName(name: string): boolean {
+  // `undefined` lowers via emitUndefinedLiteral, never via a binding lookup.
+  // `console` is a synthetic namespace handled directly in emitCall.
+  return name === "undefined" || name === "console";
+}
+
+// Phase 1.5-3.5e: an identifier node is a "reference position" if reading
+// the identifier yields a value (vs. naming a property, parameter name, type
+// reference, etc.). Capture analysis only follows reference positions; the
+// other identifier sites either re-bind a name (declaration) or address a
+// member that has no scope binding (property access RHS).
+function isReferencePosition(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (!parent) return true;
+  // Property access RHS (`obj.name`) and method-call RHS — `name` is a member
+  // lookup, not a scope binding.
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
+  // Object literal key, property assignment key, shorthand are not scope refs.
+  if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
+  // Parameter name, variable declaration name, binding name, class member
+  // name, function name, etc. are declarations, not references.
+  if (ts.isParameter(parent) && parent.name === node) return false;
+  if (ts.isVariableDeclaration(parent) && parent.name === node) return false;
+  if (ts.isFunctionDeclaration(parent) && parent.name === node) return false;
+  if (ts.isClassDeclaration(parent) && parent.name === node) return false;
+  if (ts.isInterfaceDeclaration(parent) && parent.name === node) return false;
+  if (ts.isMethodDeclaration(parent) && parent.name === node) return false;
+  if (ts.isPropertyDeclaration(parent) && parent.name === node) return false;
+  if (ts.isPropertySignature(parent) && parent.name === node) return false;
+  if (ts.isMethodSignature(parent) && parent.name === node) return false;
+  // Type references / qualified names — purely compile-time.
+  if (ts.isTypeReferenceNode(parent)) return false;
+  if (ts.isQualifiedName(parent)) return false;
+  // import/export bits.
+  if (ts.isImportSpecifier(parent)) return false;
+  if (ts.isExportSpecifier(parent)) return false;
+  return true;
 }
 
 // C type used in declarations and signatures. Reference types (Array/Map/Set
@@ -343,6 +414,9 @@ function cTypeName(t: TopazType): string {
     return cTypeName(inner);
   }
   if (isInterfaceType(t)) return typeIdent(t);
+  // Phase 1.5-3.5e: fn type is a fat-pointer struct `{ fn, env }` passed by
+  // value. typeIdent matches the typedef name we synthesize in emit().
+  if (t.kind === "fn") return typeIdent(t);
   return isReferenceType(t) ? `${typeIdent(t)} *` : typeIdent(t);
 }
 
@@ -399,6 +473,12 @@ class Scope {
   // narrowed types for already-declared identifiers; lookup prefers the
   // innermost narrowing at-or-above the binding's frame.
   private narrowings: Map<string, TopazType>[] = [new Map()];
+  // Phase 1.5-3.5e: arrow function bodies push a barrier so their identifier
+  // lookups don't accidentally pierce through to outer locals — captures must
+  // route through the env struct instead. The barrier records the frame index
+  // below which `lookup` / `lookupBase` stop; capture analysis uses
+  // `lookupAcrossBarrier` to look up outer types while the barrier is active.
+  private barriers: number[] = [];
 
   push(): void {
     this.stack.push(new Map());
@@ -410,6 +490,14 @@ class Scope {
     this.narrowings.pop();
   }
 
+  pushBarrier(): void {
+    this.barriers.push(this.stack.length);
+  }
+
+  popBarrier(): void {
+    this.barriers.pop();
+  }
+
   declare(name: string, type: TopazType, isConst: boolean, node: ts.Node): void {
     const top = this.stack[this.stack.length - 1]!;
     if (top.has(name)) {
@@ -419,7 +507,8 @@ class Scope {
   }
 
   lookup(name: string): Binding | undefined {
-    for (let i = this.stack.length - 1; i >= 0; i--) {
+    const floor = this.barriers.length > 0 ? this.barriers[this.barriers.length - 1]! : 0;
+    for (let i = this.stack.length - 1; i >= floor; i--) {
       const b = this.stack[i]!.get(name);
       if (b) {
         for (let j = this.narrowings.length - 1; j >= i; j--) {
@@ -437,6 +526,19 @@ class Scope {
   // the C representation (for scalar opt structs, narrowed reads append
   // `.value` while assignments target the whole struct).
   lookupBase(name: string): Binding | undefined {
+    const floor = this.barriers.length > 0 ? this.barriers[this.barriers.length - 1]! : 0;
+    for (let i = this.stack.length - 1; i >= floor; i--) {
+      const b = this.stack[i]!.get(name);
+      if (b) return b;
+    }
+    return undefined;
+  }
+
+  // Phase 1.5-3.5e: outer-scope lookup that ignores any active barrier. Only
+  // capture analysis uses this — body emission must go through `lookup` so
+  // missing captures show up as "unknown identifier" rather than silently
+  // referencing the outer variable.
+  lookupAcrossBarrier(name: string): Binding | undefined {
     for (let i = this.stack.length - 1; i >= 0; i--) {
       const b = this.stack[i]!.get(name);
       if (b) return b;
@@ -577,6 +679,18 @@ class Emitter {
   private genericClasses = new Map<string, GenericClassInfo>();
   private classMonomorphs = new Map<string, ClassMonomorphInfo>();
   private classMonomorphWorklist: string[] = [];
+  // Phase 1.5-3.5e: each arrow expression lowers to (a) a static C function
+  // `__topaz_arrow_<N>` and (b) optionally an env struct `__topaz_env_<N>`
+  // for its captures. arrowDefLines accumulates both halves in source order
+  // and is spliced into the arrowDefSlot at end of emit(). captureContext is
+  // active only while emitting an arrow body — body identifier lookups
+  // consult it after scope.lookup fails.
+  private arrowCounter = 0;
+  private arrowFwdLines: string[] = [];
+  private arrowDefLines: string[] = [];
+  private captureContext:
+    | { envType: string; envIsEmpty: boolean; captures: Map<string, TopazType> }
+    | undefined;
 
   private recordArrayMonomorph(t: TopazType): void {
     if (!isArrayType(t)) return;
@@ -599,6 +713,16 @@ class Emitter {
   private recordDunionMonomorph(t: TopazType): void {
     if (t.kind !== "dunion") return;
     this.dunionMonomorphs.set(typeKey(t), t);
+  }
+
+  // Phase 1.5-3.5e: each distinct fn signature seen in user code (annotation
+  // or arrow expression) gets a typedef + struct expansion emitted in the
+  // fn-typedef slot. fn-in-fn signatures are rejected at the annotation site
+  // so we never have to chase nested monomorphs.
+  private fnMonomorphs = new Map<string, TopazType>();
+  private recordFnMonomorph(t: TopazType): void {
+    if (t.kind !== "fn") return;
+    this.fnMonomorphs.set(typeKey(t), t);
   }
 
   // Phase 1.5-3e: union of class types with shared `kind: "literal"`
@@ -871,6 +995,21 @@ class Emitter {
     const containerMonomorphSlot = out.length;
     out.push("");
 
+    // Phase 1.5-3.5e: fn typedefs for every distinct fn signature seen in
+    // user code. Placed after container monomorphs but before function
+    // signatures so user functions, class methods, and main() can all
+    // reference fn types in params / returns / local declarations. Interface
+    // method signatures are emitted before this slot, so fn types in iface
+    // methods were rejected at collection time.
+    const fnTypedefSlot = out.length;
+    out.push("");
+
+    // Phase 1.5-3.5e: forward declarations for arrow functions + their env
+    // structs. Goes before user function bodies so a function that returns an
+    // arrow can reference `__topaz_arrow_<N>` / `__topaz_env_<N>` by name.
+    const arrowFwdSlot = out.length;
+    out.push("");
+
     for (const fn of functions) {
       if (fn.typeParameters && fn.typeParameters.length > 0) continue;
       out.push(`${this.formatSignature(fn)};`);
@@ -930,6 +1069,13 @@ class Emitter {
     // generic function monomorph defs since a generic class method body
     // might call a generic function with a monomorph class type arg.
     const classMonoDefSlot = out.length;
+    out.push("");
+
+    // Phase 1.5-3.5e: per-arrow env struct typedef + static arrow function
+    // definitions. Accumulated into `arrowDefLines` as user expressions are
+    // walked, spliced in here so the bodies can reference any prior user
+    // function / class method by direct name.
+    const arrowDefSlot = out.length;
     out.push("");
 
     // Phase 1.4c-2: monomorph definitions land just before main, after any
@@ -1029,6 +1175,32 @@ class Emitter {
         '#pragma GCC diagnostic pop',
       ].join("\n");
       out[monomorphDefSlot] = wrapped;
+    }
+
+    // Phase 1.5-3.5e: fn typedefs and arrow definitions. The typedef block is
+    // self-contained (each fn type is a `{ fn ptr; env ptr; }` struct that
+    // only references already-declared types), so no `#pragma` is needed.
+    // Arrow defs use `void *env` even when the arrow has no captures, which
+    // would trip -Wunused-parameter; wrap the block to suppress.
+    if (this.fnMonomorphs.size > 0) {
+      const lines: string[] = [];
+      for (const t of this.fnMonomorphs.values()) {
+        lines.push(this.emitFnTypedef(t));
+      }
+      out[fnTypedefSlot] = lines.join("\n") + "\n";
+    }
+    if (this.arrowFwdLines.length > 0) {
+      // Env struct typedefs sit alongside the arrow fwd decls; no `-Wunused`
+      // concerns since these are just declarations.
+      out[arrowFwdSlot] = this.arrowFwdLines.join("\n") + "\n";
+    }
+    if (this.arrowDefLines.length > 0) {
+      out[arrowDefSlot] = [
+        '#pragma GCC diagnostic push',
+        '#pragma GCC diagnostic ignored "-Wunused-parameter"',
+        this.arrowDefLines.join("\n"),
+        '#pragma GCC diagnostic pop',
+      ].join("\n");
     }
 
     if (
@@ -1223,6 +1395,9 @@ class Emitter {
           throw new CodegenError(m, `duplicate member '${fname}' in interface '${info.name}'`);
         }
         const t = this.typeFromAnnotation(m.type, m);
+        if (t.kind === "fn") {
+          throw new CodegenError(m, "fn-typed interface fields are unsupported (Phase 1.5-3.5e)");
+        }
         info.fields.set(fname, t);
         info.fieldOrder.push(fname);
       } else if (ts.isMethodSignature(m)) {
@@ -1241,6 +1416,17 @@ class Emitter {
         }
         const params = this.collectParams(m.parameters);
         const returnType = this.typeFromAnnotation(m.type, m);
+        // Phase 1.5-3.5e: interface vtable struct is emitted before the fn
+        // typedef slot, so fn types in interface methods would forward-
+        // reference an undeclared typedef. Reject at collection time.
+        for (const p of params) {
+          if (p.type.kind === "fn") {
+            throw new CodegenError(m, "fn-typed parameters on interface methods are unsupported (Phase 1.5-3.5e)");
+          }
+        }
+        if (returnType.kind === "fn") {
+          throw new CodegenError(m, "fn-typed return on interface methods is unsupported (Phase 1.5-3.5e)");
+        }
         info.methods.set(mname, { params, returnType, decl: m });
         info.methodOrder.push(mname);
       } else if (ts.isIndexSignatureDeclaration(m)) {
@@ -1436,6 +1622,9 @@ class Emitter {
       throw new CodegenError(m, "field initializers are unsupported; assign in the constructor");
     }
     const t = this.typeFromAnnotation(m.type, m);
+    if (t.kind === "fn") {
+      throw new CodegenError(m, "fn-typed class fields are unsupported (Phase 1.5-3.5e); store the closure in a local instead");
+    }
     info.fields.set(fname, t);
     info.fieldOrder.push(fname);
   }
@@ -1772,6 +1961,45 @@ class Emitter {
         return interfaceOf(refName);
       }
     }
+    // Phase 1.5-3.5e: `(p: T) => R` function type. Param annotations are
+    // mandatory (no contextual inference yet); no rest/optional/default; no
+    // fn-in-fn signatures (the typedef slot is filled before any other fn
+    // monomorph could be referenced, but nested fn types raise mangling
+    // ambiguities not worth solving for the MVP).
+    if (ts.isFunctionTypeNode(node)) {
+      if (node.typeParameters && node.typeParameters.length > 0) {
+        throw new CodegenError(node, "generic function types are unsupported (Phase 1.5-3.5e)");
+      }
+      const params: ParamInfo[] = [];
+      const seenNames = new Set<string>();
+      for (const p of node.parameters) {
+        if (!ts.isIdentifier(p.name)) {
+          throw new CodegenError(p, "function-type parameter must be a simple identifier");
+        }
+        if (p.questionToken || p.dotDotDotToken) {
+          throw new CodegenError(p, "optional/rest parameters are unsupported in function types");
+        }
+        if (!p.type) {
+          throw new CodegenError(p, "function-type parameter requires a type annotation");
+        }
+        const pt = this.typeFromAnnotation(p.type, p);
+        if (pt.kind === "fn") {
+          throw new CodegenError(p, "nested fn types in fn parameters are unsupported (Phase 1.5-3.5e)");
+        }
+        if (seenNames.has(p.name.text)) {
+          throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
+        }
+        seenNames.add(p.name.text);
+        params.push({ name: p.name.text, type: pt });
+      }
+      const ret = this.typeFromAnnotation(node.type, node);
+      if (ret.kind === "fn") {
+        throw new CodegenError(node, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
+      }
+      const ft: TopazType = { kind: "fn", params, returnType: ret };
+      this.recordFnMonomorph(ft);
+      return ft;
+    }
     unsupported(node, "type");
   }
 
@@ -1840,6 +2068,345 @@ class Emitter {
       this.scope.pop();
       this.currentReturnType = prevRet;
       this.typeParamScope = prevScope;
+    }
+  }
+
+  // Phase 1.5-3.5e: derive the fn type of an arrow expression without
+  // emitting code. Used by inferType when the arrow appears in a position
+  // that needs only its type (e.g. as the RHS of a `let f = ...` whose
+  // initializer is being typed before the matching declareVar runs the
+  // emit path).
+  private inferArrowType(arrow: ts.ArrowFunction, expectedType: TopazType | undefined): TopazType {
+    const expectedFn = expectedType && expectedType.kind === "fn" ? expectedType : undefined;
+    if (expectedFn && expectedFn.params.length !== arrow.parameters.length) {
+      throw new CodegenError(
+        arrow,
+        `arrow function arity ${arrow.parameters.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
+      );
+    }
+    const params: ParamInfo[] = [];
+    for (let i = 0; i < arrow.parameters.length; i++) {
+      const p = arrow.parameters[i]!;
+      if (!ts.isIdentifier(p.name)) {
+        throw new CodegenError(p, "arrow function parameter must be a simple identifier");
+      }
+      let pt: TopazType;
+      if (p.type) {
+        pt = this.typeFromAnnotation(p.type, p);
+      } else if (expectedFn) {
+        pt = expectedFn.params[i]!.type;
+      } else {
+        throw new CodegenError(p, "arrow function parameter requires a type annotation (no contextual type available)");
+      }
+      params.push({ name: p.name.text, type: pt });
+    }
+    let returnType: TopazType;
+    if (arrow.type) {
+      returnType = this.typeFromAnnotation(arrow.type, arrow);
+    } else if (expectedFn) {
+      returnType = expectedFn.returnType;
+    } else {
+      throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
+    }
+    return { kind: "fn", params, returnType };
+  }
+
+  // Phase 1.5-3.5e: emit a typedef for a fn signature. The struct holds a
+  // function pointer that takes `void *env` as its hidden first parameter
+  // followed by the user-visible params, and a generic env pointer that the
+  // arrow's body uses to reach its captures. Both fields are present even for
+  // arrows with no captures (env is just NULL) so the call site dispatch is
+  // uniform.
+  private emitFnTypedef(t: TopazType): string {
+    if (t.kind !== "fn") throw new Error("emitFnTypedef: not a fn type");
+    const name = typeIdent(t);
+    const ret = cTypeName(t.returnType);
+    const paramList = t.params.length === 0
+      ? "void *"
+      : ["void *", ...t.params.map((p) => cTypeName(p.type))].join(", ");
+    return `typedef struct ${name} {\n  ${ret} (*fn)(${paramList});\n  void *env;\n} ${name};`;
+  }
+
+  // Phase 1.5-3.5e: walk a Topaz arrow expression and emit it as a static C
+  // function (named `__topaz_arrow_<N>`) plus, when needed, an env struct
+  // typedef (`__topaz_env_<N>`) and arena allocation. Returns a compound
+  // literal of the fn fat-pointer type that the caller can store / pass.
+  //
+  // The arrow's body is type-checked inside a scope.push() with a barrier so
+  // that identifier lookups in the body cannot reach outer locals directly —
+  // they must instead route through the env struct, which capture analysis
+  // populates. Capture analysis itself uses `lookupAcrossBarrier` to peek
+  // through the barrier and record types for each free identifier the body
+  // references.
+  //
+  // Capture semantics are by-value (a snapshot of the outer variable's value
+  // at the moment the arrow is constructed), divergent from JS's by-reference
+  // closures. Mutating an outer `let` after capture does not affect the
+  // closure's view, and mutating the captured field inside the arrow does not
+  // propagate back. Documented as a divergence in CLAUDE.md.
+  private emitArrowFunction(arrow: ts.ArrowFunction, expectedType?: TopazType): string {
+    // Reject unsupported syntax up front. Generic / async / default / rest /
+    // destructuring all force special-case lowering that we don't yet plan to
+    // support, so calling them out explicitly beats a confusing downstream
+    // error.
+    if (arrow.typeParameters && arrow.typeParameters.length > 0) {
+      throw new CodegenError(arrow, "generic arrow functions are unsupported (Phase 1.5-3.5e)");
+    }
+    if (arrow.modifiers && arrow.modifiers.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) {
+      throw new CodegenError(arrow, "async arrow functions are unsupported");
+    }
+
+    // Param types: annotation is mandatory unless the expected fn type can
+    // contextually supply them. Default / optional / rest / destructuring are
+    // all rejected. Names must be unique.
+    const expectedFn = expectedType && expectedType.kind === "fn" ? expectedType : undefined;
+    if (expectedFn && expectedFn.params.length !== arrow.parameters.length) {
+      throw new CodegenError(
+        arrow,
+        `arrow function arity ${arrow.parameters.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
+      );
+    }
+    const params: ParamInfo[] = [];
+    const seenNames = new Set<string>();
+    for (let i = 0; i < arrow.parameters.length; i++) {
+      const p = arrow.parameters[i]!;
+      if (!ts.isIdentifier(p.name)) {
+        throw new CodegenError(p, "arrow function parameter must be a simple identifier (destructuring is unsupported)");
+      }
+      if (p.questionToken || p.initializer || p.dotDotDotToken) {
+        throw new CodegenError(p, "optional/default/rest arrow parameters are unsupported");
+      }
+      let pt: TopazType;
+      if (p.type) {
+        pt = this.typeFromAnnotation(p.type, p);
+      } else if (expectedFn) {
+        pt = expectedFn.params[i]!.type;
+      } else {
+        throw new CodegenError(p, "arrow function parameter requires a type annotation (no contextual type available)");
+      }
+      if (pt.kind === "fn") {
+        throw new CodegenError(p, "nested fn types in arrow parameters are unsupported (Phase 1.5-3.5e)");
+      }
+      if (seenNames.has(p.name.text)) {
+        throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
+      }
+      seenNames.add(p.name.text);
+      params.push({ name: p.name.text, type: pt });
+    }
+
+    // Return type: annotation required (we don't infer from body yet) unless
+    // an expected fn type supplies it.
+    let returnType: TopazType;
+    if (arrow.type) {
+      returnType = this.typeFromAnnotation(arrow.type, arrow);
+    } else if (expectedFn) {
+      returnType = expectedFn.returnType;
+    } else {
+      throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
+    }
+    if (returnType.kind === "fn") {
+      throw new CodegenError(arrow, "nested fn types in arrow return position are unsupported (Phase 1.5-3.5e)");
+    }
+
+    const arrowType: TopazType = { kind: "fn", params, returnType };
+    this.recordFnMonomorph(arrowType);
+
+    // Body: rewrite expression-bodied arrows (`(x) => x + 1`) into a single
+    // `return` statement so the same emit path works for both forms.
+    const id = this.arrowCounter++;
+    const fnName = `__topaz_arrow_${id}`;
+    const envName = `__topaz_env_${id}`;
+
+    // Capture analysis: walk the body AST collecting free identifiers that
+    // resolve to outer-scope bindings via `lookupAcrossBarrier`. Locals
+    // declared inside the body and the param names themselves are excluded.
+    const captures = new Map<string, TopazType>();
+    this.collectCaptures(arrow, new Set(params.map((p) => p.name)), captures);
+
+    const envIsEmpty = captures.size === 0;
+    const envTypedef = envIsEmpty
+      ? ""
+      : `typedef struct ${envName} {\n${[...captures.entries()].map(([n, t]) => `  ${cTypeName(t)} ${n};`).join("\n")}\n} ${envName};`;
+
+    // Emit the body with a barrier in place. Set captureContext so identifier
+    // emission can route reads through `((${envName} *)__topaz_env)->name`
+    // instead of the raw identifier.
+    const prevCaptureContext = this.captureContext;
+    const prevRet = this.currentReturnType;
+    this.captureContext = { envType: envName, envIsEmpty, captures };
+    this.currentReturnType = returnType;
+    // Barrier must come BEFORE the scope.push so that the new (inner) frame
+    // sits at the barrier floor and lookups within the body can still see
+    // it. Outer frames remain hidden behind the barrier.
+    this.scope.pushBarrier();
+    this.scope.push();
+    try {
+      for (const p of params) {
+        this.scope.declare(p.name, p.type, /* isConst */ false, arrow);
+      }
+      let bodyText: string;
+      if (ts.isBlock(arrow.body)) {
+        bodyText = this.emitBlock(arrow.body, 0);
+      } else {
+        // Expression body: wrap in `{ return <expr>; }`. emitWithExpected
+        // applies the return-type coercion (class -> iface, scalar -> opt
+        // wrap, etc.) the same way an explicit `return` statement would.
+        const exprStr = this.emitWithExpected(arrow.body as ts.Expression, returnType);
+        bodyText = `{\n  return ${exprStr};\n}`;
+      }
+
+      // C function signature: env is `void *` so the same callable shape
+      // works for both capturing and non-capturing arrows.
+      const paramDecls = params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
+      const fnSig = `static ${cTypeName(returnType)} ${fnName}(void *__topaz_env${paramDecls.length > 0 ? ", " + paramDecls : ""})`;
+
+      // Splice the env typedef (if any) + the arrow's forward declaration
+      // into the fwd slot; the full body goes into the def slot. This lets a
+      // function that returns an arrow reference `__topaz_arrow_<N>` and
+      // `__topaz_env_<N>` by name in its body even though the actual
+      // definition lands later in the C file.
+      const fwdLines: string[] = [];
+      if (envTypedef) fwdLines.push(envTypedef);
+      fwdLines.push(`${fnSig};`);
+      this.arrowFwdLines.push(fwdLines.join("\n"));
+      this.arrowDefLines.push(`${fnSig} ${bodyText}`);
+    } finally {
+      this.scope.pop();
+      this.scope.popBarrier();
+      this.captureContext = prevCaptureContext;
+      this.currentReturnType = prevRet;
+    }
+
+    // Build the call-site compound literal. Allocate the env on the arena
+    // and copy each captured value in. Non-capturing arrows just take a NULL
+    // env pointer.
+    const fnTypeName = typeIdent(arrowType);
+    if (envIsEmpty) {
+      return `((${fnTypeName}){ .fn = (${cTypeName(returnType)}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = NULL })`;
+    }
+    const envExprParts: string[] = [];
+    for (const [name, t] of captures) {
+      // Emit each capture using the *outer* scope. The barrier is already
+      // popped, so a plain emitExpression reads from the correct frame.
+      // Use a fresh tmp-free expression: re-emit the identifier the same way
+      // the outer scope sees it.
+      const captureExpr = this.emitCapturedIdentifier(name, t, arrow);
+      envExprParts.push(`.${name} = ${captureExpr}`);
+    }
+    const envInit = `({ ${envName} *__e = topaz_arena_alloc(sizeof(${envName})); *__e = (${envName}){ ${envExprParts.join(", ")} }; __e; })`;
+    return `((${fnTypeName}){ .fn = (${cTypeName(returnType)}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = ${envInit} })`;
+  }
+
+  // Phase 1.5-3.5e: emit an identifier as the outer scope sees it (for
+  // capture initialization). Handles narrowed scalar opt unions and narrowed
+  // dunion / unknown the same way emitExpression's identifier branch does.
+  private emitCapturedIdentifier(name: string, _capturedType: TopazType, anchor: ts.Node): string {
+    const b = this.scope.lookup(name);
+    if (!b) throw new CodegenError(anchor, `capture '${name}' is not visible at the arrow construction site`);
+    const base = this.scope.lookupBase(name)!;
+    if (isScalarOptUnion(base.type) && !typeEq(base.type, b.type)) {
+      return `(${name}).value`;
+    }
+    if (base.type.kind === "dunion" && isClassType(b.type)) {
+      const cname = classNameOf(b.type)!;
+      return `((topaz_class_${cname} *)(${name}).data)`;
+    }
+    if (base.type.kind === "unknown" && isClassType(b.type)) {
+      const cname = classNameOf(b.type)!;
+      return `((topaz_class_${cname} *)(${name}))`;
+    }
+    return name;
+  }
+
+  // Phase 1.5-3.5e: walk an arrow's body and collect free-identifier captures.
+  // `locals` accumulates names declared inside the body (params, then let /
+  // const / for-init / catch binding as the walk proceeds). Identifiers that
+  // are NOT locals AND resolve via `lookupAcrossBarrier` get added to
+  // `captures` with their outer-scope type. The same name encountered twice
+  // is recorded once (first hit wins).
+  //
+  // We deliberately do NOT recurse into nested arrows here — the inner arrow
+  // will run its own collectCaptures during its own emit, and the outer arrow
+  // sees the *inner* arrow's free vars as its own captures (transitively)
+  // because the inner emit calls emitCapturedIdentifier against the outer
+  // scope before we leave outer's emit.
+  private collectCaptures(
+    arrow: ts.ArrowFunction,
+    paramNames: ReadonlySet<string>,
+    captures: Map<string, TopazType>,
+  ): void {
+    const locals = new Set<string>(paramNames);
+    const visit = (node: ts.Node): void => {
+      // Track new local bindings before descending.
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+        locals.add(node.name.text);
+      }
+      if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
+        locals.add(node.name.text);
+      }
+      // ForOf: binding declared in initializer becomes local.
+      if (ts.isForOfStatement(node) && ts.isVariableDeclarationList(node.initializer)) {
+        for (const d of node.initializer.declarations) {
+          if (ts.isIdentifier(d.name)) locals.add(d.name.text);
+        }
+      }
+      // Catch clause: binding name becomes local.
+      if (ts.isCatchClause(node) && node.variableDeclaration && ts.isIdentifier(node.variableDeclaration.name)) {
+        locals.add(node.variableDeclaration.name.text);
+      }
+      // Nested arrow: stop descending into its body — but we DO need to
+      // collect its free identifiers w.r.t. *our* scope (since transitively
+      // they become our captures too). Run a recursive walk that treats the
+      // inner arrow's params + its own locals as off-limits.
+      if (ts.isArrowFunction(node) && node !== arrow) {
+        const innerParams = new Set<string>();
+        for (const p of node.parameters) {
+          if (ts.isIdentifier(p.name)) innerParams.add(p.name.text);
+        }
+        const innerCaps = new Map<string, TopazType>();
+        // Recurse but accumulate into a separate set; then merge into our
+        // captures (filtered by what's still resolved outside *our* params /
+        // locals).
+        const innerLocals = new Set<string>(innerParams);
+        const innerVisit = (n: ts.Node): void => {
+          if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) innerLocals.add(n.name.text);
+          if (ts.isForOfStatement(n) && ts.isVariableDeclarationList(n.initializer)) {
+            for (const d of n.initializer.declarations) if (ts.isIdentifier(d.name)) innerLocals.add(d.name.text);
+          }
+          if (ts.isCatchClause(n) && n.variableDeclaration && ts.isIdentifier(n.variableDeclaration.name)) {
+            innerLocals.add(n.variableDeclaration.name.text);
+          }
+          if (ts.isIdentifier(n) && !innerLocals.has(n.text) && !isBuiltinName(n.text)) {
+            if (!isReferencePosition(n)) return;
+            const b = this.scope.lookupAcrossBarrier(n.text);
+            if (b) innerCaps.set(n.text, b.type);
+          }
+          ts.forEachChild(n, innerVisit);
+        };
+        ts.forEachChild(node, innerVisit);
+        // Promote inner captures into our captures if they're not our locals.
+        for (const n of innerCaps.keys()) {
+          if (locals.has(n)) continue;
+          if (captures.has(n)) continue;
+          const b = this.scope.lookupAcrossBarrier(n);
+          if (b) captures.set(n, b.type);
+        }
+        return;
+      }
+      if (ts.isIdentifier(node) && !locals.has(node.text) && !isBuiltinName(node.text)) {
+        if (isReferencePosition(node)) {
+          const b = this.scope.lookupAcrossBarrier(node.text);
+          if (b && !captures.has(node.text)) {
+            captures.set(node.text, b.type);
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    if (ts.isBlock(arrow.body)) {
+      for (const s of arrow.body.statements) visit(s);
+    } else {
+      visit(arrow.body);
     }
   }
 
@@ -2882,7 +3449,15 @@ class Emitter {
       return this.emitTemplateExpression(expr);
     }
     if (ts.isIdentifier(expr)) {
-      const b = this.scope.lookup(expr.text);
+      // Phase 1.5-3.5e: inside an arrow body, lookup is barriered. If the
+      // identifier resolves only via captureContext, rewrite the read to go
+      // through the env struct.
+      const local = this.scope.lookup(expr.text);
+      if (!local && this.captureContext && this.captureContext.captures.has(expr.text)) {
+        const envType = this.captureContext.envType;
+        return `(((${envType} *)__topaz_env)->${expr.text})`;
+      }
+      const b = local;
       if (!b) {
         throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
       }
@@ -2912,6 +3487,17 @@ class Emitter {
     }
     if (ts.isParenthesizedExpression(expr)) {
       return `(${this.emitExpression(expr.expression)})`;
+    }
+    // Phase 1.5-3.5e: arrow expressions in non-contextual positions need
+    // explicit param + return annotations (no expected type to source them
+    // from). emitWithExpected provides the contextual path with an expected
+    // fn type for the four assignment sites.
+    if (ts.isArrowFunction(expr)) {
+      return this.emitArrowFunction(expr, undefined);
+    }
+    // Function expressions (`function () {}`) are not supported — use arrows.
+    if (ts.isFunctionExpression(expr)) {
+      throw new CodegenError(expr, "function expressions are unsupported (use an arrow `(...) => ...` instead)");
     }
     if (ts.isPropertyAccessExpression(expr) && expr.questionDotToken) {
       return this.emitOptionalPropertyAccess(expr);
@@ -3578,22 +4164,63 @@ class Emitter {
         return `${resolved.mangled}(${args})`;
       }
       const sig = this.functionSigs.get(callee.text);
-      if (!sig) {
-        throw new CodegenError(callee, `unknown function '${callee.text}'`);
+      if (sig) {
+        if (expr.arguments.length !== sig.params.length) {
+          throw new CodegenError(
+            expr,
+            `${callee.text}() expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
+          );
+        }
+        const args = expr.arguments
+          .map((a, i) => this.emitWithExpected(a, sig.params[i]!.type))
+          .join(", ");
+        return `${callee.text}(${args})`;
       }
-      if (expr.arguments.length !== sig.params.length) {
-        throw new CodegenError(
-          expr,
-          `${callee.text}() expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
-        );
+      // Phase 1.5-3.5e: fn-typed local (a binding holding an arrow / fn
+      // value). Resolve the fn type from the scope (or captureContext) and
+      // dispatch through the fat pointer.
+      const calleeType = this.inferType(callee);
+      if (calleeType.kind === "fn") {
+        return this.emitFnValueCall(expr, callee, calleeType);
       }
-      const args = expr.arguments
-        .map((a, i) => this.emitWithExpected(a, sig.params[i]!.type))
-        .join(", ");
-      return `${callee.text}(${args})`;
+      throw new CodegenError(callee, `unknown function '${callee.text}'`);
+    }
+
+    // Phase 1.5-3.5e: any other expression that types as a fn value (e.g.
+    // `obj.callback()` once class fields can hold fn values, or parenthesized
+    // arrow IIFE `((n) => n + 1)(42)`). For 1.5-3.5e we only support the
+    // identifier path and parenthesized arrow IIFEs.
+    const calleeType = this.inferType(callee);
+    if (calleeType.kind === "fn") {
+      return this.emitFnValueCall(expr, callee, calleeType);
     }
 
     unsupported(callee, "call target");
+  }
+
+  // Phase 1.5-3.5e: lower a call `f(args)` where `f` types as a fn fat
+  // pointer. The dispatch is `({ <fn type> __t = f; __t.fn(__t.env, args); })`
+  // so the callee is evaluated once even when it's a complex expression.
+  private emitFnValueCall(
+    expr: ts.CallExpression,
+    callee: ts.Expression,
+    fnType: TopazType,
+  ): string {
+    if (fnType.kind !== "fn") throw new Error("emitFnValueCall: not fn");
+    if (expr.arguments.length !== fnType.params.length) {
+      throw new CodegenError(
+        expr,
+        `fn value expects ${fnType.params.length} argument(s), got ${expr.arguments.length}`,
+      );
+    }
+    const args = expr.arguments
+      .map((a, i) => this.emitWithExpected(a, fnType.params[i]!.type))
+      .join(", ");
+    const tmp = `__topaz_fc_${this.tmpCounter++}`;
+    const calleeStr = this.emitExpression(callee);
+    const fnTypeName = typeIdent(fnType);
+    const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
+    return `({ ${fnTypeName} ${tmp} = ${calleeStr}; ${tmp}.fn(${callArgs}); })`;
   }
 
   private emitArrayMethodCall(
@@ -3964,6 +4591,18 @@ class Emitter {
     if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
       return T_STRING;
     }
+    // Phase 1.5-3.5e: an arrow's type is built from its param + return
+    // annotations. Without contextual typing we require all annotations; a
+    // contextual call site (emitWithExpected) feeds the expected type
+    // separately. Note: this triggers a redundant emit-into-discard but
+    // matches how other compound expressions handle inferType (the slot is
+    // append-only and stable).
+    if (ts.isArrowFunction(expr)) {
+      return this.inferArrowType(expr, undefined);
+    }
+    if (ts.isFunctionExpression(expr)) {
+      throw new CodegenError(expr, "function expressions are unsupported (use an arrow `(...) => ...` instead)");
+    }
     if (ts.isTemplateExpression(expr)) {
       // Phase 1.5-3.5: each ${} substitution must be number / boolean / string
       // (after narrowing). Class / interface / array / map / set / union have
@@ -3982,9 +4621,12 @@ class Emitter {
     if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
     if (ts.isIdentifier(expr)) {
       if (expr.text === "undefined") return T_UNDEFINED;
-      const b = this.scope.lookup(expr.text);
-      if (!b) throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
-      return b.type;
+      const local = this.scope.lookup(expr.text);
+      if (!local && this.captureContext && this.captureContext.captures.has(expr.text)) {
+        return this.captureContext.captures.get(expr.text)!;
+      }
+      if (!local) throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
+      return local.type;
     }
     if (ts.isPropertyAccessExpression(expr) && expr.questionDotToken) {
       const { fieldType } = this.resolveOptionalFieldType(expr);
@@ -4353,9 +4995,16 @@ class Emitter {
           return resolved.sig.returnType;
         }
         const sig = this.functionSigs.get(callee.text);
-        if (!sig) throw new CodegenError(callee, `unknown function '${callee.text}'`);
-        return sig.returnType;
+        if (sig) return sig.returnType;
+        // Phase 1.5-3.5e: fn-typed local — look up its inferred type and use
+        // its declared return type.
+        const calleeType = this.inferType(callee);
+        if (calleeType.kind === "fn") return calleeType.returnType;
+        throw new CodegenError(callee, `unknown function '${callee.text}'`);
       }
+      // Phase 1.5-3.5e: any other expression that types as a fn value.
+      const ct = this.inferType(callee);
+      if (ct.kind === "fn") return ct.returnType;
       unsupported(callee, "call target");
     }
     if (ts.isNewExpression(expr)) {
@@ -4525,6 +5174,17 @@ class Emitter {
     // for interface). Without a `T | undefined` expected this is a type error.
     if (ts.isIdentifier(expr) && expr.text === "undefined") {
       return this.emitUndefinedLiteral(expected, expr);
+    }
+    // Phase 1.5-3.5e: arrows pick up param/return types contextually from the
+    // expected fn type when annotations are missing. Pass expected through so
+    // `let f: (n: number) => number = (n) => n + 1` works.
+    if (ts.isArrowFunction(expr)) {
+      if (expected.kind === "fn") {
+        return this.emitArrowFunction(expr, expected);
+      }
+      const actual = this.inferArrowType(expr, undefined);
+      const raw = this.emitArrowFunction(expr, undefined);
+      return this.applyCoercion(raw, actual, expected, expr);
     }
     // Phase 1.5-3e: an expected string_literal accepts the matching literal
     // expression (the value flows in as plain string at runtime, so the

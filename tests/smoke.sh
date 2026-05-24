@@ -103,6 +103,8 @@ run_case non_null_and_coalesce $'10\n25\ntrue\n7\nalpha\n10\n-1\n20\n110\n7\n99\
 
 run_case optional_chain $'10\n-1\nalpha\n(none)\nalpha\n(none)\n30\n0\n5\n-1\ngreeting\n(none)\n7\n0\n100\n300\n-1\n2\n-1\n-1\n20\nalpha'
 
+run_case arrow_basic $'42\n42\ntrue\nfalse\n7\nhello, topaz\n100\n6\n7\n11\n12\n50\n75\n36\n100\n17\n123\ntopaz:ok'
+
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
 run_fail_case strict_field_init_fail examples/strict_field_init_fail.ts "is not definitely assigned in the constructor"
@@ -116,5 +118,8 @@ run_fail_case non_null_non_optional_fail examples/non_null_non_optional_fail.ts 
 run_fail_case coalesce_non_optional_fail examples/coalesce_non_optional_fail.ts "\`??\` requires the left operand to be \`T | undefined\`"
 run_fail_case optional_chain_non_optional_fail examples/optional_chain_non_optional_fail.ts "optional chain \`?.\` requires a \`T | undefined\` receiver"
 run_fail_case optional_call_fail examples/optional_call_fail.ts "optional call \`f?.()\` is unsupported"
+run_fail_case arrow_unannotated_fail examples/arrow_unannotated_fail.ts "arrow function parameter requires a type annotation"
+run_fail_case arrow_in_container_fail examples/arrow_in_container_fail.ts "no Array monomorph for element type topaz_fn_"
+run_fail_case arrow_nested_fn_type_fail examples/arrow_nested_fn_type_fail.ts "nested fn types in fn parameters are unsupported"
 
 echo "all tests passed"
