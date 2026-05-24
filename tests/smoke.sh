@@ -105,6 +105,16 @@ run_case optional_chain $'10\n-1\nalpha\n(none)\nalpha\n(none)\n30\n0\n5\n-1\ngr
 
 run_case arrow_basic $'42\n42\ntrue\nfalse\n7\nhello, topaz\n100\n6\n7\n11\n12\n50\n75\n36\n100\n17\n123\ntopaz:ok'
 
+run_case array_method_map $'2\n4\n6\n3\n9\n2\n4\nn=1\nn=3\ntrue\nfalse\n10\n30\n100\n300\n300\n0\n20\n40\n101\n301'
+
+run_case array_method_filter $'3\n1\n5\n2\n2\n4\n2\n1\n2\n3\nalpha\ndelta\n3\ntrue\ntrue\n2\n4\n2\n50\n100\n0\n0\n3\n2\n4\n3\n10\n50'
+
+run_case array_method_includes $'true\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse'
+
+run_case array_method_slice $'3\n20\n40\n3\n30\n50\n5\n10\n50\n2\n40\n50\n4\n10\n40\n2\n30\n40\n0\n0\n2\n40\n50\n0\n2\nbeta\ngamma\n1\n99\n777\n2\n20\n30\n2\n20\n30\n3\n4\n99'
+
+run_case array_method_join $'1,2,3\n5\n1, 2, 3\n7\n123\n3\n1 -> 2 -> 3\nalpha-beta-gamma\nalpha,beta,gamma\ntrue,false,true\ntrue | false | true\n\n0\n0\n42\n2\n3.14,0,-1.5\n2,4,6\n2-3\n2,3\n[1,2,3]\n1:2:3\n10:20'
+
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
 run_fail_case strict_field_init_fail examples/strict_field_init_fail.ts "is not definitely assigned in the constructor"
@@ -121,5 +131,16 @@ run_fail_case optional_call_fail examples/optional_call_fail.ts "optional call \
 run_fail_case arrow_unannotated_fail examples/arrow_unannotated_fail.ts "arrow function parameter requires a type annotation"
 run_fail_case arrow_in_container_fail examples/arrow_in_container_fail.ts "no Array monomorph for element type topaz_fn_"
 run_fail_case arrow_nested_fn_type_fail examples/arrow_nested_fn_type_fail.ts "nested fn types in fn parameters are unsupported"
+run_fail_case array_map_callback_arity_fail examples/array_map_callback_arity_fail.ts "Array.map callback arity"
+run_fail_case array_map_callback_param_mismatch_fail examples/array_map_callback_param_mismatch_fail.ts "callback parameter type"
+run_fail_case array_map_block_no_annotation_fail examples/array_map_block_no_annotation_fail.ts "block-bodied arrow callback requires an explicit return type annotation"
+run_fail_case array_filter_callback_non_boolean_fail examples/array_filter_callback_non_boolean_fail.ts "Array.filter callback must return boolean"
+run_fail_case array_includes_type_mismatch_fail examples/array_includes_type_mismatch_fail.ts "type mismatch: expected topaz_number, got topaz_string"
+run_fail_case array_includes_from_index_fail examples/array_includes_from_index_fail.ts "Array.includes \`fromIndex\` argument is unsupported"
+run_fail_case array_slice_arg_type_fail examples/array_slice_arg_type_fail.ts "Array.slice argument must be number"
+run_fail_case array_slice_too_many_args_fail examples/array_slice_too_many_args_fail.ts "Array.slice expects at most two arguments"
+run_fail_case array_join_class_elem_fail examples/array_join_class_elem_fail.ts "Array.join is unsupported for element type"
+run_fail_case array_join_sep_type_fail examples/array_join_sep_type_fail.ts "Array.join separator must be string"
+run_fail_case array_join_too_many_args_fail examples/array_join_too_many_args_fail.ts "Array.join expects at most one argument"
 
 echo "all tests passed"

@@ -655,6 +655,11 @@ class Emitter {
   // header only preexpands the scalar monomorphs. Keyed by typeKey() so we
   // de-duplicate structurally (TopazType objects compare by reference).
   private arrayMonomorphs = new Map<string, TopazType>();
+  // Phase 1.5-3.5f-join: Array monomorphs that need a per-(elem) `_join` helper
+  // emitted. Keyed by typeKey() of the Array<elem> type. Helpers are generated
+  // for scalar elems (number / boolean / string) only; class / iface / nested
+  // container elems are rejected at the call site so they never land here.
+  private arrayJoinMonomorphs = new Map<string, TopazType>();
   // Phase 1.4c-1b: same idea for Map<K, class|interface> and Set<class|interface>.
   // Maps are tracked by full (K, V) tuple so we get one expansion per combo.
   private mapMonomorphs = new Map<string, TopazType>();
@@ -696,6 +701,18 @@ class Emitter {
     if (!isArrayType(t)) return;
     if (isScalarType(arrayElem(t)!)) return; // runtime.h preexpands these
     this.arrayMonomorphs.set(typeKey(t), t);
+  }
+
+  // Phase 1.5-3.5f-join: register an Array<scalar> monomorph for `_join`
+  // helper emission. Helpers are emitted per (Array, elem) so chaining and
+  // multiple `.join` call sites share one definition. Only scalar elems land
+  // here — class / iface / nested container elems are rejected at the call
+  // site (format policy is undefined).
+  private recordArrayJoinMonomorph(t: TopazType): void {
+    if (!isArrayType(t)) return;
+    const elem = arrayElem(t)!;
+    if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") return;
+    this.arrayJoinMonomorphs.set(typeKey(t), t);
   }
 
   private recordMapMonomorph(t: TopazType): void {
@@ -995,6 +1012,14 @@ class Emitter {
     const containerMonomorphSlot = out.length;
     out.push("");
 
+    // Phase 1.5-3.5f-join: per-monomorph Array<T> `_join` helpers. Emitted as
+    // free `static inline` functions (not via TOPAZ_ARRAY_DEFINE) so the macro
+    // stays minimal. Placed after container monomorphs (so `topaz_array_<name>`
+    // typedefs exist) and before fn typedefs (so the helper signature can
+    // reference `topaz_string`).
+    const arrayJoinHelperSlot = out.length;
+    out.push("");
+
     // Phase 1.5-3.5e: fn typedefs for every distinct fn signature seen in
     // user code. Placed after container monomorphs but before function
     // signatures so user functions, class methods, and main() can all
@@ -1254,7 +1279,69 @@ class Emitter {
         `#pragma GCC diagnostic pop\n`;
     }
 
+    if (this.arrayJoinMonomorphs.size > 0) {
+      const joinLines: string[] = [];
+      for (const t of this.arrayJoinMonomorphs.values()) {
+        joinLines.push(this.emitArrayJoinHelper(t));
+      }
+      out[arrayJoinHelperSlot] =
+        `#pragma GCC diagnostic push\n` +
+        `#pragma GCC diagnostic ignored "-Wunused-function"\n` +
+        `${joinLines.join("\n")}\n` +
+        `#pragma GCC diagnostic pop\n`;
+    }
+
     return out.join("\n") + "\n";
+  }
+
+  // Phase 1.5-3.5f-join: emit a `static inline topaz_string
+  // topaz_array_<name>_join(topaz_array_<name> *src, topaz_string sep)` helper
+  // per Array<scalar> monomorph. Two passes: pass 1 stringifies each elem (or
+  // copies the string for `string` elems) into a stack-local cache while
+  // accumulating total length; pass 2 alloc()s the result buffer once from the
+  // arena and writes elements + separators in order. The cache holds up to
+  // TOPAZ_ARRAY_JOIN_STACK_CACHE topaz_string handles on the C stack — beyond
+  // that size, we restart pass 2 from scratch and re-stringify (memory cost
+  // grows linearly with N, never recursive). Caller-side tmp `__s` / `__sep`
+  // guarantees the recv / separator are evaluated once.
+  private emitArrayJoinHelper(t: TopazType): string {
+    const tag = arrayShortName(t);
+    const elem = arrayElem(t)!;
+    let toStringStmt: string;
+    if (elem.kind === "string") {
+      toStringStmt = `topaz_string __e = src->data[i];`;
+    } else if (elem.kind === "number") {
+      toStringStmt = `topaz_string __e = topaz_number_to_string(src->data[i]);`;
+    } else if (elem.kind === "boolean") {
+      toStringStmt = `topaz_string __e = topaz_boolean_to_string(src->data[i]);`;
+    } else {
+      throw new Error(`emitArrayJoinHelper: unsupported elem ${typeIdent(elem)}`);
+    }
+    return [
+      `static inline topaz_string topaz_array_${tag}_join(topaz_array_${tag} *src, topaz_string sep) {`,
+      `  size_t n = src->len;`,
+      `  if (n == 0) { topaz_string r = { "", 0 }; return r; }`,
+      `  size_t total = (n - 1) * sep.len;`,
+      `  for (size_t i = 0; i < n; i++) {`,
+      `    ${toStringStmt}`,
+      `    total += __e.len;`,
+      `  }`,
+      `  char *buf = (char *)topaz_arena_alloc(total + 1);`,
+      `  size_t off = 0;`,
+      `  for (size_t i = 0; i < n; i++) {`,
+      `    if (i > 0 && sep.len) {`,
+      `      memcpy(buf + off, sep.data, sep.len);`,
+      `      off += sep.len;`,
+      `    }`,
+      `    ${toStringStmt}`,
+      `    if (__e.len) memcpy(buf + off, __e.data, __e.len);`,
+      `    off += __e.len;`,
+      `  }`,
+      `  buf[total] = '\\0';`,
+      `  topaz_string r = { buf, total };`,
+      `  return r;`,
+      `}`,
+    ].join("\n");
   }
 
   // Phase 1.4c-1a: expand TOPAZ_ARRAY_DEFINE for class/interface element types.
@@ -2109,6 +2196,102 @@ class Emitter {
       throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
     return { kind: "fn", params, returnType };
+  }
+
+  // Phase 1.5-3.5f: infer the fn type of a callback expression given the
+  // expected param types (typically supplied by an Array.map / .filter call
+  // site from the source element type). Unlike `inferArrowType`, the return
+  // type is inferred from the arrow's body when no annotation is present —
+  // .map's result element type isn't known until we read the callback's
+  // return. Block-bodied arrows still require an explicit return annotation
+  // since we don't walk return statements to infer.
+  //
+  // Non-arrow callbacks must already type as `fn`; their param types and
+  // arity must match exactly (no implicit coercion, mirroring how function
+  // call argument types are checked).
+  private inferCallbackFn(
+    cb: ts.Expression,
+    paramTypes: readonly TopazType[],
+    label: string,
+  ): Extract<TopazType, { kind: "fn" }> {
+    if (ts.isArrowFunction(cb)) {
+      if (cb.parameters.length !== paramTypes.length) {
+        throw new CodegenError(
+          cb,
+          `${label} callback arity ${cb.parameters.length} does not match expected ${paramTypes.length}`,
+        );
+      }
+      const params: ParamInfo[] = [];
+      const seenNames = new Set<string>();
+      for (let i = 0; i < cb.parameters.length; i++) {
+        const p = cb.parameters[i]!;
+        if (!ts.isIdentifier(p.name)) {
+          throw new CodegenError(p, "arrow function parameter must be a simple identifier (destructuring is unsupported)");
+        }
+        if (p.questionToken || p.initializer || p.dotDotDotToken) {
+          throw new CodegenError(p, "optional/default/rest arrow parameters are unsupported");
+        }
+        const pt = paramTypes[i]!;
+        if (p.type) {
+          const annot = this.typeFromAnnotation(p.type, p);
+          if (!typeEq(annot, pt)) {
+            throw new CodegenError(
+              p,
+              `${label} callback parameter type ${typeIdent(annot)} does not match expected ${typeIdent(pt)}`,
+            );
+          }
+        }
+        if (seenNames.has(p.name.text)) {
+          throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
+        }
+        seenNames.add(p.name.text);
+        params.push({ name: p.name.text, type: pt });
+      }
+      let returnType: TopazType;
+      if (cb.type) {
+        returnType = this.typeFromAnnotation(cb.type, cb);
+      } else if (!ts.isBlock(cb.body)) {
+        // Expression body: push the params into a fresh scope so inferType
+        // can resolve identifier references to them, then pop. We don't
+        // install a closure barrier here — type inference is read-only and
+        // peeking into outer locals doesn't affect the eventual capture
+        // analysis done by emitArrowFunction.
+        this.scope.push();
+        try {
+          for (const p of params) {
+            this.scope.declare(p.name, p.type, /* isConst */ false, cb);
+          }
+          returnType = this.inferType(cb.body as ts.Expression);
+        } finally {
+          this.scope.pop();
+        }
+      } else {
+        throw new CodegenError(
+          cb,
+          `block-bodied arrow callback requires an explicit return type annotation`,
+        );
+      }
+      return { kind: "fn", params, returnType };
+    }
+    const t = this.inferType(cb);
+    if (t.kind !== "fn") {
+      throw new CodegenError(cb, `${label} callback must be a function value, got ${typeIdent(t)}`);
+    }
+    if (t.params.length !== paramTypes.length) {
+      throw new CodegenError(
+        cb,
+        `${label} callback arity ${t.params.length} does not match expected ${paramTypes.length}`,
+      );
+    }
+    for (let i = 0; i < paramTypes.length; i++) {
+      if (!typeEq(t.params[i]!.type, paramTypes[i]!)) {
+        throw new CodegenError(
+          cb,
+          `${label} callback parameter ${i} type ${typeIdent(t.params[i]!.type)} does not match expected ${typeIdent(paramTypes[i]!)}`,
+        );
+      }
+    }
+    return t;
   }
 
   // Phase 1.5-3.5e: emit a typedef for a fn signature. The struct holds a
@@ -4244,6 +4427,221 @@ class Emitter {
       }
       return `topaz_array_${name}_pop(${base})`;
     }
+    if (method === "map") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Array.map expects exactly one argument");
+      }
+      const cb = expr.arguments[0]!;
+      const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
+      const u = fnType.returnType;
+      // The result Array<U> reuses the same monomorph machinery as any other
+      // container. fn / undefined / union element types are rejected by
+      // elemTag, so an early check produces a clearer message than the
+      // downstream "no Array monomorph" error.
+      if (u.kind === "fn") {
+        throw new CodegenError(
+          cb,
+          "Array.map callback returning a fn type is unsupported (fn cannot be a container element yet)",
+        );
+      }
+      if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
+        throw new CodegenError(
+          cb,
+          `Array.map callback returning ${typeIdent(u)} is unsupported (no Array<T | undefined> monomorph)`,
+        );
+      }
+      const result = arrayOf(u);
+      if (!result) {
+        throw new CodegenError(expr, `Array.map: cannot form Array<${typeIdent(u)}> result`);
+      }
+      this.recordArrayMonomorph(result);
+      this.recordFnMonomorph(fnType);
+      const cbStr = this.emitWithExpected(cb, fnType);
+      const dstShort = arrayShortName(result);
+      const srcTy = cTypeName(baseType);
+      const dstTy = cTypeName(result);
+      const fnTy = typeIdent(fnType);
+      const id = this.tmpCounter++;
+      const srcVar = `__topaz_map_src_${id}`;
+      const cbVar = `__topaz_map_cb_${id}`;
+      const dstVar = `__topaz_map_dst_${id}`;
+      const idxVar = `__topaz_map_i_${id}`;
+      const callArgs = `${cbVar}.env, ${srcVar}->data[${idxVar}]`;
+      return (
+        `({ ${srcTy} ${srcVar} = ${base}; ` +
+        `${fnTy} ${cbVar} = ${cbStr}; ` +
+        `${dstTy} ${dstVar} = topaz_array_${dstShort}_new(); ` +
+        `topaz_array_${dstShort}_reserve(${dstVar}, ${srcVar}->len); ` +
+        `for (size_t ${idxVar} = 0; ${idxVar} < ${srcVar}->len; ${idxVar}++) { ` +
+        `topaz_array_${dstShort}_push(${dstVar}, ${cbVar}.fn(${callArgs})); ` +
+        `} ${dstVar}; })`
+      );
+    }
+    if (method === "slice") {
+      if (expr.arguments.length > 2) {
+        throw new CodegenError(expr, "Array.slice expects at most two arguments");
+      }
+      // Type-check each present argument as `number` up-front so the error
+      // surfaces here rather than as a cryptic C compile error inside the
+      // stmt-expression.
+      for (const arg of expr.arguments) {
+        const at = this.inferType(arg);
+        if (at.kind !== "number") {
+          throw new CodegenError(
+            arg,
+            `Array.slice argument must be number, got ${typeIdent(at)}`,
+          );
+        }
+      }
+      const startExpr = expr.arguments.length >= 1
+        ? `(double)(${this.emitWithExpected(expr.arguments[0]!, T_NUMBER)})`
+        : "(double)NAN";
+      const endExpr = expr.arguments.length >= 2
+        ? `(double)(${this.emitWithExpected(expr.arguments[1]!, T_NUMBER)})`
+        : "(double)NAN";
+      const id = this.tmpCounter++;
+      const srcVar = `__topaz_slice_src_${id}`;
+      const rawStartVar = `__topaz_slice_rs_${id}`;
+      const rawEndVar = `__topaz_slice_re_${id}`;
+      const lenVar = `__topaz_slice_len_${id}`;
+      const loVar = `__topaz_slice_lo_${id}`;
+      const hiVar = `__topaz_slice_hi_${id}`;
+      const dstVar = `__topaz_slice_dst_${id}`;
+      const idxVar = `__topaz_slice_i_${id}`;
+      const srcTy = cTypeName(baseType);
+      return (
+        `({ ${srcTy} ${srcVar} = ${base}; ` +
+        `double ${rawStartVar} = ${startExpr}; ` +
+        `double ${rawEndVar} = ${endExpr}; ` +
+        `size_t ${lenVar} = ${srcVar}->len; ` +
+        `size_t ${loVar} = topaz_slice_normalize(${rawStartVar}, ${lenVar}, 0); ` +
+        `size_t ${hiVar} = topaz_slice_normalize(${rawEndVar}, ${lenVar}, ${lenVar}); ` +
+        `if (${hiVar} < ${loVar}) ${hiVar} = ${loVar}; ` +
+        `${srcTy} ${dstVar} = topaz_array_${name}_new(); ` +
+        `topaz_array_${name}_reserve(${dstVar}, ${hiVar} - ${loVar}); ` +
+        `for (size_t ${idxVar} = ${loVar}; ${idxVar} < ${hiVar}; ${idxVar}++) { ` +
+        `topaz_array_${name}_push(${dstVar}, ${srcVar}->data[${idxVar}]); ` +
+        `} ${dstVar}; })`
+      );
+    }
+    if (method === "includes") {
+      if (expr.arguments.length === 0) {
+        throw new CodegenError(expr, "Array.includes expects exactly one argument");
+      }
+      if (expr.arguments.length > 1) {
+        // Second `fromIndex` argument is unsupported (would need to negative-
+        // index normalize via topaz_slice_normalize, which is not yet wired
+        // up — defer to 1.5-3.5f-slice).
+        throw new CodegenError(expr, "Array.includes `fromIndex` argument is unsupported");
+      }
+      // `target` must match elem exactly. emitWithExpected handles class -> iface
+      // coercion automatically when elem is an interface.
+      const tStr = this.emitWithExpected(expr.arguments[0]!, elem);
+      const id = this.tmpCounter++;
+      const srcVar = `__topaz_inc_src_${id}`;
+      const tVar = `__topaz_inc_t_${id}`;
+      const rVar = `__topaz_inc_r_${id}`;
+      const idxVar = `__topaz_inc_i_${id}`;
+      const srcTy = cTypeName(baseType);
+      const elemTy = cTypeName(elem);
+      const lhs = `${srcVar}->data[${idxVar}]`;
+      // SameValueZero comparison: NaN === NaN for number (matches Map/Set
+      // key equality), strict byte compare for string, scalar `==` for
+      // boolean, reference identity for class (pointer compare) and iface
+      // (fat pointer .data compare).
+      let eqExpr: string;
+      if (elem.kind === "number") {
+        eqExpr = `((${lhs}) == (${tVar})) || ((${lhs}) != (${lhs}) && (${tVar}) != (${tVar}))`;
+      } else if (elem.kind === "boolean") {
+        eqExpr = `(${lhs}) == (${tVar})`;
+      } else if (elem.kind === "string") {
+        eqExpr = `topaz_string_eq((${lhs}), (${tVar}))`;
+      } else if (isClassType(elem)) {
+        eqExpr = `(${lhs}) == (${tVar})`;
+      } else if (isInterfaceType(elem)) {
+        eqExpr = `((${lhs}).data) == ((${tVar}).data)`;
+      } else {
+        throw new CodegenError(
+          expr,
+          `Array.includes is unsupported for element type ${typeIdent(elem)}`,
+        );
+      }
+      return (
+        `({ ${srcTy} ${srcVar} = ${base}; ` +
+        `${elemTy} ${tVar} = ${tStr}; ` +
+        `bool ${rVar} = false; ` +
+        `for (size_t ${idxVar} = 0; ${idxVar} < ${srcVar}->len; ${idxVar}++) { ` +
+        `if (${eqExpr}) { ${rVar} = true; break; } ` +
+        `} ${rVar}; })`
+      );
+    }
+    if (method === "filter") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "Array.filter expects exactly one argument");
+      }
+      const cb = expr.arguments[0]!;
+      const fnType = this.inferCallbackFn(cb, [elem], "Array.filter");
+      // Strict boolean — JS truthy/falsy coercion is not adopted (consistent
+      // with `if` / `while` condition strictness).
+      if (fnType.returnType.kind !== "boolean") {
+        throw new CodegenError(
+          cb,
+          `Array.filter callback must return boolean, got ${typeIdent(fnType.returnType)}`,
+        );
+      }
+      this.recordFnMonomorph(fnType);
+      const cbStr = this.emitWithExpected(cb, fnType);
+      const srcTy = cTypeName(baseType);
+      const fnTy = typeIdent(fnType);
+      const elemTy = cTypeName(elem);
+      const id = this.tmpCounter++;
+      const srcVar = `__topaz_filter_src_${id}`;
+      const cbVar = `__topaz_filter_cb_${id}`;
+      const dstVar = `__topaz_filter_dst_${id}`;
+      const idxVar = `__topaz_filter_i_${id}`;
+      const eVar = `__topaz_filter_e_${id}`;
+      return (
+        `({ ${srcTy} ${srcVar} = ${base}; ` +
+        `${fnTy} ${cbVar} = ${cbStr}; ` +
+        `${srcTy} ${dstVar} = topaz_array_${name}_new(); ` +
+        `for (size_t ${idxVar} = 0; ${idxVar} < ${srcVar}->len; ${idxVar}++) { ` +
+        `${elemTy} ${eVar} = ${srcVar}->data[${idxVar}]; ` +
+        `if (${cbVar}.fn(${cbVar}.env, ${eVar})) topaz_array_${name}_push(${dstVar}, ${eVar}); ` +
+        `} ${dstVar}; })`
+      );
+    }
+    if (method === "join") {
+      if (expr.arguments.length > 1) {
+        throw new CodegenError(expr, "Array.join expects at most one argument");
+      }
+      // Elem type is restricted to scalar 3 (number / boolean / string).
+      // class / iface / nested container / fn / optional / union: format
+      // policy is undefined, reject up-front (user can `.map(x => ...)` to
+      // a string array first).
+      if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") {
+        throw new CodegenError(
+          expr,
+          `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
+        );
+      }
+      // Separator must be `string`. Missing → default ",".
+      let sepStr: string;
+      if (expr.arguments.length === 1) {
+        const sepType = this.inferType(expr.arguments[0]!);
+        if (sepType.kind !== "string") {
+          throw new CodegenError(
+            expr.arguments[0]!,
+            `Array.join separator must be string, got ${typeIdent(sepType)}`,
+          );
+        }
+        sepStr = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+      } else {
+        // `","` static literal as a `topaz_string` compound literal.
+        sepStr = `((topaz_string){ ",", 1 })`;
+      }
+      this.recordArrayJoinMonomorph(baseType);
+      return `topaz_array_${name}_join(${base}, ${sepStr})`;
+    }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
@@ -4946,6 +5344,110 @@ class Emitter {
           }
           if (callee.name.text === "pop") {
             return elem;
+          }
+          if (callee.name.text === "map") {
+            if (expr.arguments.length !== 1) {
+              throw new CodegenError(expr, "Array.map expects exactly one argument");
+            }
+            const cb = expr.arguments[0]!;
+            const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
+            const u = fnType.returnType;
+            if (u.kind === "fn") {
+              throw new CodegenError(
+                cb,
+                "Array.map callback returning a fn type is unsupported (fn cannot be a container element yet)",
+              );
+            }
+            if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
+              throw new CodegenError(
+                cb,
+                `Array.map callback returning ${typeIdent(u)} is unsupported (no Array<T | undefined> monomorph)`,
+              );
+            }
+            const result = arrayOf(u);
+            if (!result) {
+              throw new CodegenError(expr, `Array.map: cannot form Array<${typeIdent(u)}> result`);
+            }
+            this.recordArrayMonomorph(result);
+            return result;
+          }
+          if (callee.name.text === "slice") {
+            if (expr.arguments.length > 2) {
+              throw new CodegenError(expr, "Array.slice expects at most two arguments");
+            }
+            for (const arg of expr.arguments) {
+              const at = this.inferType(arg);
+              if (at.kind !== "number") {
+                throw new CodegenError(
+                  arg,
+                  `Array.slice argument must be number, got ${typeIdent(at)}`,
+                );
+              }
+            }
+            // dst monomorph is the same as src; no new Array<T> to register.
+            return baseType;
+          }
+          if (callee.name.text === "includes") {
+            if (expr.arguments.length === 0) {
+              throw new CodegenError(expr, "Array.includes expects exactly one argument");
+            }
+            if (expr.arguments.length > 1) {
+              throw new CodegenError(expr, "Array.includes `fromIndex` argument is unsupported");
+            }
+            // Side-effect: re-check that `target` matches elem so emit-side
+            // and infer-side reject in lockstep.
+            this.emitWithExpected(expr.arguments[0]!, elem);
+            // Reject unsupported elem types up-front (mirrors emitArrayMethodCall).
+            if (
+              elem.kind !== "number" &&
+              elem.kind !== "boolean" &&
+              elem.kind !== "string" &&
+              !isClassType(elem) &&
+              !isInterfaceType(elem)
+            ) {
+              throw new CodegenError(
+                expr,
+                `Array.includes is unsupported for element type ${typeIdent(elem)}`,
+              );
+            }
+            return T_BOOLEAN;
+          }
+          if (callee.name.text === "filter") {
+            if (expr.arguments.length !== 1) {
+              throw new CodegenError(expr, "Array.filter expects exactly one argument");
+            }
+            const cb = expr.arguments[0]!;
+            const fnType = this.inferCallbackFn(cb, [elem], "Array.filter");
+            if (fnType.returnType.kind !== "boolean") {
+              throw new CodegenError(
+                cb,
+                `Array.filter callback must return boolean, got ${typeIdent(fnType.returnType)}`,
+              );
+            }
+            // dst monomorph is the same as src; no new Array<T> to register.
+            return baseType;
+          }
+          if (callee.name.text === "join") {
+            if (expr.arguments.length > 1) {
+              throw new CodegenError(expr, "Array.join expects at most one argument");
+            }
+            if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") {
+              throw new CodegenError(
+                expr,
+                `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
+              );
+            }
+            if (expr.arguments.length === 1) {
+              const sepType = this.inferType(expr.arguments[0]!);
+              if (sepType.kind !== "string") {
+                throw new CodegenError(
+                  expr.arguments[0]!,
+                  `Array.join separator must be string, got ${typeIdent(sepType)}`,
+                );
+              }
+            }
+            this.recordArrayJoinMonomorph(baseType);
+            return T_STRING;
           }
           throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
         }
