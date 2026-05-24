@@ -122,20 +122,55 @@ static inline void topaz_console_log_boolean(topaz_boolean b) {
   fputs(b ? "true\n" : "false\n", stdout);
 }
 
-// Phase 1.2: shortest round-trip via snprintf(%.*e) + strtod precision search,
-// then ECMA-262 ToString formatting. Same observable output as a Ryu port;
-// Phase 2 may swap in the real Ryu for perf (snprintf+strtod is O(precision)
-// per call). Correctness rests on libc's correctly-rounded strtod.
-static inline void topaz_emit_number_shortest(topaz_number n) {
-  char buf[32];
+// Phase 1.5-3.5: boolean → string. Returns a `topaz_string` pointing into a
+// `static const` literal; no arena alloc, immutable byte string.
+static inline topaz_string topaz_boolean_to_string(topaz_boolean b) {
+  static const char true_str[]  = "true";
+  static const char false_str[] = "false";
+  topaz_string r;
+  if (b) { r.data = true_str;  r.len = 4; }
+  else   { r.data = false_str; r.len = 5; }
+  return r;
+}
+
+// Phase 1.2 / 1.5-3.5: ECMA-262 ToString(Number). Shortest round-trip via
+// snprintf(%.*e) + strtod precision search, then ECMA-262 formatting written
+// into an arena-allocated buffer. The returned `topaz_string` is owned by the
+// arena (released at process exit). `topaz_console_log_number` reuses this
+// function and appends '\n'. Phase 2 may swap the precision-search core for a
+// real Ryu port; correctness here rests on libc's correctly-rounded strtod.
+static inline topaz_string topaz_number_to_string(topaz_number n) {
+  if (isnan(n)) {
+    topaz_string r = { "NaN", 3 };
+    return r;
+  }
+  if (isinf(n)) {
+    topaz_string r;
+    if (n > 0) { r.data = "Infinity";  r.len = 8; }
+    else       { r.data = "-Infinity"; r.len = 9; }
+    return r;
+  }
+  if (n == 0.0) {
+    topaz_string r = { "0", 1 };
+    return r;
+  }
+  if (n == (topaz_number)(int64_t)n &&
+      n >= -9007199254740992.0 && n <= 9007199254740992.0) {
+    char *buf = (char *)topaz_arena_alloc(24);
+    int written = snprintf(buf, 24, "%lld", (long long)(int64_t)n);
+    topaz_string r = { buf, (size_t)written };
+    return r;
+  }
+
+  char ebuf[32];
   int p;
   for (p = 1; p <= 17; p++) {
-    snprintf(buf, sizeof(buf), "%.*e", p - 1, n);
-    if (strtod(buf, NULL) == n) break;
+    snprintf(ebuf, sizeof(ebuf), "%.*e", p - 1, n);
+    if (strtod(ebuf, NULL) == n) break;
   }
   if (p > 17) p = 17;
 
-  const char *s = buf;
+  const char *s = ebuf;
   bool negative = false;
   if (*s == '-') { negative = true; s++; }
 
@@ -159,53 +194,46 @@ static inline void topaz_emit_number_shortest(topaz_number n) {
   }
   exp10 *= exp_sign;
 
-  // ECMA-262 ToString: n_pos is the 1-indexed decimal point position.
+  // ECMA-262 ToString: n_pos is the 1-indexed decimal point position. The
+  // four arms below are sized to fit within a 48-byte buffer comfortably —
+  // worst cases are exponential form (~25 chars) and pure decimal with
+  // leading zeros (~27 chars), both well under 48.
   int n_pos = exp10 + 1;
+  char *buf = (char *)topaz_arena_alloc(48);
+  int pos = 0;
 
-  if (negative) putchar('-');
+  if (negative) buf[pos++] = '-';
 
   if (n_pos >= k && n_pos <= 21) {
-    fwrite(digits, 1, k, stdout);
-    for (int i = 0; i < n_pos - k; i++) putchar('0');
+    memcpy(buf + pos, digits, k); pos += k;
+    for (int i = 0; i < n_pos - k; i++) buf[pos++] = '0';
   } else if (n_pos > 0 && n_pos <= 21) {
-    fwrite(digits, 1, n_pos, stdout);
-    putchar('.');
-    fwrite(digits + n_pos, 1, k - n_pos, stdout);
+    memcpy(buf + pos, digits, n_pos); pos += n_pos;
+    buf[pos++] = '.';
+    memcpy(buf + pos, digits + n_pos, k - n_pos); pos += k - n_pos;
   } else if (n_pos > -6 && n_pos <= 0) {
-    fputs("0.", stdout);
-    for (int i = 0; i < -n_pos; i++) putchar('0');
-    fwrite(digits, 1, k, stdout);
+    buf[pos++] = '0'; buf[pos++] = '.';
+    for (int i = 0; i < -n_pos; i++) buf[pos++] = '0';
+    memcpy(buf + pos, digits, k); pos += k;
   } else {
-    putchar(digits[0]);
+    buf[pos++] = digits[0];
     if (k > 1) {
-      putchar('.');
-      fwrite(digits + 1, 1, k - 1, stdout);
+      buf[pos++] = '.';
+      memcpy(buf + pos, digits + 1, k - 1); pos += k - 1;
     }
     int e = n_pos - 1;
-    if (e >= 0) printf("e+%d", e);
-    else printf("e-%d", -e);
+    if (e >= 0) pos += snprintf(buf + pos, 48 - pos, "e+%d", e);
+    else        pos += snprintf(buf + pos, 48 - pos, "e-%d", -e);
   }
+
+  buf[pos] = '\0';
+  topaz_string r = { buf, (size_t)pos };
+  return r;
 }
 
 static inline void topaz_console_log_number(topaz_number n) {
-  if (isnan(n)) {
-    fputs("NaN\n", stdout);
-    return;
-  }
-  if (isinf(n)) {
-    fputs(n > 0 ? "Infinity\n" : "-Infinity\n", stdout);
-    return;
-  }
-  if (n == 0.0) {
-    fputs("0\n", stdout);
-    return;
-  }
-  if (n == (topaz_number)(int64_t)n &&
-      n >= -9007199254740992.0 && n <= 9007199254740992.0) {
-    printf("%lld\n", (long long)(int64_t)n);
-    return;
-  }
-  topaz_emit_number_shortest(n);
+  topaz_string s = topaz_number_to_string(n);
+  if (s.len) fwrite(s.data, 1, s.len, stdout);
   putchar('\n');
 }
 

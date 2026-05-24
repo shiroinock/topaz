@@ -2247,6 +2247,17 @@ class Emitter {
       return this.emitForStatement(stmt, indent);
     }
 
+    if (ts.isForOfStatement(stmt)) {
+      return this.emitForOfStatement(stmt, indent);
+    }
+
+    if (ts.isForInStatement(stmt)) {
+      throw new CodegenError(
+        stmt,
+        "`for-in` is unsupported; use `for-of` over an Array or an index-based for-loop",
+      );
+    }
+
     if (ts.isSwitchStatement(stmt)) {
       return this.emitSwitchStatement(stmt, indent);
     }
@@ -2559,6 +2570,121 @@ class Emitter {
     }
   }
 
+  // Phase 1.5-3.5b: for-of over Array<T>. Lower to an index-based C for-loop
+  // that snapshots the array reference into a tmp (so RHS is evaluated once
+  // even when it's a call like `getItems()`), then walks `__arr->data[i]`
+  // directly — bounds are guaranteed by `i < __arr->len`, so the per-element
+  // `topaz_array_*_at` bounds-check is skipped. Map / Set / string are
+  // explicit errors; Map.values() / Set.values() / Iterator interface arrive
+  // with 1.5-3.5e. for-await is rejected (no async support exists yet).
+  //
+  // Loop-var lifetime note: the C variable is reused across iterations, so
+  // capturing it from a closure (1.5-3.5c) would see the post-loop value.
+  // We'll revisit when arrow + closure lands; for now, no closures exist.
+  private emitForOfStatement(stmt: ts.ForOfStatement, indent: number): string {
+    const pad = "  ".repeat(indent);
+    if (stmt.awaitModifier) {
+      throw new CodegenError(stmt, "`for await` is unsupported (no async support yet)");
+    }
+    if (!ts.isVariableDeclarationList(stmt.initializer)) {
+      throw new CodegenError(
+        stmt.initializer,
+        "for-of binding must be a `const` or `let` declaration (assigning to an existing variable is unsupported)",
+      );
+    }
+    const init = stmt.initializer;
+    if (init.declarations.length !== 1) {
+      throw new CodegenError(init, "for-of binding must be a single declaration");
+    }
+    const isConst = (init.flags & ts.NodeFlags.Const) !== 0;
+    const isLet = (init.flags & ts.NodeFlags.Let) !== 0;
+    if (!isConst && !isLet) {
+      throw new CodegenError(init, "var is unsupported; use let or const");
+    }
+    const decl = init.declarations[0]!;
+    if (!ts.isIdentifier(decl.name)) {
+      throw new CodegenError(
+        decl,
+        "for-of binding name must be a simple identifier (destructuring is unsupported)",
+      );
+    }
+    if (decl.initializer) {
+      throw new CodegenError(decl, "for-of binding cannot have an initializer");
+    }
+    const bindName = decl.name.text;
+
+    const rhsType = this.inferType(stmt.expression);
+    if (!isArrayType(rhsType)) {
+      let hint = "";
+      if (isMapType(rhsType)) {
+        hint = " (Map iteration via `.values()` / `.keys()` is unsupported until 1.5-3.5e)";
+      } else if (isSetType(rhsType)) {
+        hint = " (Set iteration is unsupported until 1.5-3.5e)";
+      } else if (rhsType.kind === "string") {
+        hint = " (string iteration is unsupported; index with `[i]` instead)";
+      }
+      throw new CodegenError(
+        stmt.expression,
+        `for-of requires an Array<T> (got ${typeIdent(rhsType)})${hint}`,
+      );
+    }
+    this.recordArrayMonomorph(rhsType);
+    const elemType = arrayElem(rhsType)!;
+
+    if (decl.type) {
+      const declared = this.typeFromAnnotation(decl.type, decl);
+      if (!typeEq(declared, elemType)) {
+        throw new CodegenError(
+          decl.type,
+          `for-of binding type ${typeIdent(declared)} does not match array element type ${typeIdent(elemType)}`,
+        );
+      }
+    }
+
+    const id = this.tmpCounter++;
+    const arrTmp = `__topaz_for_arr_${id}`;
+    const idxTmp = `__topaz_for_idx_${id}`;
+    const arrCType = cTypeName(rhsType);
+    const elemCType = cTypeName(elemType);
+    const rhsExpr = this.emitExpression(stmt.expression);
+    const innerPad = "  ".repeat(indent + 2);
+
+    // Outer Topaz scope holds the binding so the body's inferType / scope
+    // lookups see the right element type. We also push a second frame for
+    // the body itself so any narrowing inside the loop pops cleanly.
+    this.scope.push();
+    try {
+      this.scope.declare(bindName, elemType, isConst, decl);
+      this.scope.push();
+      try {
+        const stmtList: ts.Statement[] = ts.isBlock(stmt.statement)
+          ? Array.from(stmt.statement.statements)
+          : [stmt.statement];
+        const stmtLines: string[] = [];
+        for (const s of stmtList) {
+          stmtLines.push(this.emitStatement(s, indent + 2));
+          this.applyCarryNarrowing(s);
+        }
+
+        const lines: string[] = [];
+        lines.push(`${pad}{`);
+        lines.push(`${pad}  ${arrCType} ${arrTmp} = ${rhsExpr};`);
+        lines.push(
+          `${pad}  for (size_t ${idxTmp} = 0; ${idxTmp} < ${arrTmp}->len; ${idxTmp}++) {`,
+        );
+        lines.push(`${innerPad}${elemCType} ${bindName} = ${arrTmp}->data[${idxTmp}];`);
+        if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+        lines.push(`${pad}  }`);
+        lines.push(`${pad}}`);
+        return lines.join("\n");
+      } finally {
+        this.scope.pop();
+      }
+    } finally {
+      this.scope.pop();
+    }
+  }
+
   private emitSwitchStatement(stmt: ts.SwitchStatement, indent: number): string {
     const pad = "  ".repeat(indent);
     const discType = this.inferType(stmt.expression);
@@ -2752,6 +2878,9 @@ class Emitter {
     if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
       return this.emitStringLiteral(expr);
     }
+    if (ts.isTemplateExpression(expr)) {
+      return this.emitTemplateExpression(expr);
+    }
     if (ts.isIdentifier(expr)) {
       const b = this.scope.lookup(expr.text);
       if (!b) {
@@ -2854,6 +2983,27 @@ class Emitter {
     }
     if (ts.isArrayLiteralExpression(expr)) {
       return this.emitArrayLiteral(expr, /* expected */ undefined);
+    }
+    if (ts.isNonNullExpression(expr)) {
+      // Phase 1.5-3.5c: stmt-expression around a single evaluation of the
+      // operand, runtime check on the sentinel slot, then yield the unwrapped
+      // value. Scalar T | undefined uses the `topaz_opt_<scalar>` struct
+      // (.present / .value); reference T uses NULL pointer sentinel; iface T
+      // uses fat-pointer .data == NULL sentinel.
+      const inner = this.inferType(expr.expression); // verifies T | undefined
+      const stripped = withoutUndefined(inner)!;
+      const valStr = this.emitExpression(expr.expression);
+      const id = this.tmpCounter++;
+      const tmp = `__topaz_nn_${id}`;
+      const ct = cTypeName(inner);
+      const panic = `fputs("topaz: non-null assertion failed\\n", stderr); abort();`;
+      if (isScalarType(stripped)) {
+        return `({ ${ct} ${tmp} = ${valStr}; if (!${tmp}.present) { ${panic} } ${tmp}.value; })`;
+      }
+      if (isInterfaceType(stripped)) {
+        return `({ ${ct} ${tmp} = ${valStr}; if (${tmp}.data == NULL) { ${panic} } ${tmp}; })`;
+      }
+      return `({ ${ct} ${tmp} = ${valStr}; if (${tmp} == NULL) { ${panic} } ${tmp}; })`;
     }
     if (ts.isPrefixUnaryExpression(expr)) {
       this.inferType(expr); // type-check
@@ -2962,6 +3112,34 @@ class Emitter {
       ) {
         const inner = `topaz_string_eq(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
         return tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? inner : `(!${inner})`;
+      }
+      // Phase 1.5-3.5c: `a ?? b` lowers to a stmt-expression that snapshots
+      // `a` into a tmp, checks the sentinel slot, and yields either the
+      // unwrapped value or the fallback `b`. inferType has already verified
+      // that `a: T | undefined` and `b` is either T (result T) or T |
+      // undefined (result T | undefined, for `a ?? b ?? c` chaining). For
+      // scalar T, when the result is T | undefined we keep the whole opt
+      // struct so the C ternary's branches share a type; reference / iface
+      // T have the same C representation either way, so no branch needed.
+      if (tok === ts.SyntaxKind.QuestionQuestionToken) {
+        const lt = this.inferType(expr.left);
+        const inner = withoutUndefined(lt)!;
+        const rt = this.inferType(expr.right);
+        const rhsIsOptional = !this.isAssignableTo(rt, inner) && this.isAssignableTo(rt, lt);
+        const expected = rhsIsOptional ? lt : inner;
+        const lhsStr = this.emitExpression(expr.left);
+        const rhsStr = this.emitWithExpected(expr.right, expected);
+        const id = this.tmpCounter++;
+        const tmp = `__topaz_nc_${id}`;
+        const lct = cTypeName(lt);
+        if (isScalarType(inner)) {
+          const presentBranch = rhsIsOptional ? tmp : `${tmp}.value`;
+          return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.present ? ${presentBranch} : (${rhsStr}); })`;
+        }
+        if (isInterfaceType(inner)) {
+          return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.data != NULL ? ${tmp} : (${rhsStr}); })`;
+        }
+        return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp} != NULL ? ${tmp} : (${rhsStr}); })`;
       }
       // Phase 1.5-3f: `x instanceof ClassName` lowers to a tag-pointer
       // comparison. Every class struct carries `__topaz_class_tag` at offset
@@ -3189,7 +3367,14 @@ class Emitter {
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
   }
 
-  private emitStringLiteral(expr: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral): string {
+  private emitStringLiteral(
+    expr:
+      | ts.StringLiteral
+      | ts.NoSubstitutionTemplateLiteral
+      | ts.TemplateHead
+      | ts.TemplateMiddle
+      | ts.TemplateTail,
+  ): string {
     const cooked = expr.text;
     let escaped = '"';
     let byteLen = 0;
@@ -3216,6 +3401,49 @@ class Emitter {
     }
     escaped += '"';
     return `((topaz_string){ ${escaped}, ${byteLen} })`;
+  }
+
+  // Phase 1.5-3.5: template literal -> left-associative `topaz_string_concat`
+  // chain. ${} substitutions go through `topaz_number_to_string` /
+  // `topaz_boolean_to_string` / identity (for string) so that arena alloc cost
+  // matches the leak budget we already absorb for `+` on string operands.
+  // Empty literal fragments (e.g. between adjacent `${a}${b}`) are skipped so
+  // we don't burn one arena alloc per gap.
+  private emitTemplateExpression(expr: ts.TemplateExpression): string {
+    const stringify = (sub: ts.Expression): string => {
+      const t = this.inferType(sub);
+      const inner = this.emitExpression(sub);
+      if (t.kind === "string") return inner;
+      if (t.kind === "number") return `topaz_number_to_string(${inner})`;
+      if (t.kind === "boolean") return `topaz_boolean_to_string(${inner})`;
+      // inferType's TemplateExpression branch already vets each span; this
+      // arm is defensive in case stringify gets reused later.
+      throw new CodegenError(
+        sub,
+        `template literal substitution must be number / boolean / string, got ${typeIdent(t)}`,
+      );
+    };
+
+    let acc: string | null = null;
+    const append = (piece: string) => {
+      acc = acc === null ? piece : `topaz_string_concat(${acc}, ${piece})`;
+    };
+
+    if (expr.head.text !== "") append(this.emitStringLiteral(expr.head));
+    for (const span of expr.templateSpans) {
+      append(stringify(span.expression));
+      if (span.literal.text !== "") append(this.emitStringLiteral(span.literal));
+    }
+    // All-empty template (`${a}` with empty head + empty tail) still needs to
+    // yield a `topaz_string` value; fall back to the first substitution which
+    // is already stringified.
+    if (acc === null) {
+      // Unreachable: templateSpans is non-empty for TemplateExpression and
+      // we've already appended at least one stringified span above. Defensive
+      // return keeps the type signature honest.
+      return `((topaz_string){ "", 0 })`;
+    }
+    return acc;
   }
 
   private prefixOp(expr: ts.PrefixUnaryExpression): string {
@@ -3517,6 +3745,21 @@ class Emitter {
     if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
       return T_STRING;
     }
+    if (ts.isTemplateExpression(expr)) {
+      // Phase 1.5-3.5: each ${} substitution must be number / boolean / string
+      // (after narrowing). Class / interface / array / map / set / union have
+      // no defined toString policy yet — surface the error at the substitution.
+      for (const span of expr.templateSpans) {
+        const sub = this.inferType(span.expression);
+        if (sub.kind !== "number" && sub.kind !== "boolean" && sub.kind !== "string") {
+          throw new CodegenError(
+            span.expression,
+            `template literal substitution must be number / boolean / string, got ${typeIdent(sub)}`,
+          );
+        }
+      }
+      return T_STRING;
+    }
     if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
     if (ts.isIdentifier(expr)) {
       if (expr.text === "undefined") return T_UNDEFINED;
@@ -3624,6 +3867,29 @@ class Emitter {
       this.recordArrayMonomorph(arr);
       return arr;
     }
+    if (ts.isNonNullExpression(expr)) {
+      // Phase 1.5-3.5c: `e!` asserts at runtime that the optional carries a
+      // value, and yields the underlying T. Only `T | undefined` is accepted
+      // (scalar / class / iface / array / map / set); a no-op `!` on an
+      // already non-optional value is rejected so the assertion remains
+      // meaningful (TS-style "Non-null assertion has no effect" warning is
+      // upgraded to an error here).
+      const inner = this.inferType(expr.expression);
+      const stripped = withoutUndefined(inner);
+      if (!stripped || typeEq(stripped, inner)) {
+        throw new CodegenError(
+          expr,
+          `non-null assertion (\`!\`) requires a \`T | undefined\` operand; got ${typeIdent(inner)}`,
+        );
+      }
+      if (!isScalarType(stripped) && !isReferenceType(stripped) && !isInterfaceType(stripped)) {
+        throw new CodegenError(
+          expr,
+          `non-null assertion on ${typeIdent(inner)} is unsupported`,
+        );
+      }
+      return stripped;
+    }
     if (ts.isPrefixUnaryExpression(expr)) {
       switch (expr.operator) {
         case ts.SyntaxKind.MinusToken:
@@ -3722,6 +3988,33 @@ class Emitter {
             expr.operatorToken,
             "loose equality (== / !=) is unsupported; use === / !==",
           );
+        case ts.SyntaxKind.QuestionQuestionToken: {
+          // Phase 1.5-3.5c: `a ?? b` requires `a: T | undefined`. The result
+          // is T when the RHS is T, or T | undefined when the RHS is itself
+          // T | undefined (so chained `a ?? b ?? c` keeps optional through
+          // the middle layer). The RHS must be assignable to one of those.
+          const lt = this.inferType(expr.left);
+          const inner = withoutUndefined(lt);
+          if (!inner || typeEq(inner, lt)) {
+            throw new CodegenError(
+              expr,
+              `\`??\` requires the left operand to be \`T | undefined\`; got ${typeIdent(lt)}`,
+            );
+          }
+          if (!isScalarType(inner) && !isReferenceType(inner) && !isInterfaceType(inner)) {
+            throw new CodegenError(
+              expr,
+              `\`??\` on ${typeIdent(lt)} is unsupported`,
+            );
+          }
+          const rt = this.inferType(expr.right);
+          if (this.isAssignableTo(rt, inner)) return inner;
+          if (this.isAssignableTo(rt, lt)) return lt;
+          throw new CodegenError(
+            expr.right,
+            `\`??\` right operand has type ${typeIdent(rt)}; expected ${typeIdent(inner)} or ${typeIdent(lt)}`,
+          );
+        }
         case ts.SyntaxKind.InstanceOfKeyword: {
           // Phase 1.5-3f: `instanceof` runtime type test for catch payloads.
           // Left must be `unknown` (the catch binding's type) or a class

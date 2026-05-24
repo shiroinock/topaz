@@ -95,11 +95,22 @@ run_case catch_unknown $'kaboom\n42\nfizz\nrethrow\ntrue\n99\nfalse'
 
 run_case arena_stress $'1000\n0\n999\n1000\n42\n1200\n500\ntrue\n500'
 
+run_case template_literal $'hello, topaz!\ntopaz is 42\nflag=true\ntopaz\ntopaz/42\n42true\npi=3.14\nsum=0.30000000000000004\nbig=1e+21\ntiny=1e-7\ntwice(42)=84\nlen(topaz)=5\nn+1=43\nanswer=7\n?=7\n(3, 4)\nnorm=25\nq="topaz"\ntab\there\n[0][1][2][3][4]'
+
+run_case for_of_array $'15\n-7\n0\n2\n9\n3\nalpha\nbeta\ngamma\n102\n101\n103\nsquare\ncircle\n25\ntrue\n4'
+
+run_case non_null_and_coalesce $'10\n25\ntrue\n7\nalpha\n10\n-1\n20\n110\n7\n99\nalpha\ndefault\nhello\n?\n20\n-1\n20'
+
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
 run_fail_case strict_field_init_fail examples/strict_field_init_fail.ts "is not definitely assigned in the constructor"
 run_fail_case optional_field_access_fail examples/optional_field_access_fail.ts "cannot access '.v' on union type"
 run_fail_case dunion_field_access_fail examples/dunion_field_access_fail.ts "cannot access '.radius' on discriminated union"
 run_fail_case catch_unknown_unnarrowed_fail examples/catch_unknown_unnarrowed_fail.ts "cannot access '.msg' on \`unknown\`"
+run_fail_case template_literal_unsupported_fail examples/template_literal_unsupported_fail.ts "template literal substitution must be number / boolean / string"
+run_fail_case for_of_map_fail examples/for_of_map_fail.ts "for-of requires an Array<T>"
+run_fail_case for_of_destructuring_fail examples/for_of_destructuring_fail.ts "destructuring is unsupported"
+run_fail_case non_null_non_optional_fail examples/non_null_non_optional_fail.ts "non-null assertion (\`!\`) requires a \`T | undefined\` operand"
+run_fail_case coalesce_non_optional_fail examples/coalesce_non_optional_fail.ts "\`??\` requires the left operand to be \`T | undefined\`"
 
 echo "all tests passed"
