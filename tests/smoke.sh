@@ -99,6 +99,10 @@ run_case template_literal $'hello, topaz!\ntopaz is 42\nflag=true\ntopaz\ntopaz/
 
 run_case for_of_array $'15\n-7\n0\n2\n9\n3\nalpha\nbeta\ngamma\n102\n101\n103\nsquare\ncircle\n25\ntrue\n4'
 
+run_case for_of_set $'15\n15\n15\n0\n100\n14\n7\n60\n2\n387\n115'
+
+run_case for_of_map_values $'60\n6\n60\n0\n6\n50\n13\n400\n60\n20\n129'
+
 run_case non_null_and_coalesce $'10\n25\ntrue\n7\nalpha\n10\n-1\n20\n110\n7\n99\nalpha\ndefault\nhello\n?\n20\n-1\n20'
 
 run_case optional_chain $'10\n-1\nalpha\n(none)\nalpha\n(none)\n30\n0\n5\n-1\ngreeting\n(none)\n7\n0\n100\n300\n-1\n2\n-1\n-1\n20\nalpha'
@@ -124,6 +128,8 @@ run_fail_case catch_unknown_unnarrowed_fail examples/catch_unknown_unnarrowed_fa
 run_fail_case template_literal_unsupported_fail examples/template_literal_unsupported_fail.ts "template literal substitution must be number / boolean / string"
 run_fail_case for_of_map_fail examples/for_of_map_fail.ts "for-of requires an Array<T>"
 run_fail_case for_of_destructuring_fail examples/for_of_destructuring_fail.ts "destructuring is unsupported"
+run_fail_case for_of_map_entries_fail examples/for_of_map_entries_fail.ts "for-of over .entries() is unsupported"
+run_fail_case map_values_outside_for_of_fail examples/map_values_outside_for_of_fail.ts "Map.values() is only allowed as the right-hand side of a for-of statement"
 run_fail_case non_null_non_optional_fail examples/non_null_non_optional_fail.ts "non-null assertion (\`!\`) requires a \`T | undefined\` operand"
 run_fail_case coalesce_non_optional_fail examples/coalesce_non_optional_fail.ts "\`??\` requires the left operand to be \`T | undefined\`"
 run_fail_case optional_chain_non_optional_fail examples/optional_chain_non_optional_fail.ts "optional chain \`?.\` requires a \`T | undefined\` receiver"

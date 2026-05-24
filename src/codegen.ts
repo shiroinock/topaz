@@ -3324,13 +3324,21 @@ class Emitter {
   // that snapshots the array reference into a tmp (so RHS is evaluated once
   // even when it's a call like `getItems()`), then walks `__arr->data[i]`
   // directly — bounds are guaranteed by `i < __arr->len`, so the per-element
-  // `topaz_array_*_at` bounds-check is skipped. Map / Set / string are
-  // explicit errors; Map.values() / Set.values() / Iterator interface arrive
-  // with 1.5-3.5e. for-await is rejected (no async support exists yet).
+  // `topaz_array_*_at` bounds-check is skipped. for-await is rejected (no
+  // async support exists yet).
+  //
+  // Phase 1.5-3.5g: extended to Map.values() / Map.keys() / Set / Set.values()
+  // / Set.keys(). Hash-table walks iterate `slots[0..cap)` and skip slots
+  // whose `state != OCCUPIED` (empty / tombstone) — the user's `continue` /
+  // `break` retain their plain semantics because the OCCUPIED filter shares
+  // the same `for` loop. Map.entries() / Set.entries() require destructuring
+  // and stay rejected until that lands.
   //
   // Loop-var lifetime note: the C variable is reused across iterations, so
-  // capturing it from a closure (1.5-3.5c) would see the post-loop value.
-  // We'll revisit when arrow + closure lands; for now, no closures exist.
+  // capturing it from a closure (1.5-3.5e) sees the post-loop value (scalar)
+  // or the same reference (class / iface). Arrow closures sidestep that by
+  // arena-allocating a fresh env per iteration — by-value capture snapshots
+  // the loop var at env construction time.
   private emitForOfStatement(stmt: ts.ForOfStatement, indent: number): string {
     const pad = "  ".repeat(indent);
     if (stmt.awaitModifier) {
@@ -3363,19 +3371,80 @@ class Emitter {
     }
     const bindName = decl.name.text;
 
+    // Phase 1.5-3.5g: detect Map.values() / Map.keys() / Set.values() /
+    // Set.keys() as a syntactic special form *before* the regular inferType
+    // dispatch — `.values()` is rejected in expression position, so the
+    // generic infer path would surface a less helpful error.
+    if (
+      ts.isCallExpression(stmt.expression) &&
+      !stmt.expression.questionDotToken &&
+      ts.isPropertyAccessExpression(stmt.expression.expression) &&
+      !stmt.expression.expression.questionDotToken
+    ) {
+      const callExpr = stmt.expression;
+      const callee = callExpr.expression as ts.PropertyAccessExpression;
+      const methodName = callee.name.text;
+      if (methodName === "values" || methodName === "keys" || methodName === "entries") {
+        const baseType = this.inferType(callee.expression);
+        if (isMapType(baseType) || isSetType(baseType)) {
+          if (methodName === "entries") {
+            throw new CodegenError(
+              callExpr,
+              "for-of over .entries() is unsupported (requires destructuring binding, not yet implemented)",
+            );
+          }
+          if (callExpr.arguments.length !== 0) {
+            throw new CodegenError(callExpr, `.${methodName}() takes no arguments`);
+          }
+          let bindType: TopazType;
+          let field: "key" | "value";
+          if (isMapType(baseType)) {
+            this.recordMapMonomorph(baseType);
+            if (methodName === "values") {
+              bindType = mapValue(baseType)!;
+              field = "value";
+            } else {
+              bindType = mapKey(baseType)!;
+              field = "key";
+            }
+          } else {
+            // Set: both .values() and .keys() yield the element (matches JS).
+            this.recordSetMonomorph(baseType);
+            bindType = setElem(baseType)!;
+            field = "key";
+          }
+          return this.emitForOfHashLowering(
+            stmt, indent, baseType, callee.expression,
+            bindType, field, bindName, decl, isConst,
+          );
+        }
+      }
+    }
+
     const rhsType = this.inferType(stmt.expression);
+
+    // Phase 1.5-3.5g: plain Set RHS iterates over elements (JS treats Set as
+    // its own iterable; `[...set]` and `for (const x of set)` both yield
+    // values). Uses the same hash-walk helper as Set.values().
+    if (isSetType(rhsType)) {
+      this.recordSetMonomorph(rhsType);
+      const elemType = setElem(rhsType)!;
+      return this.emitForOfHashLowering(
+        stmt, indent, rhsType, stmt.expression,
+        elemType, "key", bindName, decl, isConst,
+      );
+    }
+
     if (!isArrayType(rhsType)) {
       let hint = "";
       if (isMapType(rhsType)) {
-        hint = " (Map iteration via `.values()` / `.keys()` is unsupported until 1.5-3.5e)";
-      } else if (isSetType(rhsType)) {
-        hint = " (Set iteration is unsupported until 1.5-3.5e)";
+        hint = " (use `.values()` / `.keys()`; `.entries()` is unsupported until destructuring lands)";
       } else if (rhsType.kind === "string") {
         hint = " (string iteration is unsupported; index with `[i]` instead)";
       }
       throw new CodegenError(
         stmt.expression,
-        `for-of requires an Array<T> (got ${typeIdent(rhsType)})${hint}`,
+        `for-of requires an Array<T>, Set<T>, Map.values(), or Map.keys() (got ${typeIdent(rhsType)})${hint}`,
       );
     }
     this.recordArrayMonomorph(rhsType);
@@ -3423,6 +3492,81 @@ class Emitter {
           `${pad}  for (size_t ${idxTmp} = 0; ${idxTmp} < ${arrTmp}->len; ${idxTmp}++) {`,
         );
         lines.push(`${innerPad}${elemCType} ${bindName} = ${arrTmp}->data[${idxTmp}];`);
+        if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+        lines.push(`${pad}  }`);
+        lines.push(`${pad}}`);
+        return lines.join("\n");
+      } finally {
+        this.scope.pop();
+      }
+    } finally {
+      this.scope.pop();
+    }
+  }
+
+  // Phase 1.5-3.5g: walk a Map / Set's open-addressing slot array, skipping
+  // empty / tombstone slots. The user's `continue` / `break` refer to the
+  // same C `for` loop the OCCUPIED filter uses, so they behave naturally
+  // (continue → next slot, break → exit). `cap == 0` is safe: the loop
+  // condition `i < 0` is false, slots is never read.
+  private emitForOfHashLowering(
+    stmt: ts.ForOfStatement,
+    indent: number,
+    containerType: TopazType,
+    recvExpr: ts.Expression,
+    bindType: TopazType,
+    field: "key" | "value",
+    bindName: string,
+    decl: ts.VariableDeclaration,
+    isConst: boolean,
+  ): string {
+    const pad = "  ".repeat(indent);
+
+    if (decl.type) {
+      const declared = this.typeFromAnnotation(decl.type, decl);
+      if (!typeEq(declared, bindType)) {
+        const what = field === "value" ? "value" : (isMapType(containerType) ? "key" : "element");
+        throw new CodegenError(
+          decl.type,
+          `for-of binding type ${typeIdent(declared)} does not match ${what} type ${typeIdent(bindType)}`,
+        );
+      }
+    }
+
+    const id = this.tmpCounter++;
+    const htTmp = `__topaz_for_ht_${id}`;
+    const idxTmp = `__topaz_for_idx_${id}`;
+    const htCType = cTypeName(containerType);
+    const bindCType = cTypeName(bindType);
+    const recvStr = this.emitExpression(recvExpr);
+    const innerPad = "  ".repeat(indent + 2);
+
+    this.scope.push();
+    try {
+      this.scope.declare(bindName, bindType, isConst, decl);
+      this.scope.push();
+      try {
+        const stmtList: ts.Statement[] = ts.isBlock(stmt.statement)
+          ? Array.from(stmt.statement.statements)
+          : [stmt.statement];
+        const stmtLines: string[] = [];
+        for (const s of stmtList) {
+          stmtLines.push(this.emitStatement(s, indent + 2));
+          this.applyCarryNarrowing(s);
+        }
+
+        const lines: string[] = [];
+        lines.push(`${pad}{`);
+        lines.push(`${pad}  ${htCType} ${htTmp} = ${recvStr};`);
+        lines.push(
+          `${pad}  for (size_t ${idxTmp} = 0; ${idxTmp} < ${htTmp}->cap; ${idxTmp}++) {`,
+        );
+        lines.push(
+          `${innerPad}if (${htTmp}->slots[${idxTmp}].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;`,
+        );
+        lines.push(
+          `${innerPad}${bindCType} ${bindName} = ${htTmp}->slots[${idxTmp}].${field};`,
+        );
         if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
         lines.push(`${pad}  }`);
         lines.push(`${pad}}`);
@@ -4684,6 +4828,22 @@ class Emitter {
       }
       return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
     }
+    // Phase 1.5-3.5g: .values() / .keys() are only meaningful as a for-of RHS;
+    // they have no standalone value representation (no Iterator interface yet).
+    // .entries() is also rejected because it requires destructuring on the
+    // binding side.
+    if (method === "values" || method === "keys") {
+      throw new CodegenError(
+        callee,
+        `Map.${method}() is only allowed as the right-hand side of a for-of statement`,
+      );
+    }
+    if (method === "entries") {
+      throw new CodegenError(
+        callee,
+        "Map.entries() is unsupported (requires destructuring binding, not yet implemented)",
+      );
+    }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
@@ -4771,6 +4931,20 @@ class Emitter {
         throw new CodegenError(expr, "Set.delete expects exactly one argument");
       }
       return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
+    }
+    // Phase 1.5-3.5g: same restriction as Map — .values() / .keys() are only
+    // for for-of consumption, .entries() needs destructuring.
+    if (method === "values" || method === "keys") {
+      throw new CodegenError(
+        callee,
+        `Set.${method}() is only allowed as the right-hand side of a for-of statement`,
+      );
+    }
+    if (method === "entries") {
+      throw new CodegenError(
+        callee,
+        "Set.entries() is unsupported (requires destructuring binding, not yet implemented)",
+      );
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
@@ -5463,6 +5637,18 @@ class Emitter {
           // pointer for class / iface V.
           if (m === "get") return makeUnion([v, T_UNDEFINED]);
           if (m === "has" || m === "delete") return T_BOOLEAN;
+          if (m === "values" || m === "keys") {
+            throw new CodegenError(
+              callee,
+              `Map.${m}() is only allowed as the right-hand side of a for-of statement`,
+            );
+          }
+          if (m === "entries") {
+            throw new CodegenError(
+              callee,
+              "Map.entries() is unsupported (requires destructuring binding, not yet implemented)",
+            );
+          }
           throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isSetType(baseType)) {
@@ -5471,6 +5657,18 @@ class Emitter {
             throw new CodegenError(expr, "Set.add returns void in this dialect and cannot be used as a value");
           }
           if (m === "has" || m === "delete") return T_BOOLEAN;
+          if (m === "values" || m === "keys") {
+            throw new CodegenError(
+              callee,
+              `Set.${m}() is only allowed as the right-hand side of a for-of statement`,
+            );
+          }
+          if (m === "entries") {
+            throw new CodegenError(
+              callee,
+              "Set.entries() is unsupported (requires destructuring binding, not yet implemented)",
+            );
+          }
           throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isClassType(baseType)) {
