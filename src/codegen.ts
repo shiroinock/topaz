@@ -2913,6 +2913,12 @@ class Emitter {
     if (ts.isParenthesizedExpression(expr)) {
       return `(${this.emitExpression(expr.expression)})`;
     }
+    if (ts.isPropertyAccessExpression(expr) && expr.questionDotToken) {
+      return this.emitOptionalPropertyAccess(expr);
+    }
+    if (ts.isElementAccessExpression(expr) && expr.questionDotToken) {
+      return this.emitOptionalElementAccess(expr);
+    }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
       // Phase 1.5-3e: `dunion.kind` reads the discriminator string from the
@@ -3497,6 +3503,19 @@ class Emitter {
   private emitCall(expr: ts.CallExpression): string {
     const callee = expr.expression;
 
+    // Phase 1.5-3.5d: optional method call `a?.b()`. The `?.` token sits on
+    // the inner property access; the call itself is regular. `a?.()`
+    // (optional call) is rejected separately below.
+    if (ts.isPropertyAccessExpression(callee) && callee.questionDotToken) {
+      return this.emitOptionalMethodCall(expr, callee);
+    }
+    if (expr.questionDotToken) {
+      throw new CodegenError(
+        expr,
+        "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
+      );
+    }
+
     if (
       ts.isPropertyAccessExpression(callee) &&
       ts.isIdentifier(callee.expression) &&
@@ -3731,6 +3750,206 @@ class Emitter {
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
+  // Phase 1.5-3.5d helpers: resolve / lower optional chain accesses.
+  //
+  // `a?.b` / `a?.b()` / `a?.[i]` all share the same short-circuit shape: the
+  // receiver `a` must be `T | undefined`, the chain evaluates `a` once into a
+  // tmp, branches on the sentinel slot (NULL pointer / fat-pointer .data /
+  // scalar .present), and yields either the absent literal of the result type
+  // or the wrapped present-case value. No-op `?.` on an already non-optional
+  // receiver is rejected so the operator's intent stays unambiguous.
+
+  private resolveOptionalReceiver(
+    expr: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression,
+    receiver: ts.Expression,
+  ): { baseType: TopazType; inner: TopazType } {
+    const baseType = this.inferType(receiver);
+    const inner = withoutUndefined(baseType);
+    if (!inner || typeEq(inner, baseType)) {
+      throw new CodegenError(
+        expr,
+        `optional chain \`?.\` requires a \`T | undefined\` receiver; got ${typeIdent(baseType)}`,
+      );
+    }
+    return { baseType, inner };
+  }
+
+  private resolveOptionalFieldType(
+    expr: ts.PropertyAccessExpression,
+  ): { baseType: TopazType; inner: TopazType; fieldType: TopazType } {
+    const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.expression);
+    const fname = expr.name.text;
+    if (isClassType(inner)) {
+      const cls = this.classes.get(classNameOf(inner)!)!;
+      const ft = cls.fields.get(fname);
+      if (ft) return { baseType, inner, fieldType: ft };
+      if (cls.methods.has(fname)) {
+        throw new CodegenError(
+          expr,
+          `method '${fname}' cannot be used as a value (call it with \`?.${fname}()\` instead)`,
+        );
+      }
+      throw new CodegenError(expr, `class '${cls.name}' has no member '${fname}'`);
+    }
+    if (isInterfaceType(inner)) {
+      const iface = this.interfaces.get(interfaceNameOf(inner)!)!;
+      const ft = iface.fields.get(fname);
+      if (ft) return { baseType, inner, fieldType: ft };
+      if (iface.methods.has(fname)) {
+        throw new CodegenError(
+          expr,
+          `method '${fname}' cannot be used as a value (call it with \`?.${fname}()\` instead)`,
+        );
+      }
+      throw new CodegenError(expr, `interface '${iface.name}' has no member '${fname}'`);
+    }
+    throw new CodegenError(
+      expr,
+      `optional property access \`?.\` is only supported on class / interface receivers (got ${typeIdent(baseType)})`,
+    );
+  }
+
+  private resolveOptionalMethodSig(
+    callee: ts.PropertyAccessExpression,
+  ): { baseType: TopazType; inner: TopazType; sig: { params: ParamInfo[]; returnType: TopazType } } {
+    const { baseType, inner } = this.resolveOptionalReceiver(callee, callee.expression);
+    const mname = callee.name.text;
+    if (isClassType(inner)) {
+      const cls = this.classes.get(classNameOf(inner)!)!;
+      const m = cls.methods.get(mname);
+      if (m) return { baseType, inner, sig: { params: m.params, returnType: m.returnType } };
+      if (cls.fields.has(mname)) {
+        throw new CodegenError(callee, `'${mname}' is a field, not a method, on class '${cls.name}'`);
+      }
+      throw new CodegenError(callee, `class '${cls.name}' has no method '${mname}'`);
+    }
+    if (isInterfaceType(inner)) {
+      const iface = this.interfaces.get(interfaceNameOf(inner)!)!;
+      const s = iface.methods.get(mname);
+      if (s) return { baseType, inner, sig: { params: s.params, returnType: s.returnType } };
+      if (iface.fields.has(mname)) {
+        throw new CodegenError(callee, `'${mname}' is a field, not a method, on interface '${iface.name}'`);
+      }
+      throw new CodegenError(callee, `interface '${iface.name}' has no method '${mname}'`);
+    }
+    throw new CodegenError(
+      callee,
+      `optional method call \`?.\` is only supported on class / interface receivers (got ${typeIdent(baseType)})`,
+    );
+  }
+
+  private resolveOptionalIndexType(
+    expr: ts.ElementAccessExpression,
+  ): { baseType: TopazType; inner: TopazType; elem: TopazType } {
+    const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.expression);
+    if (!isArrayType(inner)) {
+      throw new CodegenError(
+        expr,
+        `optional index access \`?.[i]\` is only supported on Array receivers (got ${typeIdent(baseType)})`,
+      );
+    }
+    this.expectType(expr.argumentExpression, T_NUMBER);
+    return { baseType, inner, elem: arrayElem(inner)! };
+  }
+
+  // Builds the stmt-expression shell. `emitPresent(tmp)` is called once and
+  // its output is fed through applyCoercion so scalar return types get the
+  // `topaz_opt_wrap_<scalar>` wrapper for free; reference / iface return
+  // types share their C representation with `T | undefined` so the coercion
+  // is a no-op there.
+  private lowerOptionalChain(args: {
+    baseType: TopazType;
+    inner: TopazType;
+    baseStr: string;
+    accessType: TopazType;
+    emitPresent: (tmp: string) => string;
+    anchor: ts.Node;
+  }): string {
+    const id = this.tmpCounter++;
+    const tmp = `__topaz_oc_${id}`;
+    const ct = cTypeName(args.baseType);
+    let isAbsent: string;
+    if (isInterfaceType(args.inner)) {
+      isAbsent = `${tmp}.data == NULL`;
+    } else {
+      // class / array / map / set: pointer-sentinel
+      isAbsent = `${tmp} == NULL`;
+    }
+    const resultType = makeUnion([args.accessType, T_UNDEFINED]);
+    const absentStr = this.emitUndefinedLiteral(resultType, args.anchor);
+    const presentRaw = args.emitPresent(tmp);
+    const presentStr = this.applyCoercion(presentRaw, args.accessType, resultType, args.anchor);
+    return `({ ${ct} ${tmp} = ${args.baseStr}; (${isAbsent}) ? ${absentStr} : ${presentStr}; })`;
+  }
+
+  private emitOptionalPropertyAccess(expr: ts.PropertyAccessExpression): string {
+    const { baseType, inner, fieldType } = this.resolveOptionalFieldType(expr);
+    const baseStr = this.emitExpression(expr.expression);
+    const fname = expr.name.text;
+    return this.lowerOptionalChain({
+      baseType,
+      inner,
+      baseStr,
+      accessType: fieldType,
+      anchor: expr,
+      emitPresent: (tmp) => {
+        if (isClassType(inner)) {
+          return `(${tmp})->${fname}`;
+        }
+        // interface: read through vtable getter
+        return `(${tmp}).vt->get_${fname}((${tmp}).data)`;
+      },
+    });
+  }
+
+  private emitOptionalElementAccess(expr: ts.ElementAccessExpression): string {
+    const { baseType, inner, elem } = this.resolveOptionalIndexType(expr);
+    const baseStr = this.emitExpression(expr.expression);
+    const idxStr = this.emitExpression(expr.argumentExpression);
+    const name = arrayShortName(inner);
+    return this.lowerOptionalChain({
+      baseType,
+      inner,
+      baseStr,
+      accessType: elem,
+      anchor: expr,
+      emitPresent: (tmp) => `topaz_array_${name}_at(${tmp}, ${idxStr})`,
+    });
+  }
+
+  private emitOptionalMethodCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+  ): string {
+    const { baseType, inner, sig } = this.resolveOptionalMethodSig(callee);
+    if (expr.arguments.length !== sig.params.length) {
+      throw new CodegenError(
+        expr,
+        `${typeIdent(inner)}.${callee.name.text} expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
+      );
+    }
+    const baseStr = this.emitExpression(callee.expression);
+    const argStrs = expr.arguments.map((a, i) => this.emitWithExpected(a, sig.params[i]!.type));
+    const mname = callee.name.text;
+    return this.lowerOptionalChain({
+      baseType,
+      inner,
+      baseStr,
+      accessType: sig.returnType,
+      anchor: expr,
+      emitPresent: (tmp) => {
+        if (isClassType(inner)) {
+          const cname = classNameOf(inner)!;
+          const parts = [tmp, ...argStrs].join(", ");
+          return `topaz_class_${cname}_method_${mname}(${parts})`;
+        }
+        // interface: dispatch through vtable, passing data + remaining args
+        const parts = [`(${tmp}).data`, ...argStrs].join(", ");
+        return `(${tmp}).vt->${mname}(${parts})`;
+      },
+    });
+  }
+
   private inferType(expr: ts.Expression): TopazType {
     if (ts.isNumericLiteral(expr)) return T_NUMBER;
     if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
@@ -3766,6 +3985,10 @@ class Emitter {
       const b = this.scope.lookup(expr.text);
       if (!b) throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
       return b.type;
+    }
+    if (ts.isPropertyAccessExpression(expr) && expr.questionDotToken) {
+      const { fieldType } = this.resolveOptionalFieldType(expr);
+      return makeUnion([fieldType, T_UNDEFINED]);
     }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
@@ -3838,6 +4061,10 @@ class Emitter {
         expr,
         `unsupported property access '.${expr.name.text}' on ${typeIdent(baseType)}`,
       );
+    }
+    if (ts.isElementAccessExpression(expr) && expr.questionDotToken) {
+      const { elem } = this.resolveOptionalIndexType(expr);
+      return makeUnion([elem, T_UNDEFINED]);
     }
     if (ts.isElementAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
@@ -4048,6 +4275,18 @@ class Emitter {
     }
     if (ts.isCallExpression(expr)) {
       const callee = expr.expression;
+      // Phase 1.5-3.5d: optional method call `a?.b()` — the result is the
+      // method's return type widened to `R | undefined`.
+      if (ts.isPropertyAccessExpression(callee) && callee.questionDotToken) {
+        const { sig } = this.resolveOptionalMethodSig(callee);
+        return makeUnion([sig.returnType, T_UNDEFINED]);
+      }
+      if (expr.questionDotToken) {
+        throw new CodegenError(
+          expr,
+          "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
+        );
+      }
       if (
         ts.isPropertyAccessExpression(callee) &&
         ts.isIdentifier(callee.expression) &&
