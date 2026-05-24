@@ -103,6 +103,8 @@ run_case for_of_set $'15\n15\n15\n0\n100\n14\n7\n60\n2\n387\n115'
 
 run_case for_of_map_values $'60\n6\n60\n0\n6\n50\n13\n400\n60\n20\n129'
 
+run_case for_of_entries $'140\n606\n116\n220\n20\n40\n0\n402\n141\n63\n30\n30\n12\n366'
+
 run_case iterator_basic $'60\n3\n6\n6\n300\nfalse\n17\n3\n60\n6'
 
 run_case non_null_and_coalesce $'10\n25\ntrue\n7\nalpha\n10\n-1\n20\n110\n7\n99\nalpha\ndefault\nhello\n?\n20\n-1\n20'
@@ -129,8 +131,9 @@ run_fail_case dunion_field_access_fail examples/dunion_field_access_fail.ts "can
 run_fail_case catch_unknown_unnarrowed_fail examples/catch_unknown_unnarrowed_fail.ts "cannot access '.msg' on \`unknown\`"
 run_fail_case template_literal_unsupported_fail examples/template_literal_unsupported_fail.ts "template literal substitution must be number / boolean / string"
 run_fail_case for_of_map_fail examples/for_of_map_fail.ts "for-of requires an Array<T>"
-run_fail_case for_of_destructuring_fail examples/for_of_destructuring_fail.ts "destructuring is unsupported"
-run_fail_case for_of_map_entries_fail examples/for_of_map_entries_fail.ts "for-of over .entries() is unsupported"
+run_fail_case for_of_destructuring_fail examples/for_of_destructuring_fail.ts "destructuring binding in for-of is only supported for .entries() on Map / Set"
+run_fail_case for_of_map_entries_fail examples/for_of_map_entries_fail.ts "for-of over .entries() requires destructuring binding"
+run_fail_case map_entries_outside_for_of_fail examples/map_entries_outside_for_of_fail.ts "Map.entries() is only allowed as the right-hand side"
 run_fail_case iterator_in_container_fail examples/iterator_in_container_fail.ts "no Array monomorph for element type topaz_iter_number"
 run_fail_case non_null_non_optional_fail examples/non_null_non_optional_fail.ts "non-null assertion (\`!\`) requires a \`T | undefined\` operand"
 run_fail_case coalesce_non_optional_fail examples/coalesce_non_optional_fail.ts "\`??\` requires the left operand to be \`T | undefined\`"

@@ -1,6 +1,8 @@
-// Negative case for Phase 1.5-3.5b: array destructuring in for-of binding
-// is unsupported (we only accept a single identifier name).
+// Phase 1.5-3.5h-entries: array destructuring in for-of binding is only
+// supported for `.entries()` on Map / Set. Plain Array<T> iteration must
+// use a single identifier binding.
 const pairs: number[] = [1, 2, 3];
-for (const [x] of pairs) {
-  console.log(x);
+for (const [a, b] of pairs) {
+  console.log(a);
+  console.log(b);
 }

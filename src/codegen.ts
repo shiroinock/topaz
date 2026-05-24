@@ -3599,8 +3599,13 @@ class Emitter {
   // / Set.keys(). Hash-table walks iterate `slots[0..cap)` and skip slots
   // whose `state != OCCUPIED` (empty / tombstone) — the user's `continue` /
   // `break` retain their plain semantics because the OCCUPIED filter shares
-  // the same `for` loop. Map.entries() / Set.entries() require destructuring
-  // and stay rejected until that lands.
+  // the same `for` loop.
+  //
+  // Phase 1.5-3.5h-entries: `.entries()` over Map / Set in for-of position
+  // accepts `for (const [k, v] of m.entries())`. The destructuring is treated
+  // as a syntactic special form — both names bind directly off the same hash
+  // slot (no synthetic [K, V] tuple type, no Iterator<[K, V]>). Set.entries()
+  // yields [elem, elem] pairs (matches JS).
   //
   // Loop-var lifetime note: the C variable is reused across iterations, so
   // capturing it from a closure (1.5-3.5e) sees the post-loop value (scalar)
@@ -3608,7 +3613,6 @@ class Emitter {
   // arena-allocating a fresh env per iteration — by-value capture snapshots
   // the loop var at env construction time.
   private emitForOfStatement(stmt: ts.ForOfStatement, indent: number): string {
-    const pad = "  ".repeat(indent);
     if (stmt.awaitModifier) {
       throw new CodegenError(stmt, "`for await` is unsupported (no async support yet)");
     }
@@ -3628,21 +3632,18 @@ class Emitter {
       throw new CodegenError(init, "var is unsupported; use let or const");
     }
     const decl = init.declarations[0]!;
-    if (!ts.isIdentifier(decl.name)) {
-      throw new CodegenError(
-        decl,
-        "for-of binding name must be a simple identifier (destructuring is unsupported)",
-      );
-    }
     if (decl.initializer) {
       throw new CodegenError(decl, "for-of binding cannot have an initializer");
     }
-    const bindName = decl.name.text;
+    const binding = this.parseForOfBinding(decl);
 
     // Phase 1.5-3.5g: detect Map.values() / Map.keys() / Set.values() /
     // Set.keys() as a syntactic special form *before* the regular inferType
     // dispatch — `.values()` is rejected in expression position, so the
     // generic infer path would surface a less helpful error.
+    //
+    // Phase 1.5-3.5h-entries: `.entries()` also goes through this special form
+    // path; pair binding lowers to two declarations off the same slot.
     if (
       ts.isCallExpression(stmt.expression) &&
       !stmt.expression.questionDotToken &&
@@ -3655,14 +3656,43 @@ class Emitter {
       if (methodName === "values" || methodName === "keys" || methodName === "entries") {
         const baseType = this.inferType(callee.expression);
         if (isMapType(baseType) || isSetType(baseType)) {
-          if (methodName === "entries") {
-            throw new CodegenError(
-              callExpr,
-              "for-of over .entries() is unsupported (requires destructuring binding, not yet implemented)",
-            );
-          }
           if (callExpr.arguments.length !== 0) {
             throw new CodegenError(callExpr, `.${methodName}() takes no arguments`);
+          }
+          if (methodName === "entries") {
+            if (binding.kind !== "pair") {
+              throw new CodegenError(
+                decl.name,
+                "for-of over .entries() requires destructuring binding `for (const [k, v] of ...)`",
+              );
+            }
+            let keyType: TopazType;
+            let valueType: TopazType;
+            if (isMapType(baseType)) {
+              this.recordMapMonomorph(baseType);
+              keyType = mapKey(baseType)!;
+              valueType = mapValue(baseType)!;
+            } else {
+              // Set.entries() yields [elem, elem] pairs (matches JS).
+              this.recordSetMonomorph(baseType);
+              keyType = setElem(baseType)!;
+              valueType = setElem(baseType)!;
+            }
+            return this.emitForOfHashLowering(
+              stmt, indent, baseType, callee.expression,
+              { kind: "pair",
+                firstName: binding.firstName, firstField: "key", firstType: keyType,
+                secondName: binding.secondName, secondField: isMapType(baseType) ? "value" : "key", secondType: valueType,
+              },
+              decl, isConst,
+            );
+          }
+          // .values() / .keys() — single binding required.
+          if (binding.kind !== "single") {
+            throw new CodegenError(
+              decl.name,
+              `for-of over .${methodName}() takes a single binding, not destructuring`,
+            );
           }
           let bindType: TopazType;
           let field: "key" | "value";
@@ -3683,11 +3713,24 @@ class Emitter {
           }
           return this.emitForOfHashLowering(
             stmt, indent, baseType, callee.expression,
-            bindType, field, bindName, decl, isConst,
+            { kind: "single", name: binding.name, field, type: bindType },
+            decl, isConst,
           );
         }
       }
     }
+
+    // Non-special-form paths only accept single binding (no destructuring
+    // for plain Array / Set / Iterator iteration — we have no tuple type
+    // and `[a, b] = arr` on an Array<T> would require T|undefined semantics
+    // for missing elements which we don't want to leak in for-of binding).
+    if (binding.kind === "pair") {
+      throw new CodegenError(
+        decl.name,
+        "destructuring binding in for-of is only supported for .entries() on Map / Set",
+      );
+    }
+    const bindName = binding.name;
 
     const rhsType = this.inferType(stmt.expression);
 
@@ -3699,7 +3742,8 @@ class Emitter {
       const elemType = setElem(rhsType)!;
       return this.emitForOfHashLowering(
         stmt, indent, rhsType, stmt.expression,
-        elemType, "key", bindName, decl, isConst,
+        { kind: "single", name: bindName, field: "key", type: elemType },
+        decl, isConst,
       );
     }
 
@@ -3718,13 +3762,13 @@ class Emitter {
     if (!isArrayType(rhsType)) {
       let hint = "";
       if (isMapType(rhsType)) {
-        hint = " (use `.values()` / `.keys()`; `.entries()` is unsupported until destructuring lands)";
+        hint = " (use `.values()` / `.keys()` / `.entries()`)";
       } else if (rhsType.kind === "string") {
         hint = " (string iteration is unsupported; index with `[i]` instead)";
       }
       throw new CodegenError(
         stmt.expression,
-        `for-of requires an Array<T>, Set<T>, Iterator<T>, Map.values(), or Map.keys() (got ${typeIdent(rhsType)})${hint}`,
+        `for-of requires an Array<T>, Set<T>, Iterator<T>, Map.values(), Map.keys(), or Map.entries() (got ${typeIdent(rhsType)})${hint}`,
       );
     }
     this.recordArrayMonomorph(rhsType);
@@ -3740,6 +3784,7 @@ class Emitter {
       }
     }
 
+    const pad = "  ".repeat(indent);
     const id = this.tmpCounter++;
     const arrTmp = `__topaz_for_arr_${id}`;
     const idxTmp = `__topaz_for_idx_${id}`;
@@ -3784,31 +3829,105 @@ class Emitter {
     }
   }
 
+  // Phase 1.5-3.5h-entries: parse a for-of binding decl into either a single
+  // identifier or a 2-element array destructuring `[k, v]`. Object
+  // destructuring, rest, default, property rename, nested patterns, omitted
+  // (sparse) elements, and pair binding with anything other than 2 elements
+  // are all rejected explicitly with hint text.
+  private parseForOfBinding(
+    decl: ts.VariableDeclaration,
+  ):
+    | { kind: "single"; name: string }
+    | { kind: "pair"; firstName: string; secondName: string }
+  {
+    if (ts.isIdentifier(decl.name)) {
+      return { kind: "single", name: decl.name.text };
+    }
+    if (ts.isObjectBindingPattern(decl.name)) {
+      throw new CodegenError(
+        decl.name,
+        "object destructuring is unsupported in for-of binding (use a class field accessor in the body)",
+      );
+    }
+    if (ts.isArrayBindingPattern(decl.name)) {
+      if (decl.type) {
+        throw new CodegenError(
+          decl.type,
+          "type annotation on destructuring binding is unsupported (omit the annotation; element types are inferred from the iterable)",
+        );
+      }
+      const elements = decl.name.elements;
+      if (elements.length !== 2) {
+        throw new CodegenError(
+          decl.name,
+          `destructuring binding in for-of must have exactly 2 elements [k, v] (got ${elements.length})`,
+        );
+      }
+      const names: string[] = [];
+      for (const el of elements) {
+        if (ts.isOmittedExpression(el)) {
+          throw new CodegenError(el, "omitted (sparse) destructuring element is unsupported");
+        }
+        if (el.dotDotDotToken) {
+          throw new CodegenError(el, "rest element in destructuring is unsupported");
+        }
+        if (el.initializer) {
+          throw new CodegenError(el, "default value in destructuring is unsupported");
+        }
+        if (el.propertyName) {
+          throw new CodegenError(el, "property rename in destructuring is unsupported");
+        }
+        if (!ts.isIdentifier(el.name)) {
+          throw new CodegenError(
+            el.name,
+            "nested destructuring is unsupported (each element must be a simple identifier)",
+          );
+        }
+        names.push(el.name.text);
+      }
+      return { kind: "pair", firstName: names[0]!, secondName: names[1]! };
+    }
+    throw new CodegenError(
+      decl.name,
+      "for-of binding must be an identifier or [k, v] destructuring",
+    );
+  }
+
   // Phase 1.5-3.5g: walk a Map / Set's open-addressing slot array, skipping
   // empty / tombstone slots. The user's `continue` / `break` refer to the
   // same C `for` loop the OCCUPIED filter uses, so they behave naturally
   // (continue → next slot, break → exit). `cap == 0` is safe: the loop
   // condition `i < 0` is false, slots is never read.
+  //
+  // Phase 1.5-3.5h-entries: bindSpec carries either a single binding (the
+  // .values() / .keys() / plain-Set case) or a pair (the .entries() case).
+  // For the pair case, both names bind off the same slot in a single C loop
+  // iteration — no synthetic tuple type involved.
   private emitForOfHashLowering(
     stmt: ts.ForOfStatement,
     indent: number,
     containerType: TopazType,
     recvExpr: ts.Expression,
-    bindType: TopazType,
-    field: "key" | "value",
-    bindName: string,
+    bindSpec:
+      | { kind: "single"; name: string; field: "key" | "value"; type: TopazType }
+      | {
+          kind: "pair";
+          firstName: string; firstField: "key" | "value"; firstType: TopazType;
+          secondName: string; secondField: "key" | "value"; secondType: TopazType;
+        },
     decl: ts.VariableDeclaration,
     isConst: boolean,
   ): string {
     const pad = "  ".repeat(indent);
 
-    if (decl.type) {
+    if (bindSpec.kind === "single" && decl.type) {
       const declared = this.typeFromAnnotation(decl.type, decl);
-      if (!typeEq(declared, bindType)) {
-        const what = field === "value" ? "value" : (isMapType(containerType) ? "key" : "element");
+      if (!typeEq(declared, bindSpec.type)) {
+        const what =
+          bindSpec.field === "value" ? "value" : (isMapType(containerType) ? "key" : "element");
         throw new CodegenError(
           decl.type,
-          `for-of binding type ${typeIdent(declared)} does not match ${what} type ${typeIdent(bindType)}`,
+          `for-of binding type ${typeIdent(declared)} does not match ${what} type ${typeIdent(bindSpec.type)}`,
         );
       }
     }
@@ -3817,13 +3936,17 @@ class Emitter {
     const htTmp = `__topaz_for_ht_${id}`;
     const idxTmp = `__topaz_for_idx_${id}`;
     const htCType = cTypeName(containerType);
-    const bindCType = cTypeName(bindType);
     const recvStr = this.emitExpression(recvExpr);
     const innerPad = "  ".repeat(indent + 2);
 
     this.scope.push();
     try {
-      this.scope.declare(bindName, bindType, isConst, decl);
+      if (bindSpec.kind === "single") {
+        this.scope.declare(bindSpec.name, bindSpec.type, isConst, decl);
+      } else {
+        this.scope.declare(bindSpec.firstName, bindSpec.firstType, isConst, decl);
+        this.scope.declare(bindSpec.secondName, bindSpec.secondType, isConst, decl);
+      }
       this.scope.push();
       try {
         const stmtList: ts.Statement[] = ts.isBlock(stmt.statement)
@@ -3844,9 +3967,18 @@ class Emitter {
         lines.push(
           `${innerPad}if (${htTmp}->slots[${idxTmp}].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;`,
         );
-        lines.push(
-          `${innerPad}${bindCType} ${bindName} = ${htTmp}->slots[${idxTmp}].${field};`,
-        );
+        if (bindSpec.kind === "single") {
+          lines.push(
+            `${innerPad}${cTypeName(bindSpec.type)} ${bindSpec.name} = ${htTmp}->slots[${idxTmp}].${bindSpec.field};`,
+          );
+        } else {
+          lines.push(
+            `${innerPad}${cTypeName(bindSpec.firstType)} ${bindSpec.firstName} = ${htTmp}->slots[${idxTmp}].${bindSpec.firstField};`,
+          );
+          lines.push(
+            `${innerPad}${cTypeName(bindSpec.secondType)} ${bindSpec.secondName} = ${htTmp}->slots[${idxTmp}].${bindSpec.secondField};`,
+          );
+        }
         if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
         lines.push(`${pad}  }`);
         lines.push(`${pad}}`);
@@ -5193,7 +5325,7 @@ class Emitter {
     if (method === "entries") {
       throw new CodegenError(
         callee,
-        "Map.entries() is unsupported (requires destructuring binding, not yet implemented)",
+        "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
       );
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
@@ -5296,7 +5428,7 @@ class Emitter {
     if (method === "entries") {
       throw new CodegenError(
         callee,
-        "Set.entries() is unsupported (requires destructuring binding, not yet implemented)",
+        "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
       );
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
@@ -6000,7 +6132,7 @@ class Emitter {
           if (m === "entries") {
             throw new CodegenError(
               callee,
-              "Map.entries() is unsupported (requires destructuring binding, not yet implemented)",
+              "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
             );
           }
           throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
@@ -6017,7 +6149,7 @@ class Emitter {
           if (m === "entries") {
             throw new CodegenError(
               callee,
-              "Set.entries() is unsupported (requires destructuring binding, not yet implemented)",
+              "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
             );
           }
           throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
