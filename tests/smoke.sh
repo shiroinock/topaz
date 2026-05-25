@@ -163,4 +163,15 @@ run_fail_case spread_set_fail examples/spread_set_fail.ts "spread source in arra
 run_fail_case spread_elem_mismatch_fail examples/spread_elem_mismatch_fail.ts "spread element type topaz_string does not match destination element type topaz_number"
 run_fail_case spread_non_array_fail examples/spread_non_array_fail.ts "spread source in array literal must be an Array<T>"
 
+run_case access_modifier $'13\n16\n3\n100\n103\n7\n8\n15\nalpha\n101\n102\ntoy\n42'
+run_fail_case access_modifier_static_fail examples/access_modifier_static_fail.ts "class member modifier 'StaticKeyword' is unsupported"
+
+run_case void_return $'hello\nhello\non\n7\n0\n0\n[log] via iface'
+run_fail_case void_return_bare_in_nonvoid_fail examples/void_return_bare_in_nonvoid_fail.ts "\`return;\` is only allowed in a void-returning function"
+run_fail_case void_return_value_in_void_fail examples/void_return_value_in_void_fail.ts "\`return <expr>;\` is not allowed in a void-returning function"
+run_fail_case void_value_assign_fail examples/void_value_assign_fail.ts "\`void\` is only allowed as a function / method return type"
+run_fail_case void_param_fail examples/void_param_fail.ts "\`void\` is only allowed as a function / method return type"
+run_fail_case void_array_fail examples/void_array_fail.ts "\`void\` is only allowed as a function / method return type"
+run_fail_case void_fn_type_fail examples/void_fn_type_fail.ts "fn types cannot return \`void\`"
+
 echo "all tests passed"

@@ -27,6 +27,7 @@ type TopazType =
   | { kind: "string" }
   | { kind: "undefined" }
   | { kind: "unknown" }
+  | { kind: "void" }
   | { kind: "string_literal"; value: string }
   | { kind: "array"; elem: TopazType }
   | { kind: "map"; key: TopazType; value: TopazType }
@@ -43,6 +44,12 @@ const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
 const T_UNDEFINED: TopazType = { kind: "undefined" };
 const T_UNKNOWN: TopazType = { kind: "unknown" };
+// Phase 1.5-6 prep: `void` is only valid as a function / method return type.
+// It has no C value representation — cTypeName collapses it to `void` and
+// rejects every other position (variable annotation, container element,
+// `T | void` union, fn param, etc.). The return-statement path enforces
+// the symmetric rule (no `return expr;` from void, no `return;` from non-void).
+const T_VOID: TopazType = { kind: "void" };
 
 const TOPAZ_THIS = "__topaz_this";
 
@@ -163,6 +170,7 @@ function typeEq(a: TopazType, b: TopazType): boolean {
     case "string":
     case "undefined":
     case "unknown":
+    case "void":
       return true;
     case "string_literal":
       return a.value === (b as Extract<TopazType, { kind: "string_literal" }>).value;
@@ -313,6 +321,8 @@ function typeIdent(t: TopazType): string {
       return `topaz_undefined`;
     case "unknown":
       return `topaz_unknown`;
+    case "void":
+      return `topaz_void`;
     case "string_literal":
       return `topaz_string_literal_${t.value}`;
     case "array":
@@ -404,6 +414,16 @@ function cTypeName(t: TopazType): string {
   if (t.kind === "undefined") {
     throw new Error("cTypeName: bare `undefined` has no C representation (only `T | undefined` does)");
   }
+  // Phase 1.5-6 prep: `void` has no C value representation. cTypeName is the
+  // value-type helper; return-type slots use cReturnTypeName below, which
+  // returns the bare "void" keyword. Reaching cTypeName with `void` means a
+  // caller leaked a void type into a value position (variable annotation,
+  // container element, union, fn param, etc.) — that should be rejected with
+  // a CodegenError by the upstream check, but throwing here keeps the
+  // invariant explicit.
+  if (t.kind === "void") {
+    throw new Error("cTypeName: `void` is only valid as a function / method return type");
+  }
   // Phase 1.5-3f: `unknown` is only legal as a catch binding annotation, where
   // the throw payload is `void *`. Narrowing via `instanceof` casts to the
   // concrete class type before any field/method access.
@@ -441,6 +461,15 @@ function cTypeName(t: TopazType): string {
   // so the iter struct itself can be copied freely.
   if (t.kind === "iter") return typeIdent(t);
   return isReferenceType(t) ? `${typeIdent(t)} *` : typeIdent(t);
+}
+
+// Phase 1.5-6 prep: C type spelling for function / method return slots.
+// `void` returns emit the bare keyword; every other type falls through to
+// cTypeName. Keeps the value-type invariant of cTypeName intact while
+// letting signatures interpolate either kind uniformly.
+function cReturnTypeName(t: TopazType): string {
+  if (t.kind === "void") return "void";
+  return cTypeName(t);
 }
 
 // Phase 1.5-3c: helpers for the scalar `T | undefined` representation. The
@@ -1718,14 +1747,24 @@ class Emitter {
         if (m.questionToken) {
           throw new CodegenError(m, "optional interface fields are unsupported");
         }
-        if (m.modifiers && m.modifiers.length > 0) {
-          throw new CodegenError(m, "interface field modifiers (readonly) are unsupported");
+        // Phase 1.5-6 prep: readonly は no-op 受理(C 出力で runtime 強制
+        // しない方針、class member 側と同じ)。それ以外の modifier(static
+        // 等)は意味が変わるので reject。
+        if (m.modifiers) {
+          for (const mod of m.modifiers) {
+            if (mod.kind === ts.SyntaxKind.ReadonlyKeyword) continue;
+            throw new CodegenError(
+              mod,
+              `interface field modifier '${ts.SyntaxKind[mod.kind]}' is unsupported`,
+            );
+          }
         }
         const fname = m.name.text;
         if (info.fields.has(fname) || info.methods.has(fname)) {
           throw new CodegenError(m, `duplicate member '${fname}' in interface '${info.name}'`);
         }
         const t = this.typeFromAnnotation(m.type, m);
+        this.assertNotVoid(t, m, "interface field type");
         if (t.kind === "fn") {
           throw new CodegenError(m, "fn-typed interface fields are unsupported (Phase 1.5-3.5e)");
         }
@@ -1806,10 +1845,28 @@ class Emitter {
     validateExportableModifiers(cls, "class");
     for (const m of cls.members) {
       if (m.kind === ts.SyntaxKind.SemicolonClassElement) continue;
+      // Phase 1.5-6 prep: public / private / protected / readonly は no-op
+      // として受理(C 出力に可視性概念は無く、readonly も runtime 強制しない
+      // — src/ で `private` が 137 箇所使われており、self-hosting には no-op
+      // で十分)。static / abstract / override は意味が変わるので引き続き
+      // 明示エラー。
       if ((ts as any).canHaveModifiers?.(m) && ts.getModifiers && ts.getModifiers(m as any)) {
         const mods = ts.getModifiers(m as any);
-        if (mods && mods.length > 0) {
-          throw new CodegenError(m, "member modifiers (static/public/private/protected/readonly/abstract/override) are unsupported");
+        if (mods) {
+          for (const mod of mods) {
+            switch (mod.kind) {
+              case ts.SyntaxKind.PublicKeyword:
+              case ts.SyntaxKind.PrivateKeyword:
+              case ts.SyntaxKind.ProtectedKeyword:
+              case ts.SyntaxKind.ReadonlyKeyword:
+                continue;
+              default:
+                throw new CodegenError(
+                  mod,
+                  `class member modifier '${ts.SyntaxKind[mod.kind]}' is unsupported`,
+                );
+            }
+          }
         }
       }
       if (ts.isPropertyDeclaration(m)) {
@@ -1953,6 +2010,7 @@ class Emitter {
       throw new CodegenError(m, "field initializers are unsupported; assign in the constructor");
     }
     const t = this.typeFromAnnotation(m.type, m);
+    this.assertNotVoid(t, m, "class field type");
     if (t.kind === "fn") {
       throw new CodegenError(m, "fn-typed class fields are unsupported (Phase 1.5-3.5e); store the closure in a local instead");
     }
@@ -2011,6 +2069,7 @@ class Emitter {
         throw new CodegenError(p, "parameter property shorthand is unsupported; declare the field explicitly");
       }
       const t = this.typeFromAnnotation(p.type, p);
+      this.assertNotVoid(t, p, "parameter type");
       out.push({ name: p.name.text, type: t });
     }
     return out;
@@ -2065,7 +2124,7 @@ class Emitter {
     const ownerArg = `topaz_class_${info.name} *${TOPAZ_THIS}`;
     const tail = method.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
     const params = tail ? `${ownerArg}, ${tail}` : ownerArg;
-    return `static ${cTypeName(method.returnType)} topaz_class_${info.name}_method_${name}(${params})`;
+    return `static ${cReturnTypeName(method.returnType)} topaz_class_${info.name}_method_${name}(${params})`;
   }
 
   private emitConstructorDefinition(info: ClassInfo): string {
@@ -2136,7 +2195,7 @@ class Emitter {
         const sig = info.methods.get(mname)!;
         const tail = sig.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
         const params = tail ? `void *self, ${tail}` : "void *self";
-        lines.push(`  ${cTypeName(sig.returnType)} (*${mname})(${params});`);
+        lines.push(`  ${cReturnTypeName(sig.returnType)} (*${mname})(${params});`);
       }
     }
     lines.push("};");
@@ -2165,8 +2224,12 @@ class Emitter {
           ? "void *self"
           : `void *self, ${sig.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ")}`;
       const callArgs = [`(topaz_class_${cls.name} *)self`, ...sig.params.map((p) => p.name)].join(", ");
+      const callExpr = `topaz_class_${cls.name}_method_${mname}(${callArgs})`;
+      // Phase 1.5-6 prep: void-returning method wrappers must not say
+      // `return <void-expr>`; the C standard forbids it inside a void function.
+      const body = sig.returnType.kind === "void" ? `${callExpr};` : `return ${callExpr};`;
       out.push(
-        `static ${cTypeName(sig.returnType)} ${prefix}_${mname}(${declParams}) { return topaz_class_${cls.name}_method_${mname}(${callArgs}); }`,
+        `static ${cReturnTypeName(sig.returnType)} ${prefix}_${mname}(${declParams}) { ${body} }`,
       );
     }
     return out;
@@ -2186,6 +2249,16 @@ class Emitter {
     return `static const struct topaz_iface_${iface.name}_vt ${prefix}_vt = {\n${body}};`;
   }
 
+  // Phase 1.5-6 prep: reject `void` outside of function / method return-type
+  // slots. `void` has no value representation, so it cannot appear as a
+  // parameter type, variable type, field type, container element / value /
+  // key, union variant, type argument, or fn-type return position.
+  private assertNotVoid(t: TopazType, anchor: ts.Node, what: string): void {
+    if (t.kind === "void") {
+      throw new CodegenError(anchor, `\`void\` is only allowed as a function / method return type (used in ${what})`);
+    }
+  }
+
   private typeFromAnnotation(node: ts.TypeNode | undefined, anchor: ts.Node): TopazType {
     if (!node) throw new CodegenError(anchor, "type annotation required");
     if (node.kind === ts.SyntaxKind.NumberKeyword) return T_NUMBER;
@@ -2193,6 +2266,12 @@ class Emitter {
     if (node.kind === ts.SyntaxKind.StringKeyword) return T_STRING;
     if (node.kind === ts.SyntaxKind.UndefinedKeyword) return T_UNDEFINED;
     if (node.kind === ts.SyntaxKind.UnknownKeyword) return T_UNKNOWN;
+    // Phase 1.5-6 prep: accept `void` here so function / method return-type
+    // slots flow through. Other call sites (variable annotation, container
+    // element, union variant, fn param) re-check and reject — see
+    // collectField, declareVar, the Array/Map/Set elem checks, and
+    // typeFromAnnotation's FunctionTypeNode branch (fn param scan).
+    if (node.kind === ts.SyntaxKind.VoidKeyword) return T_VOID;
     if (ts.isParenthesizedTypeNode(node)) {
       return this.typeFromAnnotation(node.type, anchor);
     }
@@ -2213,13 +2292,18 @@ class Emitter {
     // Phase 1.5-3e: class union with a shared `kind: "literal"` discriminator
     // collapses into a `dunion` (tagged fat pointer) at this site.
     if (ts.isUnionTypeNode(node)) {
-      const variants = node.types.map((t) => this.typeFromAnnotation(t, t));
+      const variants = node.types.map((t) => {
+        const vt = this.typeFromAnnotation(t, t);
+        this.assertNotVoid(vt, t, "union variant");
+        return vt;
+      });
       const dunion = this.tryMakeDiscriminatedUnion(variants, node);
       if (dunion) return dunion;
       return makeUnion(variants);
     }
     if (ts.isArrayTypeNode(node)) {
       const elem = this.typeFromAnnotation(node.elementType, node);
+      this.assertNotVoid(elem, node, "Array element");
       const arr = arrayOf(elem);
       if (!arr) {
         throw new CodegenError(node, `no Array monomorph for element type ${typeIdent(elem)}`);
@@ -2244,6 +2328,7 @@ class Emitter {
           throw new CodegenError(node, "Array<T> requires exactly one type argument");
         }
         const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        this.assertNotVoid(elem, node, "Array element");
         const arr = arrayOf(elem);
         if (!arr) {
           throw new CodegenError(node, `no Array monomorph for element type ${typeIdent(elem)}`);
@@ -2256,7 +2341,9 @@ class Emitter {
           throw new CodegenError(node, "Map<K, V> requires exactly two type arguments");
         }
         const k = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        this.assertNotVoid(k, node, "Map key");
         const v = this.typeFromAnnotation(node.typeArguments[1]!, node);
+        this.assertNotVoid(v, node, "Map value");
         const m = mapOf(k, v);
         if (!m) {
           throw new CodegenError(node, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
@@ -2269,6 +2356,7 @@ class Emitter {
           throw new CodegenError(node, "Set<T> requires exactly one type argument");
         }
         const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        this.assertNotVoid(elem, node, "Set element");
         const s = setOf(elem);
         if (!s) {
           throw new CodegenError(node, `no Set monomorph for element type ${typeIdent(elem)}`);
@@ -2285,6 +2373,7 @@ class Emitter {
           throw new CodegenError(node, "Iterator<T> requires exactly one type argument");
         }
         const elem = this.typeFromAnnotation(node.typeArguments[0]!, node);
+        this.assertNotVoid(elem, node, "Iterator element");
         if (
           elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string"
           && !isClassType(elem) && !isInterfaceType(elem)
@@ -2338,6 +2427,7 @@ class Emitter {
           throw new CodegenError(p, "function-type parameter requires a type annotation");
         }
         const pt = this.typeFromAnnotation(p.type, p);
+        this.assertNotVoid(pt, p, "fn-type parameter");
         if (pt.kind === "fn") {
           throw new CodegenError(p, "nested fn types in fn parameters are unsupported (Phase 1.5-3.5e)");
         }
@@ -2348,6 +2438,15 @@ class Emitter {
         params.push({ name: p.name.text, type: pt });
       }
       const ret = this.typeFromAnnotation(node.type, node);
+      // Phase 1.5-6 prep: fn types cannot return void. emitFnTypedef would
+      // produce a struct holding a `void (*fn)(...)`, but the call-site
+      // dispatch wraps every call in a stmt-expression that yields the return
+      // value, and there's no representation for a void value at the call
+      // site. Reject here so error surfaces at the type annotation rather than
+      // emitFnTypedef's internal "cTypeName(void)" throw.
+      if (ret.kind === "void") {
+        throw new CodegenError(node, "fn types cannot return `void` (Phase 1.5-6 prep)");
+      }
       if (ret.kind === "fn") {
         throw new CodegenError(node, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
       }
@@ -2372,7 +2471,7 @@ class Emitter {
         return `${cTypeName(t)} ${p.name.text}`;
       })
       .join(", ");
-    return `static ${cTypeName(ret)} ${fn.name!.text}(${params || "void"})`;
+    return `static ${cReturnTypeName(ret)} ${fn.name!.text}(${params || "void"})`;
   }
 
   private emitFunctionDefinition(fn: ts.FunctionDeclaration): string {
@@ -2403,7 +2502,7 @@ class Emitter {
     const params = sig.params
       .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
-    return `static ${cTypeName(sig.returnType)} ${mangled}(${params || "void"})`;
+    return `static ${cReturnTypeName(sig.returnType)} ${mangled}(${params || "void"})`;
   }
 
   private emitMonomorphDefinition(mono: MonomorphInfo): string {
@@ -2462,6 +2561,9 @@ class Emitter {
       returnType = expectedFn.returnType;
     } else {
       throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
+    }
+    if (returnType.kind === "void") {
+      throw new CodegenError(arrow, "arrow functions cannot return `void` (Phase 1.5-6 prep)");
     }
     return { kind: "fn", params, returnType };
   }
@@ -2538,6 +2640,9 @@ class Emitter {
           cb,
           `block-bodied arrow callback requires an explicit return type annotation`,
         );
+      }
+      if (returnType.kind === "void") {
+        throw new CodegenError(cb, `${label} callback cannot return \`void\` (Phase 1.5-6 prep)`);
       }
       return { kind: "fn", params, returnType };
     }
@@ -2635,6 +2740,7 @@ class Emitter {
       } else {
         throw new CodegenError(p, "arrow function parameter requires a type annotation (no contextual type available)");
       }
+      this.assertNotVoid(pt, p, "arrow parameter");
       if (pt.kind === "fn") {
         throw new CodegenError(p, "nested fn types in arrow parameters are unsupported (Phase 1.5-3.5e)");
       }
@@ -2654,6 +2760,13 @@ class Emitter {
       returnType = expectedFn.returnType;
     } else {
       throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
+    }
+    // Phase 1.5-6 prep: void arrow return types are gated together with fn-
+    // type return voidness — the call-site dispatch yields a value, expression
+    // body becomes `return <expr>`, and we'd need to special-case both. Keep
+    // void confined to function / method declarations for now.
+    if (returnType.kind === "void") {
+      throw new CodegenError(arrow, "arrow functions cannot return `void` (Phase 1.5-6 prep)");
     }
     if (returnType.kind === "fn") {
       throw new CodegenError(arrow, "nested fn types in arrow return position are unsupported (Phase 1.5-3.5e)");
@@ -3216,9 +3329,23 @@ class Emitter {
     const pad = "  ".repeat(indent);
 
     if (ts.isReturnStatement(stmt)) {
-      if (!stmt.expression) return `${pad}return;`;
       if (!this.currentReturnType) {
         throw new CodegenError(stmt, "`return` outside of a function or method");
+      }
+      if (!stmt.expression) {
+        if (this.currentReturnType.kind !== "void") {
+          throw new CodegenError(
+            stmt,
+            `\`return;\` is only allowed in a void-returning function (current return type is ${typeIdent(this.currentReturnType)})`,
+          );
+        }
+        return `${pad}return;`;
+      }
+      if (this.currentReturnType.kind === "void") {
+        throw new CodegenError(
+          stmt,
+          "`return <expr>;` is not allowed in a void-returning function (use a bare `return;` or remove it)",
+        );
       }
       return `${pad}return ${this.emitWithExpected(stmt.expression, this.currentReturnType)};`;
     }
@@ -3513,6 +3640,7 @@ class Emitter {
     let initExpr: string;
     if (decl.type) {
       type = this.typeFromAnnotation(decl.type, decl);
+      this.assertNotVoid(type, decl, "variable type");
       // emitWithExpected threads `type` through ArrayLiteral / NewExpression
       // context typing and applies class -> interface coercion when needed.
       initExpr = this.emitWithExpected(decl.initializer, type);
@@ -3530,6 +3658,7 @@ class Emitter {
         );
       }
       type = this.inferType(decl.initializer);
+      this.assertNotVoid(type, decl, "variable initializer (void-returning call cannot be stored)");
       if (ts.isArrayLiteralExpression(decl.initializer)) {
         initExpr = this.emitArrayLiteral(decl.initializer, type);
       } else if (ts.isNewExpression(decl.initializer)) {
@@ -6512,6 +6641,12 @@ class Emitter {
       return this.applyCoercion(raw, newType, expected, expr);
     }
     const actual = this.inferType(expr);
+    // Phase 1.5-6 prep: `void` has no value representation, so a void-returning
+    // call cannot be assigned, passed, returned, or coerced. Surface this at
+    // the use site rather than letting cTypeName(void) blow up later.
+    if (actual.kind === "void") {
+      throw new CodegenError(expr, `cannot use a \`void\` value (call expression returns void)`);
+    }
     const raw = this.emitExpression(expr);
     return this.applyCoercion(raw, actual, expected, expr);
   }
