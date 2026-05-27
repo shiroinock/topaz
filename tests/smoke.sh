@@ -225,8 +225,9 @@ run_case object_literal $'3\n4\n7\n30\n40\n3\n4\n100\n2\nalice\n30\ntrue\n5\nok\
 run_fail_case object_literal_no_context_fail examples/object_literal_no_context_fail.ts "requires a contextually typed anonymous-class target"
 run_fail_case object_literal_missing_field_fail examples/object_literal_missing_field_fail.ts "missing required property: b"
 run_fail_case object_literal_extra_field_fail examples/object_literal_extra_field_fail.ts "property 'c' does not exist"
-run_fail_case object_literal_shorthand_fail examples/object_literal_shorthand_fail.ts "no shorthand, method shorthand"
-run_fail_case object_literal_spread_fail examples/object_literal_spread_fail.ts "no shorthand, method shorthand"
+run_case object_literal_shorthand $'1\n2\n1\n2\n10\n2\nalice\n30\n42\nhot\n7\n99'
+run_fail_case object_literal_method_shorthand_fail examples/object_literal_method_shorthand_fail.ts "no method shorthand, getter / setter, spread"
+run_fail_case object_literal_spread_fail examples/object_literal_spread_fail.ts "no method shorthand, getter / setter, spread"
 run_fail_case object_literal_type_empty_fail examples/object_literal_type_empty_fail.ts "empty object literal type"
 run_fail_case object_literal_type_method_fail examples/object_literal_type_method_fail.ts "only supports plain property signatures"
 run_fail_case object_literal_type_dup_field_fail examples/object_literal_type_dup_field_fail.ts "duplicate property 'a' in object literal type"

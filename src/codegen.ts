@@ -396,7 +396,9 @@ function isReferencePosition(node: ts.Identifier): boolean {
   // Property access RHS (`obj.name`) and method-call RHS — `name` is a member
   // lookup, not a scope binding.
   if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
-  // Object literal key, property assignment key, shorthand are not scope refs.
+  // Property assignment key (`key: value`) is a member name, not a scope ref.
+  // Shorthand (`{ name }`) is the opposite — `name` reads the variable, so it
+  // falls through to `return true` below (it is a reference position).
   if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
   // Parameter name, variable declaration name, binding name, class member
   // name, function name, etc. are declarations, not references.
@@ -8189,16 +8191,34 @@ class Emitter {
       const seen = new Set<string>();
       const valuesByField = new Map<string, ts.Expression>();
       for (const prop of expr.properties) {
-        if (!ts.isPropertyAssignment(prop)) {
+        let fname: string;
+        let valueExpr: ts.Expression;
+        if (ts.isPropertyAssignment(prop)) {
+          if (!ts.isIdentifier(prop.name)) {
+            throw new CodegenError(prop, "object literal property name must be a simple identifier");
+          }
+          fname = prop.name.text;
+          valueExpr = prop.initializer;
+        } else if (ts.isShorthandPropertyAssignment(prop)) {
+          // Phase 1.5-6 prep: `{ x }` desugars to `{ x: x }` — the property name
+          // doubles as an identifier reference resolved in the current scope, so
+          // the value expression is just `prop.name`. `{ x = default }`
+          // (objectAssignmentInitializer) is destructuring-target-only syntax
+          // and stays rejected.
+          if (prop.objectAssignmentInitializer) {
+            throw new CodegenError(
+              prop,
+              "object literal shorthand with default (`{ x = v }`) is destructuring-only and not supported",
+            );
+          }
+          fname = prop.name.text;
+          valueExpr = prop.name;
+        } else {
           throw new CodegenError(
             prop,
-            "object literal only supports plain `name: value` properties (no shorthand, method shorthand, getter / setter, spread)",
+            "object literal only supports `name: value` and `name` shorthand properties (no method shorthand, getter / setter, spread)",
           );
         }
-        if (!ts.isIdentifier(prop.name)) {
-          throw new CodegenError(prop, "object literal property name must be a simple identifier");
-        }
-        const fname = prop.name.text;
         if (seen.has(fname)) {
           throw new CodegenError(prop, `duplicate property '${fname}' in object literal`);
         }
@@ -8206,7 +8226,7 @@ class Emitter {
         if (!info.fields.has(fname)) {
           throw new CodegenError(prop, `property '${fname}' does not exist on type ${typeIdent(expected)}`);
         }
-        valuesByField.set(fname, prop.initializer);
+        valuesByField.set(fname, valueExpr);
       }
       // Phase 1.5-6 prep-optional-param: `f?: T` fields may be omitted; each
       // missing slot auto-fills with the undefined literal of the field's
