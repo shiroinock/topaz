@@ -40,6 +40,9 @@ build/Release
 # topaz cc output
 /build/
 
+# stray --emit-c-only outputs when -o is omitted next to a src/ entry
+/src/*.c
+
 # topaz example outputs (compiled binaries + generated .c sit next to .ts sources by default)
 /examples/*
 !/examples/*.ts
