@@ -236,4 +236,10 @@ run_fail_case string_slice_arg_type_fail examples/string_slice_arg_type_fail.ts 
 run_fail_case string_slice_too_many_args_fail examples/string_slice_too_many_args_fail.ts "String.slice expects at most two arguments"
 run_fail_case string_unsupported_method_fail examples/string_unsupported_method_fail.ts "unsupported method '.indexOf' on topaz_string"
 
+run_case dunion_object_literal $'3\nident:foo\nnumber:42\neof\nident:bar\nnumber:7\nident:baz\nnumber:99\neof\neof\nident:hello\n4\nident:a\nnumber:1\nident:b\neof\nident:lone\neof\nident:next\nnumber:555\n3\ntrue\nfalse'
+run_fail_case dunion_object_literal_missing_kind_fail examples/dunion_object_literal_missing_kind_fail.ts "must include discriminator property 'kind"
+run_fail_case dunion_object_literal_kind_not_literal_fail examples/dunion_object_literal_kind_not_literal_fail.ts "must be a plain string literal to select"
+run_fail_case dunion_object_literal_unknown_variant_fail examples/dunion_object_literal_unknown_variant_fail.ts "no variant of"
+run_fail_case dunion_object_literal_concrete_variant_fail examples/dunion_object_literal_concrete_variant_fail.ts "concrete class variant requires"
+
 echo "all tests passed"

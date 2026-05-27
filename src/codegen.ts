@@ -5137,8 +5137,23 @@ class Emitter {
       return `(${this.emitExpression(expr.operand)}${op})`;
     }
     if (ts.isBinaryExpression(expr)) {
-      this.inferType(expr); // type-check + const-check
       const tok = expr.operatorToken.kind;
+      // Phase 1.5-6 prep #11: object literal RHS has no standalone type, so
+      // the generic inferType(expr) pre-check below would recurse into the
+      // literal and throw. Route plain assignment with an object-literal RHS
+      // through emitWithExpected with the LHS type up-front, which fires the
+      // anon-class / dunion contextual narrowing.
+      if (
+        tok === ts.SyntaxKind.EqualsToken &&
+        ts.isObjectLiteralExpression(expr.right)
+      ) {
+        this.checkAssignTarget(expr.left, expr);
+        const lt = this.inferType(expr.left);
+        const lhsStr = this.emitExpression(expr.left);
+        const rhsStr = this.emitWithExpected(expr.right, lt);
+        return `(${lhsStr} = ${rhsStr})`;
+      }
+      this.inferType(expr); // type-check + const-check
       // Element-access assignment lowers to topaz_array_X_set; compound
       // assignment on a[i] is unsupported because we'd evaluate the index twice.
       if (
@@ -7315,6 +7330,70 @@ class Emitter {
     // rejected. Non-anon expected types (concrete class / iface / scalar /
     // container) reject the literal here.
     if (ts.isObjectLiteralExpression(expr)) {
+      // Phase 1.5-6 prep #11: dunion contextual target. Find the discriminator
+      // property (`kind: "..."`) in the literal, narrow to the variant class
+      // whose discriminator string-literal field matches, recurse with the
+      // variant as `expected`, and wrap the result in class -> dunion coercion.
+      // Only anon-class variants are supported here (concrete-class variants
+      // require positional `new C(...)` because field-order in the literal may
+      // diverge from the ctor parameter order).
+      if (expected.kind === "dunion") {
+        const disc = expected.discriminator;
+        let kindProp: ts.PropertyAssignment | undefined;
+        for (const prop of expr.properties) {
+          if (
+            ts.isPropertyAssignment(prop) &&
+            ts.isIdentifier(prop.name) &&
+            prop.name.text === disc
+          ) {
+            kindProp = prop;
+            break;
+          }
+        }
+        if (!kindProp) {
+          throw new CodegenError(
+            expr,
+            `object literal for ${typeIdent(expected)} must include discriminator property '${disc}: "..."'`,
+          );
+        }
+        const kindExpr = kindProp.initializer;
+        if (
+          !ts.isStringLiteral(kindExpr) &&
+          !ts.isNoSubstitutionTemplateLiteral(kindExpr)
+        ) {
+          throw new CodegenError(
+            kindProp,
+            `discriminator '${disc}' must be a plain string literal to select a ${typeIdent(expected)} variant`,
+          );
+        }
+        const kindValue = kindExpr.text;
+        let matchedVariant: string | undefined;
+        for (const variantName of expected.variants) {
+          const info = this.classes.get(variantName);
+          if (!info) continue;
+          const field = info.fields.get(disc);
+          if (!field || field.kind !== "string_literal") continue;
+          if (field.value === kindValue) {
+            matchedVariant = variantName;
+            break;
+          }
+        }
+        if (!matchedVariant) {
+          throw new CodegenError(
+            kindProp,
+            `no variant of ${typeIdent(expected)} has ${disc}="${kindValue}"`,
+          );
+        }
+        if (!this.isAnonClassName(matchedVariant)) {
+          throw new CodegenError(
+            expr,
+            `cannot use object literal for ${typeIdent(expected)} variant '${matchedVariant}' — concrete class variant requires \`new ${matchedVariant}(...)\``,
+          );
+        }
+        const variantType: TopazType = { kind: "class", name: matchedVariant };
+        const inner = this.emitWithExpected(expr, variantType);
+        return this.applyCoercion(inner, variantType, expected, expr);
+      }
       if (!isClassType(expected) || !this.isAnonClassName(classNameOf(expected)!)) {
         throw new CodegenError(
           expr,
