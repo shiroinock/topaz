@@ -640,7 +640,15 @@ type ClassInfo = {
   name: string;
   fields: Map<string, TopazType>;
   fieldOrder: string[];
-  ctor: { params: ParamInfo[]; decl: ts.ConstructorDeclaration } | undefined;
+  // Phase 1.5-6 prep: field initializers (`x: T = init;`) collected here at
+  // collectField time, emitted at constructor body head before user statements
+  // run. Both explicit and auto-generated zero-arg ctors consume this map.
+  fieldInits: Map<string, ts.Expression>;
+  // Phase 1.5-6 prep: `decl: undefined` is an auto-synthesized zero-arg
+  // constructor for classes that declare only initializer-bearing fields and
+  // no explicit ctor (used pervasively by self-hosting code like the Emitter
+  // class). The anchor for errors falls back to `info.decl`.
+  ctor: { params: ParamInfo[]; decl: ts.ConstructorDeclaration | undefined } | undefined;
   methods: Map<string, MethodInfo>;
   implements: string[]; // interface names this class declares to implement
   decl: ts.ClassDeclaration;
@@ -996,6 +1004,7 @@ class Emitter {
         name,
         fields: new Map(),
         fieldOrder: [],
+        fieldInits: new Map(),
         ctor: undefined,
         methods: new Map(),
         implements: [],
@@ -1112,6 +1121,19 @@ class Emitter {
       }
       out.push("");
     }
+
+    // Placeholder for TOPAZ_ARRAY_DEFINE / TOPAZ_MAP_DEFINE / TOPAZ_SET_DEFINE
+    // expansions for container monomorphs whose element/value type is a class
+    // or interface. Phase 1.5-6 prep: positioned BEFORE concrete class struct
+    // defs so a class field of type `Array<C>` / `Set<C>` / `Map<scalar, C>`
+    // (newly reachable via field initializer) can use `topaz_array_class_<C> *`
+    // in its struct body. The macro only needs `topaz_class_<C>` to be a
+    // forward-declared opaque type (pointer use), which is satisfied by the
+    // `typedef struct topaz_class_<n> topaz_class_<n>;` block above; iface
+    // value types are fully defined two blocks up. Filled at end of emit().
+    const containerMonomorphSlot = out.length;
+    out.push("");
+
     if (concreteClasses.length > 0) {
       for (const cls of concreteClasses) {
         out.push(this.emitClassStruct(this.classes.get(cls.name!.text)!));
@@ -1129,13 +1151,6 @@ class Emitter {
       }
       out.push("");
     }
-
-    // Placeholder for TOPAZ_ARRAY_DEFINE / TOPAZ_MAP_DEFINE / TOPAZ_SET_DEFINE
-    // expansions for container monomorphs whose element/value type is a class
-    // or interface. We don't know the full set until we've walked every
-    // expression, so splice the real entries in at the very end.
-    const containerMonomorphSlot = out.length;
-    out.push("");
 
     // Phase 1.5-3.5f-join: per-monomorph Array<T> `_join` helpers. Emitted as
     // free `static inline` functions (not via TOPAZ_ARRAY_DEFINE) so the macro
@@ -1884,10 +1899,21 @@ class Emitter {
       }
     }
     if (info.fields.size > 0 && !info.ctor) {
-      throw new CodegenError(
-        cls,
-        `class '${info.name}' has fields but no constructor; add an explicit constructor`,
-      );
+      // Phase 1.5-6 prep: if every field carries an initializer, synthesize a
+      // zero-arg constructor that consists entirely of the initializer
+      // assignments. Otherwise keep the historical error — at least one field
+      // would be left untouched and we can't pick a sensible default for it
+      // (and don't want to surprise callers with silent zero-init).
+      const allInitialized = info.fieldOrder.every((f) => info.fieldInits.has(f));
+      if (allInitialized) {
+        info.ctor = { params: [], decl: undefined };
+      } else {
+        const missing = info.fieldOrder.filter((f) => !info.fieldInits.has(f));
+        throw new CodegenError(
+          cls,
+          `class '${info.name}' has fields but no constructor; add an explicit constructor or a field initializer for: ${missing.join(", ")}`,
+        );
+      }
     }
     // Phase 1.5-3a: --strictPropertyInitialization 相当。constructor body の
     // top-level で `this.f = ...` 代入される field を集め、全 field がカバー
@@ -1907,12 +1933,20 @@ class Emitter {
     if (info.fields.size === 0) return;
     if (!info.ctor) return; // field-without-ctor は上で報告済み
     const assigned = new Set<string>();
-    this.collectDefiniteFieldAssignments(info.ctor.decl.body!, assigned);
+    // Phase 1.5-6 prep: field initializer (`x: T = init;`) を持つ field は
+    // emitConstructorDefinition が ctor body 冒頭で代入を吐くため definitely
+    // assigned。残りは従来通り ctor body top-level の `this.f = ...` で埋める
+    // 必要がある。auto-synthesized ctor (decl === undefined) はそもそも全
+    // field が initializer 持ちなので 2 つ目の集計はスキップする。
+    for (const fname of info.fieldInits.keys()) assigned.add(fname);
+    if (info.ctor.decl) {
+      this.collectDefiniteFieldAssignments(info.ctor.decl.body!, assigned);
+    }
     for (const fname of info.fieldOrder) {
       if (!assigned.has(fname)) {
         throw new CodegenError(
-          info.ctor.decl,
-          `field '${info.name}.${fname}' is not definitely assigned in the constructor (assign it directly under the constructor body — control-flow inside if/for/while/try is not analyzed yet)`,
+          info.ctor.decl ?? info.decl,
+          `field '${info.name}.${fname}' is not definitely assigned in the constructor (assign it directly under the constructor body, or add a field initializer 'x: T = init;' — control-flow inside if/for/while/try is not analyzed yet)`,
         );
       }
     }
@@ -2006,9 +2040,12 @@ class Emitter {
     if (m.exclamationToken) {
       throw new CodegenError(m, "definite-assignment assertion `!` is unsupported");
     }
-    if (m.initializer) {
-      throw new CodegenError(m, "field initializers are unsupported; assign in the constructor");
-    }
+    // Phase 1.5-6 prep: field initializer (`x: T = init;`) を保存。型は注釈
+    // 必須(初期化子からの推論は意図的に行わない、`let` / `const` と違って class
+    // field は全プログラムから参照されるため型を syntactically 確定させたい —
+    // typeFromAnnotation が `m.type` 欠落で reject する)。initializer 自体は
+    // emit 時に `emitWithExpected(init, t)` で型整合 + 必要な coercion
+    // (class → iface / string-literal widening 等)を走らせる。
     const t = this.typeFromAnnotation(m.type, m);
     this.assertNotVoid(t, m, "class field type");
     if (t.kind === "fn") {
@@ -2016,6 +2053,9 @@ class Emitter {
     }
     info.fields.set(fname, t);
     info.fieldOrder.push(fname);
+    if (m.initializer) {
+      info.fieldInits.set(fname, m.initializer);
+    }
   }
 
   private collectConstructor(info: ClassInfo, m: ts.ConstructorDeclaration): void {
@@ -2132,8 +2172,9 @@ class Emitter {
     this.currentClass = info.name;
     this.scope.push();
     try {
+      const anchor = ctor.decl ?? info.decl;
       for (const p of ctor.params) {
-        this.scope.declare(p.name, p.type, /* isConst */ false, ctor.decl);
+        this.scope.declare(p.name, p.type, /* isConst */ false, anchor);
       }
       const bodyLines: string[] = [];
       bodyLines.push("{");
@@ -2143,11 +2184,16 @@ class Emitter {
       bodyLines.push(
         `  ${TOPAZ_THIS}->__topaz_class_tag = &topaz_class_${info.name}_tag;`,
       );
-      for (const s of ctor.decl.body!.statements) {
-        if (ts.isReturnStatement(s)) {
-          throw new CodegenError(s, "`return` inside a constructor is unsupported");
+      this.emitFieldInitializers(info, bodyLines);
+      // Phase 1.5-6 prep: auto-synthesized ctors (decl === undefined) have no
+      // user body — the field initializer block above is the entire body.
+      if (ctor.decl) {
+        for (const s of ctor.decl.body!.statements) {
+          if (ts.isReturnStatement(s)) {
+            throw new CodegenError(s, "`return` inside a constructor is unsupported");
+          }
+          bodyLines.push(this.emitStatement(s, 1));
         }
-        bodyLines.push(this.emitStatement(s, 1));
       }
       bodyLines.push(`  return ${TOPAZ_THIS};`);
       bodyLines.push("}");
@@ -2155,6 +2201,26 @@ class Emitter {
     } finally {
       this.scope.pop();
       this.currentClass = undefined;
+    }
+  }
+
+  // Phase 1.5-6 prep: each field initializer (`x: T = init;`) becomes a
+  // `this->x = init;` written into the ctor body right after the calloc + tag
+  // store, in field declaration order. The struct is already zero-initialized
+  // by calloc, so forward references to later fields read 0 / NULL / false /
+  // empty string — matching JS field init semantics (later declarations are
+  // not yet evaluated when an earlier initializer runs). emitWithExpected
+  // takes care of class → iface coercion, string-literal widening, and scalar
+  // opt wrap; we route through it so initializer sites match assignment
+  // sites.
+  private emitFieldInitializers(info: ClassInfo, out: string[]): void {
+    if (info.fieldInits.size === 0) return;
+    for (const fname of info.fieldOrder) {
+      const init = info.fieldInits.get(fname);
+      if (!init) continue;
+      const fty = info.fields.get(fname)!;
+      const initC = this.emitWithExpected(init, fty);
+      out.push(`  ${TOPAZ_THIS}->${fname} = ${initC};`);
     }
   }
 
@@ -3102,6 +3168,7 @@ class Emitter {
       name: mangled,
       fields: new Map(),
       fieldOrder: [],
+      fieldInits: new Map(),
       ctor: undefined,
       methods: new Map(),
       implements: [],

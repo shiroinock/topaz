@@ -174,4 +174,8 @@ run_fail_case void_param_fail examples/void_param_fail.ts "\`void\` is only allo
 run_fail_case void_array_fail examples/void_array_fail.ts "\`void\` is only allowed as a function / method return type"
 run_fail_case void_fn_type_fail examples/void_fn_type_fail.ts "fn types cannot return \`void\`"
 
+run_case field_initializer $'0\ntrue\ndefault\n2\n2\n2\n0\n0\n0\n(unset)\n1\n10\nhi!\n100\nalpha\n100\n0\n5\n7\n16\n2\n11\n22\n101\nDEFAULT:ok'
+run_fail_case field_initializer_type_mismatch_fail examples/field_initializer_type_mismatch_fail.ts "type mismatch: expected topaz_number, got topaz_string"
+run_fail_case field_initializer_partial_fail examples/field_initializer_partial_fail.ts "has fields but no constructor"
+
 echo "all tests passed"
