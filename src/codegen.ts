@@ -1063,6 +1063,55 @@ class Emitter {
     return field.value;
   }
 
+  // Phase 1.5-6 prep #18: a dunion field shared by every variant with one
+  // identical type is readable without narrowing (TS common-property access).
+  // Returns the shared field type, or undefined when the field is missing on
+  // some variant, differs in type across variants, or is the discriminator
+  // (handled inline as the fat struct's own `kind` slot).
+  private dunionCommonFieldType(
+    t: Extract<TopazType, { kind: "dunion" }>,
+    field: string,
+  ): TopazType | undefined {
+    if (field === t.discriminator) return undefined;
+    let result: TopazType | undefined;
+    for (const cname of t.variants) {
+      const cls = this.classes.get(cname);
+      if (!cls) return undefined;
+      const ft = cls.fields.get(field);
+      if (!ft) return undefined;
+      if (result === undefined) result = ft;
+      else if (!typeEq(result, ft)) return undefined;
+    }
+    return result;
+  }
+
+  // Phase 1.5-6 prep #18: read a common field off a dunion value. The fat
+  // struct's `.data` points at one of the variant class instances, each with
+  // its own field layout, so we snapshot `.data` once into a tmp and pick the
+  // right cast by comparing the variant tag (offset 0, the slot `instanceof`
+  // reads). The final variant is the no-check fall-through since the type
+  // guarantees `.data` wraps one of the variants.
+  private emitDunionCommonFieldAccess(
+    expr: ts.PropertyAccessExpression,
+    t: Extract<TopazType, { kind: "dunion" }>,
+  ): string {
+    const field = expr.name.text;
+    const id = this.tmpCounter++;
+    const tmp = `__topaz_dcf_${id}`;
+    const data = `(${this.emitExpression(expr.expression)}).data`;
+    let chain = "";
+    for (let i = 0; i < t.variants.length; i++) {
+      const cname = t.variants[i]!;
+      const read = `((topaz_class_${cname} *)${tmp})->${field}`;
+      if (i === t.variants.length - 1) {
+        chain += read;
+      } else {
+        chain += `*((const char * const *)${tmp}) == &topaz_class_${cname}_tag ? ${read} : `;
+      }
+    }
+    return `({ void *${tmp} = ${data}; ${chain}; })`;
+  }
+
   // Phase 1.5-6 prep #14: syntactically collect alias-to-alias references
   // reachable from `node`. Only references whose name is currently registered
   // as a type alias are tracked — references to classes / interfaces /
@@ -5376,7 +5425,13 @@ class Emitter {
       // fat struct. inferType already enforced that only the discriminator
       // field is accessible.
       if (baseType.kind === "dunion") {
-        return `((${this.emitExpression(expr.expression)}).${baseType.discriminator})`;
+        if (expr.name.text === baseType.discriminator) {
+          return `((${this.emitExpression(expr.expression)}).${baseType.discriminator})`;
+        }
+        // Phase 1.5-6 prep #18: common-field read — dispatch on the variant
+        // tag (offset 0 of every class struct) and cast `.data` to the
+        // matching variant before reading the field. inferType validated it.
+        return this.emitDunionCommonFieldAccess(expr, baseType);
       }
       if (baseType.kind === "string" && expr.name.text === "length") {
         return `((topaz_number)(${this.emitExpression(expr.expression)}).len)`;
@@ -7134,6 +7189,12 @@ class Emitter {
         if (expr.name.text === baseType.discriminator) {
           return T_STRING;
         }
+        // Phase 1.5-6 prep #18: a field present on every variant with one
+        // identical type is a "common field" — TS lets you read it without
+        // narrowing (e.g. `Token.pos` / `.end` across the lexer's token
+        // variants). emit dispatches on the variant tag to pick the right cast.
+        const common = this.dunionCommonFieldType(baseType, expr.name.text);
+        if (common) return common;
         throw new CodegenError(
           expr,
           `cannot access '.${expr.name.text}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``,
@@ -7739,6 +7800,12 @@ class Emitter {
           throw new CodegenError(target, `interface '${iface.name}' has no field '${target.name.text}'`);
         }
         return;
+      }
+      // Phase 1.5-6 prep #18: a common field is readable off an unnarrowed
+      // dunion, but a write would have to pick a variant (the field sits at a
+      // variant-specific offset), so narrowing is required first.
+      if (baseType.kind === "dunion") {
+        throw new CodegenError(target, `cannot assign to '.${target.name.text}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``);
       }
       if (!isClassType(baseType)) {
         throw new CodegenError(target, `property assignment is only supported on class instances or interface values (got ${typeIdent(baseType)})`);
