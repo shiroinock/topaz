@@ -772,6 +772,16 @@ class Emitter {
   private genericClasses = new Map<string, GenericClassInfo>();
   private classMonomorphs = new Map<string, ClassMonomorphInfo>();
   private classMonomorphWorklist: string[] = [];
+  // Phase 1.5-6 prep: `type X = T;` declarations. The RHS is parsed lazily on
+  // first reference so a forward-declared alias works; `resolving` flips on
+  // during evaluation to catch self-referential cycles (`type A = B; type B = A`).
+  // Aliases are erased — they introduce no value-level binding and produce no C
+  // identifier — so typeFromAnnotation simply substitutes the resolved TopazType
+  // into the call site.
+  private typeAliases = new Map<
+    string,
+    { decl: ts.TypeAliasDeclaration; resolved?: TopazType; resolving: boolean }
+  >();
   // Phase 1.5-3.5e: each arrow expression lowers to (a) a static C function
   // `__topaz_arrow_<N>` and (b) optionally an env struct `__topaz_env_<N>`
   // for its captures. arrowDefLines accumulates both halves in source order
@@ -930,6 +940,7 @@ class Emitter {
     const functions: ts.FunctionDeclaration[] = [];
     const classes: ts.ClassDeclaration[] = [];
     const interfaces: ts.InterfaceDeclaration[] = [];
+    const aliases: ts.TypeAliasDeclaration[] = [];
     const topLevel: ts.Statement[] = [];
     // Phase 1.5-2: 全 SourceFile を flatten。配列末尾 (root module) のみが
     // `main()` body に置く top-level statement を持てる。非 root module で
@@ -951,10 +962,13 @@ class Emitter {
           classes.push(stmt);
         } else if (ts.isInterfaceDeclaration(stmt)) {
           interfaces.push(stmt);
+        } else if (ts.isTypeAliasDeclaration(stmt)) {
+          validateExportableModifiers(stmt, "type alias");
+          aliases.push(stmt);
         } else if (!isRoot) {
           throw new CodegenError(
             stmt,
-            "non-root module may only contain import / class / interface / function declarations (Phase 1.5-2)",
+            "non-root module may only contain import / class / interface / function / type alias declarations (Phase 1.5-2)",
           );
         } else {
           topLevel.push(stmt);
@@ -1032,6 +1046,35 @@ class Emitter {
         methodOrder: [],
         decl: iface,
       });
+    }
+
+    // Pass 1c: register type alias names. RHS resolution is lazy
+    // (typeFromAnnotation evaluates on demand), so forward references between
+    // aliases work as long as the resulting graph is acyclic. Name conflicts
+    // are checked eagerly against built-ins, classes, generic classes, and
+    // interfaces — the alias lookup in typeFromAnnotation otherwise sits
+    // alongside those tables at the same scoping priority.
+    for (const alias of aliases) {
+      const name = alias.name.text;
+      if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
+        throw new CodegenError(alias, `cannot redefine built-in '${name}'`);
+      }
+      if (this.classes.has(name) || this.genericClasses.has(name)) {
+        throw new CodegenError(alias, `type alias '${name}' collides with a class of the same name`);
+      }
+      if (this.interfaces.has(name)) {
+        throw new CodegenError(alias, `type alias '${name}' collides with an interface of the same name`);
+      }
+      if (this.typeAliases.has(name)) {
+        throw new CodegenError(alias, `redeclaration of type alias '${name}'`);
+      }
+      if (alias.typeParameters && alias.typeParameters.length > 0) {
+        throw new CodegenError(
+          alias,
+          `generic type alias '${name}' is unsupported (Phase 1.5-6 prep)`,
+        );
+      }
+      this.typeAliases.set(name, { decl: alias, resolving: false });
     }
 
     // Pass 2a: parse interface members (so classes can reference interfaces in
@@ -2388,6 +2431,31 @@ class Emitter {
           throw new CodegenError(node, `type parameter '${refName}' cannot have type arguments`);
         }
         return this.typeParamScope.get(refName)!;
+      }
+      // Phase 1.5-6 prep: type alias substitution. Lookup sits between
+      // typeParamScope (so a `T` param shadows a same-named alias inside a
+      // generic body) and the built-ins (`Array` / `Map` / `Set` / `Iterator`
+      // collision is rejected at declaration time, so the ordering here is
+      // only relevant for error message clarity). Resolution is memoized;
+      // `resolving` guards against cycles like `type A = B; type B = A;`.
+      {
+        const alias = this.typeAliases.get(refName);
+        if (alias) {
+          if (node.typeArguments && node.typeArguments.length > 0) {
+            throw new CodegenError(node, `type alias '${refName}' takes no type arguments (Phase 1.5-6 prep)`);
+          }
+          if (alias.resolved) return alias.resolved;
+          if (alias.resolving) {
+            throw new CodegenError(node, `circular type alias '${refName}'`);
+          }
+          alias.resolving = true;
+          try {
+            alias.resolved = this.typeFromAnnotation(alias.decl.type, alias.decl);
+          } finally {
+            alias.resolving = false;
+          }
+          return alias.resolved;
+        }
       }
       if (refName === "Array") {
         if (!node.typeArguments || node.typeArguments.length !== 1) {

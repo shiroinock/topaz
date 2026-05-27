@@ -178,4 +178,11 @@ run_case field_initializer $'0\ntrue\ndefault\n2\n2\n2\n0\n0\n0\n(unset)\n1\n10\
 run_fail_case field_initializer_type_mismatch_fail examples/field_initializer_type_mismatch_fail.ts "type mismatch: expected topaz_number, got topaz_string"
 run_fail_case field_initializer_partial_fail examples/field_initializer_partial_fail.ts "has fields but no constructor"
 
+run_case type_alias $'8\nok\ntrue\n100\n3\n2\n2\n3\n20\n0\n0\n25\n2\n42\n10\n7\n12\n42\n-1\n1024\n99\n6'
+run_fail_case type_alias_generic_fail examples/type_alias_generic_fail.ts "generic type alias 'Pair' is unsupported"
+run_fail_case type_alias_circular_fail examples/type_alias_circular_fail.ts "circular type alias 'A'"
+run_fail_case type_alias_object_literal_fail examples/type_alias_object_literal_fail.ts "unsupported type (TypeLiteral)"
+run_fail_case type_alias_name_conflict_fail examples/type_alias_name_conflict_fail.ts "type alias 'Foo' collides with a class of the same name"
+run_fail_case type_alias_as_value_fail examples/type_alias_as_value_fail.ts "unknown identifier 'Count'"
+
 echo "all tests passed"
