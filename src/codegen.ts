@@ -1074,10 +1074,19 @@ class Emitter {
           validateExportableModifiers(stmt, "type alias");
           aliases.push(stmt);
         } else if (!isRoot) {
-          throw new CodegenError(
-            stmt,
-            "non-root module may only contain import / class / interface / function / type alias declarations (Phase 1.5-2)",
-          );
+          // Phase 1.5-6 prep #13: 非 root module でも hoist 可能な
+          // `const NAME: T = LIT;` (scalar literal init) は受理し、後段の
+          // hoist 経路 (moduleConstSlot) で file-static `static const` に
+          // lower する。それ以外の top-level executable statement (let /
+          // 非 scalar const / 式文 / 制御フロー) は引き続き reject。
+          if (this.canHoistModuleConst(stmt)) {
+            topLevel.push(stmt);
+          } else {
+            throw new CodegenError(
+              stmt,
+              "non-root module may only contain import / class / interface / function / type alias declarations or hoistable scalar-literal `const` (Phase 1.5-2)",
+            );
+          }
         } else {
           topLevel.push(stmt);
         }
@@ -3987,6 +3996,31 @@ class Emitter {
     return `${pad}{\n${inner}\n${pad}}`;
   }
 
+  // Phase 1.5-6 prep #13: pure check used during pass 1 to decide whether
+  // a non-root module's `const NAME: T = LIT;` qualifies for hoisting. The
+  // side-effectful registration (scope.declare) happens later inside
+  // `tryHoistModuleConst`, so this lookup is safe to call without producing
+  // a "redeclaration" error on the second pass.
+  private canHoistModuleConst(stmt: ts.Statement): boolean {
+    if (!ts.isVariableStatement(stmt)) return false;
+    const list = stmt.declarationList;
+    const isConst = (list.flags & ts.NodeFlags.Const) !== 0;
+    if (!isConst) return false;
+    if (list.declarations.length !== 1) return false;
+    const d = list.declarations[0]!;
+    if (!ts.isIdentifier(d.name)) return false;
+    if (!d.initializer) return false;
+    const lit = this.tryScalarLiteralInit(d.initializer);
+    if (!lit) return false;
+    if (d.type) {
+      // Only scalar annotations (NumberKeyword / BooleanKeyword) can match a
+      // scalar literal init, so `typeFromAnnotation` is side-effect-free here.
+      const annotated = this.typeFromAnnotation(d.type, d);
+      if (!typeEq(annotated, lit.type)) return false;
+    }
+    return true;
+  }
+
   // Phase 1.5-6 prep #9: try to hoist a top-level `const NAME: T = LIT;` to
   // a file-static `static const T NAME = LIT;`. Returns the C declaration
   // line on success (and registers the binding in scope.stack[0] as a
@@ -3995,23 +4029,13 @@ class Emitter {
   // literal initializer, type-annotation mismatch, etc.) — those fall
   // through to the regular emitVarDecls path inside main() body.
   private tryHoistModuleConst(stmt: ts.Statement): string | undefined {
-    if (!ts.isVariableStatement(stmt)) return undefined;
-    const list = stmt.declarationList;
-    const isConst = (list.flags & ts.NodeFlags.Const) !== 0;
-    if (!isConst) return undefined;
-    if (list.declarations.length !== 1) return undefined;
+    if (!this.canHoistModuleConst(stmt)) return undefined;
+    const list = (stmt as ts.VariableStatement).declarationList;
     const d = list.declarations[0]!;
-    if (!ts.isIdentifier(d.name)) return undefined;
-    if (!d.initializer) return undefined;
-    const lit = this.tryScalarLiteralInit(d.initializer);
-    if (!lit) return undefined;
+    const lit = this.tryScalarLiteralInit(d.initializer!)!;
     let type: TopazType = lit.type;
-    if (d.type) {
-      const annotated = this.typeFromAnnotation(d.type, d);
-      if (!typeEq(annotated, lit.type)) return undefined;
-      type = annotated;
-    }
-    const name = d.name.text;
+    if (d.type) type = this.typeFromAnnotation(d.type, d);
+    const name = (d.name as ts.Identifier).text;
     this.scope.declare(name, type, /* isConst */ true, d);
     return `static const ${cTypeName(type)} ${name} = ${lit.cExpr};`;
   }
@@ -5784,6 +5808,14 @@ class Emitter {
     }
 
     if (ts.isIdentifier(callee)) {
+      // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
+      // shortcut。loader 側で `node:fs` specifier を受理し、`readFileSync`
+      // 識別子は scope に登録されない (String.fromCharCode と同方針)。
+      // bare 利用 (`let f = readFileSync;`) は scope lookup が「unknown
+      // identifier」で fall するので、ここの call-site 経路だけ受理する。
+      if (callee.text === "readFileSync") {
+        return this.emitNodeFsReadFileSync(expr);
+      }
       if (this.genericFunctions.has(callee.text)) {
         const resolved = this.resolveGenericCall(callee, expr)!;
         const args = this.emitCallArgs(
@@ -6177,6 +6209,49 @@ class Emitter {
       );
     }
     return T_STRING;
+  }
+
+  // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の引数検査。
+  // 第 2 引数は `"utf8"` 限定 (binary 読み出しを Topaz は今のところ要らない、
+  // それでも encoding argument を必須化することで「buffer 戻り value」が誤って
+  // string 経路に乗ることを防ぐ)。
+  private checkNodeFsReadFileSyncArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 2) {
+      throw new CodegenError(
+        expr,
+        "readFileSync expects exactly two arguments: (path: string, encoding: \"utf8\")",
+      );
+    }
+    const pathArg = expr.arguments[0]!;
+    const pathType = this.inferType(pathArg);
+    if (pathType.kind !== "string") {
+      throw new CodegenError(
+        pathArg,
+        `readFileSync path argument must be string, got ${typeIdent(pathType)}`,
+      );
+    }
+    const encArg = expr.arguments[1]!;
+    if (
+      !ts.isStringLiteral(encArg) &&
+      !ts.isNoSubstitutionTemplateLiteral(encArg)
+    ) {
+      throw new CodegenError(
+        encArg,
+        "readFileSync encoding argument must be the string literal \"utf8\"",
+      );
+    }
+    if (encArg.text !== "utf8") {
+      throw new CodegenError(
+        encArg,
+        `readFileSync encoding argument must be "utf8" (got "${encArg.text}")`,
+      );
+    }
+  }
+
+  private emitNodeFsReadFileSync(expr: ts.CallExpression): string {
+    this.checkNodeFsReadFileSyncArgs(expr);
+    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    return `topaz_fs_read_text_file(${path})`;
   }
 
   private inferStringMethodReturn(
@@ -7149,6 +7224,14 @@ class Emitter {
         throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
       }
       if (ts.isIdentifier(callee)) {
+        // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
+        // shortcut (mirrors emitCall) — `readFileSync` 識別子は scope に存在
+        // しないので、ここで先に拾わないと scope lookup が「unknown
+        // identifier」で fall する。
+        if (callee.text === "readFileSync") {
+          this.checkNodeFsReadFileSyncArgs(expr);
+          return T_STRING;
+        }
         if (this.genericFunctions.has(callee.text)) {
           const resolved = this.resolveGenericCall(callee, expr)!;
           return resolved.sig.returnType;

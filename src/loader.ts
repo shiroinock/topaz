@@ -56,9 +56,17 @@ export function loadModuleGraph(rootPath: string): ModuleGraph {
     const sf = parseFile(absPath);
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt)) continue;
-      validateImport(absPath, stmt);
       const specNode = stmt.moduleSpecifier as ts.StringLiteralLike;
       const specText = specNode.text;
+      // Phase 1.5-6 prep #13: `node:fs` は loader 側で「stdlib specifier」
+      // として受理し、visit を skip。named import の名前リスト validation だけ
+      // 別経路 (validateStdlibImport) で走らせて、codegen 側で個別の identifier
+      // を syntactic shortcut として処理する。
+      if (isStdlibSpecifier(specText)) {
+        validateStdlibImport(absPath, stmt, specText);
+        continue;
+      }
+      validateImport(absPath, stmt);
       const target = resolveSpecifier(absPath, specNode, specText);
       visit(target, { file: absPath, spec: specNode });
     }
@@ -118,6 +126,73 @@ function validateImport(filePath: string, stmt: ts.ImportDeclaration): void {
         filePath,
         el,
         "import rename (`import { a as b }`) is unsupported (Phase 1.5-2)",
+      );
+    }
+  }
+}
+
+// Phase 1.5-6 prep #13: stdlib specifier。loader は visit を skip し、import
+// 経由で取り込んだ識別子は codegen 側で syntactic shortcut として処理する。
+// 現状は `node:fs` から `readFileSync` 1 個だけを受理。
+const STDLIB_SPECIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["node:fs", new Set(["readFileSync"])],
+]);
+
+function isStdlibSpecifier(spec: string): boolean {
+  return STDLIB_SPECIFIERS.has(spec);
+}
+
+function validateStdlibImport(filePath: string, stmt: ts.ImportDeclaration, spec: string): void {
+  const allowed = STDLIB_SPECIFIERS.get(spec)!;
+  // side-effect-only `import "node:fs"` は意味が無いので明示エラー。
+  if (!stmt.importClause) {
+    throw new LoaderError(
+      filePath,
+      stmt,
+      `side-effect-only import of stdlib specifier '${spec}' is unsupported`,
+    );
+  }
+  const clause = stmt.importClause;
+  if (clause.isTypeOnly) {
+    throw new LoaderError(filePath, stmt, "`import type` is unsupported (Phase 1.5-2)");
+  }
+  if (clause.name) {
+    throw new LoaderError(
+      filePath,
+      stmt,
+      `default import from stdlib specifier '${spec}' is unsupported`,
+    );
+  }
+  const named = clause.namedBindings;
+  if (!named) {
+    throw new LoaderError(filePath, stmt, `stdlib import from '${spec}' requires named bindings`);
+  }
+  if (ts.isNamespaceImport(named)) {
+    throw new LoaderError(
+      filePath,
+      stmt,
+      `namespace import of stdlib specifier '${spec}' is unsupported`,
+    );
+  }
+  if (!ts.isNamedImports(named)) {
+    throw new LoaderError(filePath, stmt, "unsupported import form");
+  }
+  for (const el of named.elements) {
+    if (el.isTypeOnly) {
+      throw new LoaderError(filePath, el, "`import type` is unsupported (Phase 1.5-2)");
+    }
+    if (el.propertyName) {
+      throw new LoaderError(
+        filePath,
+        el,
+        "import rename (`import { a as b }`) is unsupported (Phase 1.5-2)",
+      );
+    }
+    if (!allowed.has(el.name.text)) {
+      throw new LoaderError(
+        filePath,
+        el,
+        `unsupported named import '${el.name.text}' from stdlib specifier '${spec}' (allowed: ${Array.from(allowed).join(", ")})`,
       );
     }
   }

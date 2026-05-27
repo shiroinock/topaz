@@ -45,6 +45,8 @@ build/Release
 !/examples/*.ts
 !/examples/*.handwritten.c
 !/examples/number_format_test.c
+!/examples/fixtures/
+!/examples/fixtures/**
 
 # Dependency directories
 node_modules/

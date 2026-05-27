@@ -177,6 +177,46 @@ static inline topaz_string topaz_string_from_char_code(topaz_number n) {
   return r;
 }
 
+// Phase 1.5-6 prep #13: node:fs.readFileSync(path, "utf8") -> topaz_string.
+// fopen + ftell + fread; the buffer lives in the arena and is reclaimed at
+// process exit. Topaz strings are ASCII-only, so a UTF-8 file with any
+// non-ASCII byte will load successfully but break the moment downstream code
+// indexes / slices by character count — same divergence as string literals.
+static inline topaz_string topaz_fs_read_text_file(topaz_string path) {
+  char *cpath = (char *)topaz_arena_alloc(path.len + 1);
+  memcpy(cpath, path.data, path.len);
+  cpath[path.len] = '\0';
+  FILE *fp = fopen(cpath, "rb");
+  if (!fp) {
+    fputs("topaz: readFileSync failed to open '", stderr);
+    fwrite(path.data, 1, path.len, stderr);
+    fputs("'\n", stderr);
+    abort();
+  }
+  if (fseek(fp, 0, SEEK_END) != 0) {
+    fclose(fp);
+    fputs("topaz: readFileSync fseek failed\n", stderr);
+    abort();
+  }
+  long size = ftell(fp);
+  if (size < 0) {
+    fclose(fp);
+    fputs("topaz: readFileSync ftell failed\n", stderr);
+    abort();
+  }
+  rewind(fp);
+  char *buf = (char *)topaz_arena_alloc((size_t)size + 1);
+  size_t got = fread(buf, 1, (size_t)size, fp);
+  fclose(fp);
+  if (got != (size_t)size) {
+    fputs("topaz: readFileSync short read\n", stderr);
+    abort();
+  }
+  buf[size] = '\0';
+  topaz_string r = { buf, (size_t)size };
+  return r;
+}
+
 static inline void topaz_console_log_boolean(topaz_boolean b) {
   fputs(b ? "true\n" : "false\n", stdout);
 }

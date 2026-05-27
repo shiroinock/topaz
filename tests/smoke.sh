@@ -249,4 +249,16 @@ run_fail_case dunion_object_literal_kind_not_literal_fail examples/dunion_object
 run_fail_case dunion_object_literal_unknown_variant_fail examples/dunion_object_literal_unknown_variant_fail.ts "no variant of"
 run_fail_case dunion_object_literal_concrete_variant_fail examples/dunion_object_literal_concrete_variant_fail.ts "concrete class variant requires"
 
+run_case node_fs_read_file $'hello topaz\n\n12\n104\nhello\n12\n[hello]\nfirst5=hello\ntrue'
+run_fail_case node_fs_read_file_arity_fail examples/node_fs_read_file_arity_fail.ts "readFileSync expects exactly two arguments"
+run_fail_case node_fs_read_file_missing_encoding_fail examples/node_fs_read_file_missing_encoding_fail.ts "readFileSync expects exactly two arguments"
+run_fail_case node_fs_read_file_too_many_args_fail examples/node_fs_read_file_too_many_args_fail.ts "readFileSync expects exactly two arguments"
+run_fail_case node_fs_read_file_path_type_fail examples/node_fs_read_file_path_type_fail.ts "readFileSync path argument must be string"
+run_fail_case node_fs_read_file_encoding_not_literal_fail examples/node_fs_read_file_encoding_not_literal_fail.ts "encoding argument must be the string literal"
+run_fail_case node_fs_read_file_unknown_encoding_fail examples/node_fs_read_file_unknown_encoding_fail.ts "encoding argument must be \"utf8\""
+run_fail_case node_fs_read_file_as_value_fail examples/node_fs_read_file_as_value_fail.ts "unknown identifier 'readFileSync'"
+run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'existsSync'"
+run_fail_case node_fs_namespace_import_fail examples/node_fs_namespace_import_fail.ts "namespace import of stdlib specifier 'node:fs'"
+run_fail_case node_fs_rename_import_fail examples/node_fs_rename_import_fail.ts "import rename"
+
 echo "all tests passed"
