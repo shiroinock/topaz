@@ -4761,11 +4761,15 @@ class Emitter {
           initStr = this.emitExpression(stmt.initializer as ts.Expression);
         }
       }
-      if (!stmt.condition) {
-        throw new CodegenError(stmt, "for-loop requires a condition");
+      // A missing condition (`for (;;)`) is an infinite loop — C accepts an
+      // empty middle clause natively, so emit it verbatim (the body is expected
+      // to `break` / `return` / `throw` out). init / incrementor are already
+      // optional above (initStr / incrStr stay empty when omitted).
+      let condStr = "";
+      if (stmt.condition) {
+        this.expectType(stmt.condition, T_BOOLEAN);
+        condStr = this.emitExpression(stmt.condition);
       }
-      this.expectType(stmt.condition, T_BOOLEAN);
-      const condStr = this.emitExpression(stmt.condition);
       const incrStr = stmt.incrementor ? this.emitExpression(stmt.incrementor) : "";
 
       let bodyStr: string;

@@ -96,6 +96,9 @@ run_cc_warnfree_case() {
 run_case fib "5702887"
 run_case loop_sum "5050"
 run_case while_count "10"
+run_case for_infinite $'10\n24\n4\n25'
+run_cc_warnfree_case for_infinite
+run_fail_case for_nonbool_cond_fail examples/for_nonbool_cond_fail.ts "expected topaz_boolean, got topaz_number"
 run_case boolean_print $'true\nfalse\ntrue\ntrue'
 run_case mod_check $'1\n1\n-1\n1.5'
 run_case switch_check $'1699\n22'
