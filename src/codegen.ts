@@ -778,6 +778,14 @@ class Emitter {
   private interfaces = new Map<string, InterfaceInfo>();
   private currentClass: string | undefined;
   private currentReturnType: TopazType | undefined;
+  // Phase 1.5-X: number of `try` frames currently live on the C stack within
+  // the function being emitted (incremented only around a try *body*, not the
+  // catch body — topaz_throw / the normal-path pop already removed the frame by
+  // the time the catch body runs). A `return` inside a try body emits this many
+  // `topaz_try_pop()` calls before the C return so the frame stack stays
+  // balanced. Reset to 0 at every function boundary (nested fn/arrow returns
+  // don't cross the outer try).
+  private liveTryFrames = 0;
   private switchCounter = 0;
   private tmpCounter = 0;
   // Phase 1.4c-1a: each Array<class>/Array<interface> referenced in user code
@@ -2821,7 +2829,9 @@ class Emitter {
   private emitMethodDefinition(info: ClassInfo, method: MethodInfo): string {
     this.currentClass = info.name;
     const prevRet = this.currentReturnType;
+    const prevLive = this.liveTryFrames;
     this.currentReturnType = method.returnType;
+    this.liveTryFrames = 0;
     this.scope.push();
     try {
       for (const p of method.params) {
@@ -2833,6 +2843,7 @@ class Emitter {
       this.scope.pop();
       this.currentClass = undefined;
       this.currentReturnType = prevRet;
+      this.liveTryFrames = prevLive;
     }
   }
 
@@ -3217,7 +3228,9 @@ class Emitter {
     if (!fn.body) throw new CodegenError(fn, "function must have a body");
     const sig = this.functionSigs.get(fn.name!.text)!;
     const prevRet = this.currentReturnType;
+    const prevLive = this.liveTryFrames;
     this.currentReturnType = sig.returnType;
+    this.liveTryFrames = 0;
     this.scope.push();
     try {
       // Phase 1.5-6 prep-optional-param: declare each param using the lifted
@@ -3232,6 +3245,7 @@ class Emitter {
     } finally {
       this.scope.pop();
       this.currentReturnType = prevRet;
+      this.liveTryFrames = prevLive;
     }
   }
 
@@ -3251,7 +3265,9 @@ class Emitter {
     const prevScope = this.typeParamScope;
     this.typeParamScope = mono.subs;
     const prevRet = this.currentReturnType;
+    const prevLive = this.liveTryFrames;
     this.currentReturnType = mono.sig.returnType;
+    this.liveTryFrames = 0;
     this.scope.push();
     try {
       for (const p of mono.sig.params) {
@@ -3262,6 +3278,7 @@ class Emitter {
     } finally {
       this.scope.pop();
       this.currentReturnType = prevRet;
+      this.liveTryFrames = prevLive;
       this.typeParamScope = prevScope;
     }
   }
@@ -3538,8 +3555,10 @@ class Emitter {
     // instead of the raw identifier.
     const prevCaptureContext = this.captureContext;
     const prevRet = this.currentReturnType;
+    const prevLive = this.liveTryFrames;
     this.captureContext = { envType: envName, envIsEmpty, captures };
     this.currentReturnType = returnType;
+    this.liveTryFrames = 0;
     // Barrier must come BEFORE the scope.push so that the new (inner) frame
     // sits at the barrier floor and lookups within the body can still see
     // it. Outer frames remain hidden behind the barrier.
@@ -3580,6 +3599,7 @@ class Emitter {
       this.scope.popBarrier();
       this.captureContext = prevCaptureContext;
       this.currentReturnType = prevRet;
+      this.liveTryFrames = prevLive;
     }
 
     // Build the call-site compound literal. Allocate the env on the arena
@@ -4154,6 +4174,9 @@ class Emitter {
             `\`return;\` is only allowed in a void-returning function (current return type is ${typeIdent(this.currentReturnType)})`,
           );
         }
+        if (this.liveTryFrames > 0) {
+          return `${pad}{ ${this.popFrames()}return; }`;
+        }
         return `${pad}return;`;
       }
       if (this.currentReturnType.kind === "void") {
@@ -4162,7 +4185,17 @@ class Emitter {
           "`return <expr>;` is not allowed in a void-returning function (use a bare `return;` or remove it)",
         );
       }
-      return `${pad}return ${this.emitWithExpected(stmt.expression, this.currentReturnType)};`;
+      const retExpr = this.emitWithExpected(stmt.expression, this.currentReturnType);
+      if (this.liveTryFrames > 0) {
+        // Phase 1.5-X: evaluate the value into a temp while the frame is still
+        // live (so a throw inside the expression is still caught here), then
+        // pop the frame(s) and return. Popping first would route a throw in the
+        // expression to the wrong handler.
+        const rv = `__topaz_ret_${this.tmpCounter++}`;
+        const ct = cTypeName(this.currentReturnType);
+        return `${pad}{ ${ct} ${rv} = ${retExpr}; ${this.popFrames()}return ${rv}; }`;
+      }
+      return `${pad}return ${retExpr};`;
     }
 
     if (ts.isExpressionStatement(stmt)) {
@@ -4276,6 +4309,12 @@ class Emitter {
   // throw_value to the annotated class type). finally and bare-binding catch
   // are deferred; return/break/continue inside the try body are rejected
   // because they would skip the pop.
+  // Phase 1.5-X: a run of `topaz_try_pop()` calls (one per live try frame)
+  // prepended to a `return` that escapes one or more try bodies.
+  private popFrames(): string {
+    return "topaz_try_pop(); ".repeat(this.liveTryFrames);
+  }
+
   private emitTryStatement(stmt: ts.TryStatement, indent: number): string {
     const pad = "  ".repeat(indent);
     if (stmt.finallyBlock) {
@@ -4319,9 +4358,13 @@ class Emitter {
 
     this.scope.push();
     let tryBodyLines: string[];
+    // Phase 1.5-X: the frame is live for the duration of the try body, so a
+    // `return` emitted within sees liveTryFrames bumped by one (and pops it).
+    this.liveTryFrames++;
     try {
       tryBodyLines = stmt.tryBlock.statements.map((s) => this.emitStatement(s, indent + 2));
     } finally {
+      this.liveTryFrames--;
       this.scope.pop();
     }
 
@@ -4359,21 +4402,17 @@ class Emitter {
     return lines.join("\n");
   }
 
-  // Reject return/break/continue inside the try body — those exit the
-  // surrounding C block before `topaz_try_pop()` runs, which would leave the
-  // frame on the stack pointing at a dead jmp_buf. Skips into nested
-  // functions/classes/methods since their control flow doesn't cross the try
-  // boundary. Lazy/conservative: doesn't try to distinguish break/continue
-  // confined to a loop *inside* the try body — those are technically safe,
-  // but we forbid them uniformly to keep the rule one sentence long.
+  // Reject break/continue inside the try body — those exit the surrounding C
+  // block before `topaz_try_pop()` runs, which would leave the frame on the
+  // stack pointing at a dead jmp_buf. (Phase 1.5-X: `return` is now handled by
+  // emitting the right number of `topaz_try_pop()` before the C return, so it
+  // is no longer rejected here.) Skips into nested functions/classes/methods
+  // since their control flow doesn't cross the try boundary. Lazy/conservative:
+  // doesn't try to distinguish break/continue confined to a loop *inside* the
+  // try body — those are technically safe, but we forbid them uniformly to keep
+  // the rule one sentence long.
   private checkTryBodyNoEscape(block: ts.Block): void {
     const walk = (node: ts.Node): void => {
-      if (ts.isReturnStatement(node)) {
-        throw new CodegenError(
-          node,
-          "`return` inside a `try` body is unsupported (would skip topaz_try_pop)",
-        );
-      }
       if (ts.isBreakStatement(node)) {
         throw new CodegenError(
           node,
