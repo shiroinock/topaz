@@ -367,6 +367,7 @@ export class Parser {
 
     if (head.kind === "ident") {
       name = head.text;
+      if (name === "constructor") isCtor = true;
       this.pos += 1;
     } else if (head.kind === "keyword" && head.word === "constructor") {
       name = "constructor";

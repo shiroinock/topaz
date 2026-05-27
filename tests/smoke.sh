@@ -7,6 +7,15 @@ npm run build > /dev/null
 
 mkdir -p build
 
+# Phase 1.5-6e: topaz_parser を oracle (tsc + convertFromTsc) と JSON 等価比較。
+# 全 example が一致しないと codegen 側のテストを走らせる意味が無いのでここで止める。
+node dist/parser_check.js examples/*.ts > build/parser_check.log 2>&1 || {
+  echo "FAIL [parser_check]: topaz_parser diverged from oracle" >&2
+  cat build/parser_check.log >&2
+  exit 1
+}
+echo "PASS [parser_check]"
+
 run_case() {
   local name="$1"
   local expected="$2"
