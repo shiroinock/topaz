@@ -42,6 +42,8 @@ import {
   TemplateSub,
   TypeParam,
   VarDeclStmt,
+  VarDestrDeclStmt,
+  VarDestrBinding,
 } from "./ast.js";
 import { readFileSync } from "node:fs";
 
@@ -507,7 +509,7 @@ export class Parser {
       const w: string = t.word;
       if (w === "let" || w === "const" || w === "var") {
         this.pos += 1;
-        const decl: VarDeclStmt = this.parseVarDeclBody(t.pos, w);
+        const decl: Stmt = this.parseVarDeclBody(t.pos, w);
         this.matchPunct(";");
         return decl;
       }
@@ -552,7 +554,66 @@ export class Parser {
     return { kind: "block_stmt", stmts: stmts, pos: start.pos, end: endTok.end };
   }
 
-  parseVarDeclBody(startPos: number, declKind: string): VarDeclStmt {
+  parseVarDeclBody(startPos: number, declKind: string): VarDeclStmt | VarDestrDeclStmt {
+    if (this.matchPunct("{")) {
+      const bindings: Array<VarDestrBinding> = [];
+      this.skipNewlines();
+      if (!this.matchPunct("}")) {
+        for (;;) {
+          this.skipNewlines();
+          const peekT: Token = this.current();
+          if (peekT.kind === "punct" && peekT.op === "...") {
+            throw new ParseError(
+              this.file,
+              peekT.pos,
+              "rest element in object destructuring is unsupported",
+            );
+          }
+          const nameT: Token = this.expectIdent();
+          const afterT: Token = this.current();
+          if (afterT.kind === "punct" && afterT.op === ":") {
+            throw new ParseError(
+              this.file,
+              afterT.pos,
+              "property rename in object destructuring is unsupported",
+            );
+          }
+          if (afterT.kind === "punct" && afterT.op === "=") {
+            throw new ParseError(
+              this.file,
+              afterT.pos,
+              "default value in object destructuring is unsupported",
+            );
+          }
+          bindings.push({ name: nameT.text, pos: nameT.pos, end: nameT.end });
+          this.skipNewlines();
+          if (this.matchPunct(",")) {
+            this.skipNewlines();
+            if (this.matchPunct("}")) break;
+            continue;
+          }
+          this.expectPunct("}");
+          break;
+        }
+      }
+      this.expectPunct("=");
+      const init: Expr = this.parseAssign();
+      return {
+        kind: "var_destr_decl",
+        declKind: declKind,
+        bindings: bindings,
+        init: init,
+        pos: startPos,
+        end: init.end,
+      };
+    }
+    if (this.matchPunct("[")) {
+      throw new ParseError(
+        this.file,
+        this.peek(-1).pos,
+        "array destructuring binding is unsupported",
+      );
+    }
     const name: Token = this.expectIdent();
     let ty: TypeNode | undefined = undefined;
     if (this.matchPunct(":")) {
@@ -682,7 +743,14 @@ export class Parser {
       if (initT.kind === "keyword" && (initT.word === "let" || initT.word === "const")) {
         const declKind: string = initT.word;
         this.pos += 1;
-        const vd: VarDeclStmt = this.parseVarDeclBody(initT.pos, declKind);
+        const vd: VarDeclStmt | VarDestrDeclStmt = this.parseVarDeclBody(initT.pos, declKind);
+        if (vd.kind === "var_destr_decl") {
+          throw new ParseError(
+            this.file,
+            vd.pos,
+            "destructuring binding in for-init is unsupported",
+          );
+        }
         init = { kind: "for_init_decl", decl: vd };
       } else {
         const e: Expr = this.parseExpr();

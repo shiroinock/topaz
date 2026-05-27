@@ -68,26 +68,44 @@ function diff(a: unknown, b: unknown, path: string): DiffResult {
 
 function compareOne(file: string): boolean {
   let oracle: unknown;
+  let oracleThrew = false;
+  let oracleErr: string = "";
   try {
     const sf = tscParseFile(file);
     oracle = stripSpans(convertFromTsc(sf));
   } catch (e) {
+    oracleThrew = true;
     if (e instanceof ConvertError) {
-      console.error(`[oracle] ${file}: ConvertError ${e.message}`);
+      oracleErr = `ConvertError ${e.message}`;
     } else {
-      console.error(`[oracle] ${file}: ${(e as Error).message}`);
+      oracleErr = (e as Error).message;
     }
-    return false;
   }
   let candidate: unknown;
+  let candidateThrew = false;
+  let candidateErr: string = "";
   try {
     candidate = stripSpans(topazParseFile(file));
   } catch (e) {
+    candidateThrew = true;
     if (e instanceof ParseError) {
-      console.error(`[candidate] ${file}:${e.pos}: ${e.message}`);
+      candidateErr = `${e.pos}: ${e.message}`;
     } else {
-      console.error(`[candidate] ${file}: ${(e as Error).message}`);
+      candidateErr = (e as Error).message;
     }
+  }
+  if (oracleThrew && candidateThrew) {
+    console.log(`OK ${file} (both rejected)`);
+    return true;
+  }
+  if (oracleThrew) {
+    console.error(`[oracle] ${file}: ${oracleErr}`);
+    console.error(`  candidate accepted but oracle threw`);
+    return false;
+  }
+  if (candidateThrew) {
+    console.error(`[candidate] ${file}: ${candidateErr}`);
+    console.error(`  oracle accepted but candidate threw`);
     return false;
   }
   const d = diff(oracle, candidate, "$");

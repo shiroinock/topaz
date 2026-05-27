@@ -345,6 +345,7 @@ export type SpreadExpr = {
 export type Stmt =
   | ExprStmt
   | VarDeclStmt
+  | VarDestrDeclStmt
   | BlockStmt
   | IfStmt
   | WhileStmt
@@ -367,6 +368,21 @@ export type VarDeclStmt = {
   name: string;
   type: TypeNode | undefined;
   init: Expr | undefined;
+  pos: number;
+  end: number;
+};
+
+export type VarDestrBinding = {
+  name: string;
+  pos: number;
+  end: number;
+};
+
+export type VarDestrDeclStmt = {
+  kind: "var_destr_decl";
+  declKind: string;
+  bindings: Array<VarDestrBinding>;
+  init: Expr;
   pos: number;
   end: number;
 };

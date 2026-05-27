@@ -205,4 +205,15 @@ run_fail_case object_literal_type_method_fail examples/object_literal_type_metho
 run_fail_case object_literal_type_dup_field_fail examples/object_literal_type_dup_field_fail.ts "duplicate property 'a' in object literal type"
 run_fail_case object_literal_type_mismatch_fail examples/object_literal_type_mismatch_fail.ts "expected topaz_number, got topaz_string"
 
+run_case object_destructuring $'3\n4\n7\n7\ntrue\nhi\n5\n9\n100\n200\n1\n3\nfirst\n10\n99\n6\n3\n4\n30\nb\n42\n5\n99\n8\n7\n42\n12\n14\n50\n60'
+run_fail_case object_destructuring_rename_fail examples/object_destructuring_rename_fail.ts "property rename / nested pattern"
+run_fail_case object_destructuring_default_fail examples/object_destructuring_default_fail.ts "default value"
+run_fail_case object_destructuring_rest_fail examples/object_destructuring_rest_fail.ts "rest element"
+run_fail_case object_destructuring_nested_fail examples/object_destructuring_nested_fail.ts "property rename / nested pattern"
+run_fail_case object_destructuring_annotation_fail examples/object_destructuring_annotation_fail.ts "type annotation on object destructuring pattern is unsupported"
+run_fail_case object_destructuring_unknown_field_fail examples/object_destructuring_unknown_field_fail.ts "has no field 'missing'"
+run_fail_case object_destructuring_method_fail examples/object_destructuring_method_fail.ts "is a method of 'Counter', not a field"
+run_fail_case object_destructuring_non_class_fail examples/object_destructuring_non_class_fail.ts "object destructuring requires a class or interface receiver"
+run_fail_case object_destructuring_empty_fail examples/object_destructuring_empty_fail.ts "empty object destructuring pattern"
+
 echo "all tests passed"

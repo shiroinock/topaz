@@ -3862,8 +3862,159 @@ class Emitter {
     }
     const lines: string[] = [];
     for (const d of list.declarations) {
+      // Phase 1.5-6 prep-destructuring: `const { a, b } = expr;` is lowered
+      // to a snapshot tmp + per-binding field reads. Lives only at statement
+      // level (for-init still requires a single identifier — see emitForStatement).
+      if (ts.isObjectBindingPattern(d.name)) {
+        lines.push(this.emitObjectDestructuringDecl(d, isConst, indent));
+        continue;
+      }
+      if (ts.isArrayBindingPattern(d.name)) {
+        throw new CodegenError(
+          d,
+          "array destructuring `const [a, b] = ...` is unsupported (use index access or, for Map/Set, `for (const [k, v] of ...entries())`)",
+        );
+      }
       const { type, cName, initStr } = this.declareVar(d, isConst);
       lines.push(`${pad}${cTypeName(type)} ${cName}${initStr};`);
+    }
+    return lines.join("\n");
+  }
+
+  // Phase 1.5-6 prep-destructuring: lower `const { a, b } = expr;` to
+  //   <recv-ty> __topaz_destr_<N> = <init>;
+  //   <T_a> a = __topaz_destr_<N>-><a>;        // for class receiver
+  //   <T_b> b = __topaz_destr_<N>.vt->get_<b>(__topaz_destr_<N>.data); // for iface
+  // The receiver is evaluated exactly once. Each binding registers in the
+  // current scope with `isConst` of the surrounding declaration.
+  //
+  // Strict subset: simple-identifier bindings only. property rename, default
+  // value, rest element, nested pattern, and a pattern-level type annotation
+  // are all rejected up front so the surface stays small (self-hosting only
+  // needs the bare form). Empty pattern `const {} = ...` is also rejected as
+  // likely a typo.
+  private emitObjectDestructuringDecl(
+    decl: ts.VariableDeclaration,
+    isConst: boolean,
+    indent: number,
+  ): string {
+    const pad = "  ".repeat(indent);
+    const pattern = decl.name as ts.ObjectBindingPattern;
+    if (decl.type) {
+      throw new CodegenError(
+        decl,
+        "type annotation on object destructuring pattern is unsupported (annotate the receiver expression, e.g. `const x: T = ...; const { a } = x;`)",
+      );
+    }
+    if (!decl.initializer) {
+      throw new CodegenError(decl, "destructuring declaration must have an initializer");
+    }
+    if (pattern.elements.length === 0) {
+      throw new CodegenError(pattern, "empty object destructuring pattern is unsupported");
+    }
+    for (const el of pattern.elements) {
+      if (el.dotDotDotToken) {
+        throw new CodegenError(el, "rest element `...r` in object destructuring is unsupported");
+      }
+      if (el.initializer) {
+        throw new CodegenError(el, "default value `{ a = ... }` in object destructuring is unsupported");
+      }
+      if (el.propertyName) {
+        throw new CodegenError(
+          el,
+          "property rename / nested pattern `{ a: x }` in object destructuring is unsupported",
+        );
+      }
+      if (!ts.isIdentifier(el.name)) {
+        throw new CodegenError(
+          el,
+          "nested destructuring is unsupported (each element must be a simple identifier)",
+        );
+      }
+    }
+
+    const recvType = this.inferType(decl.initializer);
+    this.assertNotVoid(
+      recvType,
+      decl,
+      "destructuring initializer (void-returning call cannot be destructured)",
+    );
+
+    // Receiver must be a class (anonymous / named / generic monomorph) or an
+    // interface. Anything else cannot expose named fields uniformly. Helpful
+    // hints are surfaced for the closest near-misses (T | undefined, dunion).
+    let fields: Map<string, TopazType>;
+    let methods: Set<string>;
+    let receiverKind: "class" | "iface";
+    let receiverName: string;
+    if (isClassType(recvType)) {
+      const cls = this.classes.get(classNameOf(recvType)!);
+      if (!cls) {
+        throw new CodegenError(decl, `internal: class '${classNameOf(recvType)!}' not registered`);
+      }
+      fields = cls.fields;
+      methods = new Set(cls.methods.keys());
+      receiverKind = "class";
+      receiverName = cls.name;
+    } else if (isInterfaceType(recvType)) {
+      const iface = this.interfaces.get(interfaceNameOf(recvType)!);
+      if (!iface) {
+        throw new CodegenError(decl, `internal: interface '${interfaceNameOf(recvType)!}' not registered`);
+      }
+      fields = iface.fields;
+      methods = new Set(iface.methods.keys());
+      receiverKind = "iface";
+      receiverName = iface.name;
+    } else if (recvType.kind === "union") {
+      throw new CodegenError(
+        decl,
+        `object destructuring on \`${typeIdent(recvType)}\` requires narrowing first (e.g. \`if (x !== undefined)\` or \`x!\`)`,
+      );
+    } else if (recvType.kind === "dunion") {
+      throw new CodegenError(
+        decl,
+        "object destructuring on a discriminated union is unsupported (narrow with `switch (x.kind)` first)",
+      );
+    } else {
+      throw new CodegenError(
+        decl,
+        `object destructuring requires a class or interface receiver; got ${typeIdent(recvType)}`,
+      );
+    }
+
+    for (const el of pattern.elements) {
+      const fname = (el.name as ts.Identifier).text;
+      if (!fields.has(fname)) {
+        if (methods.has(fname)) {
+          throw new CodegenError(
+            el,
+            `'${fname}' is a method of '${receiverName}', not a field — methods cannot be destructured (method-as-value is unsupported)`,
+          );
+        }
+        throw new CodegenError(
+          el,
+          `${receiverKind} '${receiverName}' has no field '${fname}'`,
+        );
+      }
+    }
+
+    // Emit the receiver expression once into a tmp, then per-binding reads.
+    // For class receivers the tmp is a pointer; for iface receivers it is the
+    // fat-pointer struct passed by value (cTypeName handles both spellings).
+    const tmpId = this.tmpCounter++;
+    const tmp = `__topaz_destr_${tmpId}`;
+    const initExpr = this.emitExpression(decl.initializer);
+
+    const lines: string[] = [];
+    lines.push(`${pad}${cTypeName(recvType)} ${tmp} = ${initExpr};`);
+    for (const el of pattern.elements) {
+      const fname = (el.name as ts.Identifier).text;
+      const fty = fields.get(fname)!;
+      const accessor = receiverKind === "class"
+        ? `${tmp}->${fname}`
+        : `${tmp}.vt->get_${fname}(${tmp}.data)`;
+      lines.push(`${pad}${cTypeName(fty)} ${fname} = ${accessor};`);
+      this.scope.declare(fname, fty, isConst, el);
     }
     return lines.join("\n");
   }

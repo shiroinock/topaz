@@ -40,6 +40,8 @@ import type {
   Stmt,
   ExprStmt,
   VarDeclStmt,
+  VarDestrDeclStmt,
+  VarDestrBinding,
   BlockStmt,
   IfStmt,
   WhileStmt,
@@ -543,14 +545,14 @@ class Converter {
     };
   }
 
-  convertVarStmt(stmt: ts.VariableStatement): VarDeclStmt {
+  convertVarStmt(stmt: ts.VariableStatement): VarDeclStmt | VarDestrDeclStmt {
     return this.convertVarDeclList(stmt.declarationList, this.span(stmt));
   }
 
   convertVarDeclList(
     list: ts.VariableDeclarationList,
     span: { pos: number; end: number },
-  ): VarDeclStmt {
+  ): VarDeclStmt | VarDestrDeclStmt {
     if (list.declarations.length !== 1) {
       throw this.err(list, "multiple variable declarations in one statement are unsupported");
     }
@@ -560,10 +562,44 @@ class Converter {
     else if (flags & ts.NodeFlags.Let) declKind = "let";
     else throw this.err(list, "`var` is unsupported (use `let` or `const`)");
     const d = list.declarations[0]!;
+    if (d.exclamationToken) throw this.err(d, "definite-assignment assertion is unsupported");
+    if (ts.isObjectBindingPattern(d.name)) {
+      if (d.type) throw this.err(d, "type annotation on destructuring pattern is unsupported");
+      if (!d.initializer) throw this.err(d, "destructuring binding requires an initializer");
+      const bindings: VarDestrBinding[] = [];
+      for (const el of d.name.elements) {
+        if (el.dotDotDotToken) {
+          throw this.err(el, "rest element in object destructuring is unsupported");
+        }
+        if (el.propertyName) {
+          throw this.err(el, "property rename in object destructuring is unsupported");
+        }
+        if (el.initializer) {
+          throw this.err(el, "default value in object destructuring is unsupported");
+        }
+        if (!ts.isIdentifier(el.name)) {
+          throw this.err(el, "nested pattern in object destructuring is unsupported");
+        }
+        bindings.push({
+          name: el.name.text,
+          pos: el.getStart(this.sf),
+          end: el.getEnd(),
+        });
+      }
+      return {
+        kind: "var_destr_decl",
+        declKind,
+        bindings,
+        init: this.convertExpr(d.initializer),
+        ...span,
+      };
+    }
+    if (ts.isArrayBindingPattern(d.name)) {
+      throw this.err(d, "array destructuring binding is unsupported");
+    }
     if (!ts.isIdentifier(d.name)) {
       throw this.err(d, "destructuring binding in variable declaration is unsupported");
     }
-    if (d.exclamationToken) throw this.err(d, "definite-assignment assertion is unsupported");
     const type = d.type ? this.convertType(d.type) : undefined;
     const init = d.initializer ? this.convertExpr(d.initializer) : undefined;
     return {
@@ -621,6 +657,9 @@ class Converter {
       const ini = stmt.initializer;
       if (ts.isVariableDeclarationList(ini)) {
         const decl = this.convertVarDeclList(ini, this.span(ini));
+        if (decl.kind === "var_destr_decl") {
+          throw this.err(ini, "destructuring binding in for-init is unsupported");
+        }
         init = { kind: "for_init_decl", decl };
       } else {
         init = { kind: "for_init_expr", expr: this.convertExpr(ini) };
