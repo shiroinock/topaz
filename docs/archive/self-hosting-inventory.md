@@ -434,3 +434,28 @@ src/ で grep 実数を確認した結果、以下は 0 件 or reject 文言の�
 
 **pass criterion 確認**: `node dist/cli.js src/lexer.ts --emit-c-only` → 新規 blocker = `object literal expression requires a contextually typed anonymous-class target, got topaz_dunion_anon_0_or_...` (lexer.ts:207、`this.tokens.push({ kind: "eof", pos: this.pos, end: this.pos })`)。`Array<Token>` (Token は dunion 型) への `.push` でリテラル `{ kind: "eof", ... }` を渡したいが、`emitWithExpected` の object literal 経路が contextual target を anon class 限定で受理するため dunion 受けに失敗する。prep #11 候補 = dunion 変種を contextual target として受理し、`kind: "..."` literal field の値から該当 anon class variant を解決して widening する経路の追加(prep #5 で `tryMakeDiscriminatedUnion` が anon → dunion を組む方向は既に動作、逆方向 = dunion → anon 推論の追加)。
 
+### 11.9 prep #11 着地 (2026-05-28)
+
+**完了**: dunion を contextual target とする object literal expression を解禁。`emitWithExpected` の ObjectLiteralExpression branch の冒頭に `expected.kind === "dunion"` 分岐を追加して、discriminator property (`kind`) の literal value から `expected.variants` を 1 つ確定し、`emitWithExpected(expr, variantType)` で既存 anon class 経路に再帰、`applyCoercion` で class→dunion 包装 (prep #8 の `((topaz_dunion_...){ kind_lit, (void *)... })` パターン)。`BinaryExpression` の `EqualsToken` case で RHS が ObjectLiteralExpression のときだけ `inferType(expr)` を skip して `checkAssignTarget` → `emitWithExpected(rhs, lt)` を直接走らせる early-return path を追加(`let cur: Token = ...; cur = { kind: ... };` の plain assignment が `inferType` 経由で落ちる hit を回避)。
+
+**未対応**(明示エラー): discriminator property 欠落 / discriminator が非 string-literal / 未知 kind 値 / concrete-class variant への object literal の 4 種を新規 fail 例として確保。concrete-class variant は field 宣言順 ≠ object literal property 順なので positional ctor 引数を syntactic に復元できない → `new ConcreteClass(...)` を使えと案内、TS は型推論で受理するが Topaz は厳格に止める。
+
+**回帰**: positive 1 本(`dunion_object_literal.ts` = 8 ブロック 28 出力)+ fail 4 本。合計 134 ケース全 pass。
+
+**pass criterion 確認**: `node dist/cli.js src/lexer.ts --emit-c-only` → 新規 blocker = `unknown identifier 'String'` (lexer.ts:404、`String.fromCharCode(byte)`、文字列リテラルの hex escape `\xNN` を 1 byte string に変換する hot path)。`String` という識別子は scope / class / interface / type alias / generic / functionSigs のいずれにも登録されていないため、`inferType` の Identifier 分岐で落ちる。prep #12 候補 = runtime に `topaz_string_from_char_code(double n): topaz_string`(ASCII range のみ受理、それ以外は abort)を追加し、codegen で `String.fromCharCode` を call site identification する経路を新設。
+
+### 11.10 prep #12 着地 (2026-05-28)
+
+**完了**: `String.fromCharCode(n: number): string` を解禁。`runtime/runtime.h` に `static inline topaz_string topaz_string_from_char_code(topaz_number n)`(NaN / 負数 / >= 128 は `fputs("topaz: String.fromCharCode argument out of ASCII range\n", stderr); abort();`、整数切り捨て後 1 byte buffer を arena から取って `{data, 1}` を返す = lexer.ts:404 の `\xNN` decode が要求する semantics と一致)を追加。`src/codegen.ts` の `emitCall` / `inferType` CallExpression branch の **console.log 判定の直後・PropertyAccessExpression 一般 branch の前** に `String` identifier の syntactic check を入れ、`emitStringStaticCall` / `inferStringStaticReturn` で `fromCharCode` 専用 dispatch(`String` 自体は依然 scope に存在せず、call site 経路のみ受理 = `const x = String;` の bare 利用は `unknown identifier 'String'` で落ちる)。引数は EXACT 1 個 + `number` EXACT 一致、3 引数以上 / 非 number 引数 / 未対応 static method (`fromCodePoint` 等) はすべて明示エラー。
+
+**未対応**(明示エラー): `String.fromCodePoint` / `String.raw` 等の他の static method、`String` を value として参照、`Math.<m>` / `Number.<m>` / `Object.<m>` / `JSON.<m>` の他 namespace(self-hosting inventory 棚卸し結果 = `JSON.stringify` は cli.ts / parser_check.ts のみで利用 = tooling 経路、`Object.keys` も parser_check.ts のみ、いずれも self-host scope 外で当面温存)。
+
+**回帰**: positive 1 本(`string_from_char_code.ts` = (1) ASCII 大文字小文字数字、(2) length=1 確認、(3) charCodeAt round-trip、(4) loop concat で "Hello" 構築、(5) `hi*16+lo` 形式の `\xNN` decode 模擬、(6) template literal substitution 内、(7) boundary 0 / 127、(8) integer truncation `65.9` → A、(9) function 戻り値、(10) while ループ alphabet 構築、合計 21 出力)+ fail 5 本(`string_from_char_code_arity_fail` = 引数 0 個、`string_from_char_code_too_many_args_fail` = 2 個、`string_from_char_code_arg_type_fail` = 引数が string、`string_static_unknown_fail` = `String.fromCodePoint` reject、`string_as_value_fail` = `const s = String;` の bare 利用 reject)。合計 141 ケース全 pass、parser_check は 143 ケース全 OK。
+
+**pass criterion 確認**: `node dist/cli.js src/lexer.ts --emit-c-only` → **lexer 経路は完全に抜けた**(`src/lexer.c` を 1114 行で emit、`cc -O2 -Iruntime` で warning(extraneous-parentheses)のみで通る valid C を生成)。同様に `src/ast.ts` も依存無しで pass。残 blocker は (lexer 個別ではなく) 上位ファイルでの 3 種類:
+- **node:* module specifier**(`src/loader.ts:1` / `src/parser.ts:1` / `src/topaz_parser.ts:48` の `node:fs`、`src/cli.ts:2` の `node:child_process`)→ 1.5-6f stdlib 拡張
+- **namespace import**(`src/codegen.ts:1` / `src/convert_from_tsc.ts:19` の `import * as ts from "typescript"`)→ 1.5-6e flip で codegen 入力を `ts.SourceFile` → `Topaz.Module` に切替えることで typescript 依存を消す
+- **import rename**(`src/parser_check.ts:13` の `import { a as b }`)→ 1.5-2 で reject されている文法形式の解禁
+
+actual self-hosting epoch 入口の「lexer まで通す」目標は達成。次は (a) 1.5-6e flip(`ts.SourceFile` → `Topaz.Module`)で typescript namespace import 依存を消す、もしくは (b) loader / parser 経路のために node:fs / node:child_process を stdlib 経路で provide する prep #13 を始める、のどちらか。
+

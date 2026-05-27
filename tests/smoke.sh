@@ -236,6 +236,13 @@ run_fail_case string_slice_arg_type_fail examples/string_slice_arg_type_fail.ts 
 run_fail_case string_slice_too_many_args_fail examples/string_slice_too_many_args_fail.ts "String.slice expects at most two arguments"
 run_fail_case string_unsupported_method_fail examples/string_unsupported_method_fail.ts "unsupported method '.indexOf' on topaz_string"
 
+run_case string_from_char_code $'A\na\n0\nz\nB\n1\n72\nHello\n5\nA\nz\nmark=!\n1\n1\n127\nA\nA\nD\nZ\nabcde'
+run_fail_case string_from_char_code_arity_fail examples/string_from_char_code_arity_fail.ts "String.fromCharCode expects exactly one argument"
+run_fail_case string_from_char_code_too_many_args_fail examples/string_from_char_code_too_many_args_fail.ts "String.fromCharCode expects exactly one argument"
+run_fail_case string_from_char_code_arg_type_fail examples/string_from_char_code_arg_type_fail.ts "String.fromCharCode argument must be number"
+run_fail_case string_static_unknown_fail examples/string_static_unknown_fail.ts "unsupported static method 'String.fromCodePoint'"
+run_fail_case string_as_value_fail examples/string_as_value_fail.ts "unknown identifier 'String'"
+
 run_case dunion_object_literal $'3\nident:foo\nnumber:42\neof\nident:bar\nnumber:7\nident:baz\nnumber:99\neof\neof\nident:hello\n4\nident:a\nnumber:1\nident:b\neof\nident:lone\neof\nident:next\nnumber:555\n3\ntrue\nfalse'
 run_fail_case dunion_object_literal_missing_kind_fail examples/dunion_object_literal_missing_kind_fail.ts "must include discriminator property 'kind"
 run_fail_case dunion_object_literal_kind_not_literal_fail examples/dunion_object_literal_kind_not_literal_fail.ts "must be a plain string literal to select"

@@ -160,6 +160,23 @@ static inline topaz_string topaz_string_slice(topaz_string s, double raw_start, 
   return r;
 }
 
+// Phase 1.5-6 prep #12: String.fromCharCode. ASCII-only Topaz, so accept
+// [0, 127] integers only and abort on NaN / negative / >= 128. JS truncates
+// the argument and applies ToUint16; Topaz refuses anything that would
+// escape ASCII because topaz_string assumes ASCII bytes throughout.
+static inline topaz_string topaz_string_from_char_code(topaz_number n) {
+  if (isnan(n) || n < 0 || n >= 128) {
+    fputs("topaz: String.fromCharCode argument out of ASCII range\n", stderr);
+    abort();
+  }
+  unsigned char code = (unsigned char)(size_t)n;
+  char *buf = (char *)topaz_arena_alloc(2);
+  buf[0] = (char)code;
+  buf[1] = '\0';
+  topaz_string r = { buf, 1 };
+  return r;
+}
+
 static inline void topaz_console_log_boolean(topaz_boolean b) {
   fputs(b ? "true\n" : "false\n", stdout);
 }

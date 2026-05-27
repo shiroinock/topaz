@@ -5749,6 +5749,17 @@ class Emitter {
       return `${fn}(${this.emitExpression(arg)})`;
     }
 
+    // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
+    // syntactically (the `String` identifier is not a real binding — we don't
+    // model a `String` global namespace, only this single static method).
+    if (
+      ts.isPropertyAccessExpression(callee) &&
+      ts.isIdentifier(callee.expression) &&
+      callee.expression.text === "String"
+    ) {
+      return this.emitStringStaticCall(expr, callee);
+    }
+
     if (ts.isPropertyAccessExpression(callee)) {
       const baseType = this.inferType(callee.expression);
       if (isArrayType(baseType)) {
@@ -6114,6 +6125,58 @@ class Emitter {
       return `topaz_string_slice(${base}, ${startExpr}, ${endExpr})`;
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on topaz_string`);
+  }
+
+  // Phase 1.5-6 prep #12: only `String.fromCharCode(n)` is supported; we
+  // intentionally do not introduce a real `String` namespace binding. The
+  // single-arg ASCII contract matches src/lexer.ts's `\xNN` escape decoder.
+  private emitStringStaticCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+  ): string {
+    const method = callee.name.text;
+    if (method !== "fromCharCode") {
+      throw new CodegenError(
+        callee,
+        `unsupported static method 'String.${method}' (only 'String.fromCharCode' is supported)`,
+      );
+    }
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(expr, "String.fromCharCode expects exactly one argument");
+    }
+    const argType = this.inferType(expr.arguments[0]!);
+    if (argType.kind !== "number") {
+      throw new CodegenError(
+        expr.arguments[0]!,
+        `String.fromCharCode argument must be number, got ${typeIdent(argType)}`,
+      );
+    }
+    const code = this.emitWithExpected(expr.arguments[0]!, T_NUMBER);
+    return `topaz_string_from_char_code(${code})`;
+  }
+
+  private inferStringStaticReturn(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+  ): TopazType {
+    const method = callee.name.text;
+    if (method !== "fromCharCode") {
+      throw new CodegenError(
+        callee,
+        `unsupported static method 'String.${method}' (only 'String.fromCharCode' is supported)`,
+      );
+    }
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(expr, "String.fromCharCode expects exactly one argument");
+    }
+    const argType = this.inferType(expr.arguments[0]!);
+    if (argType.kind !== "number") {
+      throw new CodegenError(
+        expr.arguments[0]!,
+        `String.fromCharCode argument must be number, got ${typeIdent(argType)}`,
+      );
+    }
+    return T_STRING;
   }
 
   private inferStringMethodReturn(
@@ -6902,6 +6965,16 @@ class Emitter {
         callee.name.text === "log"
       ) {
         throw new CodegenError(expr, "console.log returns void and cannot be used as a value");
+      }
+      // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
+      // syntactically (mirrors emitCall) — the `String` identifier has no
+      // real binding, so we must short-circuit before `inferType(callee.expression)`.
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === "String"
+      ) {
+        return this.inferStringStaticReturn(expr, callee);
       }
       if (ts.isPropertyAccessExpression(callee)) {
         const baseType = this.inferType(callee.expression);
