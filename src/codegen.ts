@@ -636,10 +636,26 @@ class Scope {
   // capture analysis uses this — body emission must go through `lookup` so
   // missing captures show up as "unknown identifier" rather than silently
   // referencing the outer variable.
+  //
+  // Phase 1.5-6 prep: narrowing-aware (mirrors `lookup`'s narrowing scan with
+  // no barrier floor). A closure constructed under an active narrowing — e.g.
+  // the IIFE arm of `cond ? a : (() => {...})()` where the ternary condition
+  // narrowed an outer dunion — captures the *narrowed* type. This is sound
+  // because captures copy the value at construction time, so the narrowing
+  // that held there holds for the captured copy. The narrowed type then flows
+  // consistently into the env struct field type, its initializer (via
+  // `emitCapturedIdentifier`, already narrowing-aware), and `inferType` reads
+  // through `captureContext`.
   lookupAcrossBarrier(name: string): Binding | undefined {
     for (let i = this.stack.length - 1; i >= 0; i--) {
       const b = this.stack[i]!.get(name);
-      if (b) return b;
+      if (b) {
+        for (let j = this.narrowings.length - 1; j >= i; j--) {
+          const n = this.narrowings[j]!.get(name);
+          if (n) return { type: n, isConst: b.isConst };
+        }
+        return b;
+      }
     }
     return undefined;
   }
