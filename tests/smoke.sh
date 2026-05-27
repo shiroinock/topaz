@@ -181,8 +181,19 @@ run_fail_case field_initializer_partial_fail examples/field_initializer_partial_
 run_case type_alias $'8\nok\ntrue\n100\n3\n2\n2\n3\n20\n0\n0\n25\n2\n42\n10\n7\n12\n42\n-1\n1024\n99\n6'
 run_fail_case type_alias_generic_fail examples/type_alias_generic_fail.ts "generic type alias 'Pair' is unsupported"
 run_fail_case type_alias_circular_fail examples/type_alias_circular_fail.ts "circular type alias 'A'"
-run_fail_case type_alias_object_literal_fail examples/type_alias_object_literal_fail.ts "unsupported type (TypeLiteral)"
 run_fail_case type_alias_name_conflict_fail examples/type_alias_name_conflict_fail.ts "type alias 'Foo' collides with a class of the same name"
 run_fail_case type_alias_as_value_fail examples/type_alias_as_value_fail.ts "unknown identifier 'Count'"
+
+run_case object_literal $'3\n4\n7\n30\n40\n3\n4\n100\n2\nalice\n30\ntrue\n5\nok\nfirst\n7\n8\n5\n3\n15\n2\n10\n-1\n42\ndeep\n0\n0\n5\n0\n30\nb\n3\n2\nhello\nworld\n5\n99'
+run_fail_case object_literal_no_context_fail examples/object_literal_no_context_fail.ts "requires a contextually typed anonymous-class target"
+run_fail_case object_literal_missing_field_fail examples/object_literal_missing_field_fail.ts "missing required property: b"
+run_fail_case object_literal_extra_field_fail examples/object_literal_extra_field_fail.ts "property 'c' does not exist"
+run_fail_case object_literal_shorthand_fail examples/object_literal_shorthand_fail.ts "no shorthand, method shorthand"
+run_fail_case object_literal_spread_fail examples/object_literal_spread_fail.ts "no shorthand, method shorthand"
+run_fail_case object_literal_type_empty_fail examples/object_literal_type_empty_fail.ts "empty object literal type"
+run_fail_case object_literal_type_optional_fail examples/object_literal_type_optional_fail.ts "optional property"
+run_fail_case object_literal_type_method_fail examples/object_literal_type_method_fail.ts "only supports plain property signatures"
+run_fail_case object_literal_type_dup_field_fail examples/object_literal_type_dup_field_fail.ts "duplicate property 'a' in object literal type"
+run_fail_case object_literal_type_mismatch_fail examples/object_literal_type_mismatch_fail.ts "expected topaz_number, got topaz_string"
 
 echo "all tests passed"

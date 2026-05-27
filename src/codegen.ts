@@ -651,7 +651,11 @@ type ClassInfo = {
   ctor: { params: ParamInfo[]; decl: ts.ConstructorDeclaration | undefined } | undefined;
   methods: Map<string, MethodInfo>;
   implements: string[]; // interface names this class declares to implement
-  decl: ts.ClassDeclaration;
+  // Phase 1.5-6 prep: anonymous classes synthesized from a TypeLiteral (e.g.
+  // `type Pair = { a: number; b: string }`) carry the TypeLiteralNode as the
+  // anchor; they have no user ClassDeclaration. The field is only ever read as
+  // an error anchor (passed to CodegenError), so widening the type is safe.
+  decl: ts.ClassDeclaration | ts.TypeLiteralNode;
 };
 
 type InterfaceMethodSig = {
@@ -832,6 +836,57 @@ class Emitter {
     if (!isSetType(t)) return;
     if (isScalarType(setElem(t)!)) return; // runtime.h preexpands scalar element sets
     this.setMonomorphs.set(typeKey(t), t);
+  }
+
+  // Phase 1.5-6 prep: anonymous classes synthesized from TypeLiteral
+  // annotations (e.g. `type Pair = { a: number; b: string }`). Two
+  // TypeLiterals with the same shape (regardless of declaration order)
+  // collapse to one C struct: the canonical key is the alphabetically-sorted
+  // `<name>:<typeIdent>` list. The mangle name itself is a sequential index
+  // (`anon_0`, `anon_1`, ...) — structural mangling with delimiters can be
+  // ambiguous when field names contain underscores. The synthesized ClassInfo
+  // carries a positional all-fields constructor (`decl: undefined` + params
+  // in sorted order); emitConstructorDefinition has a branch to fill that
+  // ctor body with per-param `this->f = f;` writes.
+  private anonClassByKey = new Map<string, string>(); // canonical key -> mangled name
+  private anonClassCounter = 0;
+  private recordAnonClass(fields: Map<string, TopazType>, anchor: ts.TypeLiteralNode): string {
+    const sorted = [...fields.keys()].sort();
+    const key = sorted.map((f) => `${f}:${typeIdent(fields.get(f)!)}`).join(",");
+    const existing = this.anonClassByKey.get(key);
+    if (existing) return existing;
+    const mangled = `anon_${this.anonClassCounter++}`;
+    this.anonClassByKey.set(key, mangled);
+    const params: ParamInfo[] = sorted.map((f) => ({ name: f, type: fields.get(f)! }));
+    const fieldsOrdered = new Map<string, TopazType>();
+    for (const f of sorted) fieldsOrdered.set(f, fields.get(f)!);
+    const info: ClassInfo = {
+      name: mangled,
+      fields: fieldsOrdered,
+      fieldOrder: sorted,
+      fieldInits: new Map(),
+      ctor: { params, decl: undefined },
+      methods: new Map(),
+      implements: [],
+      decl: anchor,
+    };
+    this.classes.set(mangled, info);
+    // Reuse the generic-class monomorph worklist so the struct / signature /
+    // definition lands in the same emit slots used for `Box<number>` etc.
+    // typeArgs / subs are empty (no type params), but the ClassMonomorphInfo
+    // entry is required by the worklist drain loop.
+    this.classMonomorphs.set(mangled, {
+      mangled,
+      origName: mangled,
+      typeArgs: [],
+      subs: new Map(),
+    });
+    this.classMonomorphWorklist.push(mangled);
+    return mangled;
+  }
+
+  private isAnonClassName(name: string): boolean {
+    return /^anon_\d+$/.test(name);
   }
 
   private recordDunionMonomorph(t: TopazType): void {
@@ -2228,6 +2283,16 @@ class Emitter {
         `  ${TOPAZ_THIS}->__topaz_class_tag = &topaz_class_${info.name}_tag;`,
       );
       this.emitFieldInitializers(info, bodyLines);
+      // Phase 1.5-6 prep: positional all-args auto-ctor (anonymous class
+      // synthesized from a TypeLiteral). When `decl === undefined` and the
+      // ctor carries params, each param maps 1:1 to a field of the same name
+      // (recordAnonClass guarantees this) and we emit `this->f = f;` for each
+      // in field order.
+      if (!ctor.decl && ctor.params.length > 0) {
+        for (const p of ctor.params) {
+          bodyLines.push(`  ${TOPAZ_THIS}->${p.name} = ${p.name};`);
+        }
+      }
       // Phase 1.5-6 prep: auto-synthesized ctors (decl === undefined) have no
       // user body — the field initializer block above is the entire body.
       if (ctor.decl) {
@@ -2587,6 +2652,50 @@ class Emitter {
       const ft: TopazType = { kind: "fn", params, returnType: ret };
       this.recordFnMonomorph(ft);
       return ft;
+    }
+    // Phase 1.5-6 prep: object literal type `{ a: T; b: U }`. Lowered to an
+    // anonymous class. Members must all be plain PropertySignatures with a
+    // simple identifier name and a type annotation; readonly modifier is
+    // accepted as a no-op (mirroring class / interface field treatment in
+    // prep #1). Method signatures, call / construct / index signatures,
+    // computed property names, optional `f?: T`, and empty `{}` are
+    // rejected. Field order is alphabetical (see recordAnonClass) so two
+    // TypeLiterals with the same shape collapse to the same C struct.
+    if (ts.isTypeLiteralNode(node)) {
+      if (node.members.length === 0) {
+        throw new CodegenError(node, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
+      }
+      const fields = new Map<string, TopazType>();
+      for (const m of node.members) {
+        if (!ts.isPropertySignature(m)) {
+          throw new CodegenError(m, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
+        }
+        if (!ts.isIdentifier(m.name)) {
+          throw new CodegenError(m, "object literal type property name must be a simple identifier");
+        }
+        if (m.questionToken) {
+          throw new CodegenError(m, "optional property `f?: T` in object literal type is unsupported (Phase 1.5-6 prep)");
+        }
+        if (m.modifiers) {
+          for (const mod of m.modifiers) {
+            if (mod.kind !== ts.SyntaxKind.ReadonlyKeyword) {
+              throw new CodegenError(mod, `object literal type property modifier '${ts.SyntaxKind[mod.kind]}' is unsupported (Phase 1.5-6 prep)`);
+            }
+          }
+        }
+        if (!m.type) {
+          throw new CodegenError(m, "object literal type property requires a type annotation");
+        }
+        const fname = m.name.text;
+        if (fields.has(fname)) {
+          throw new CodegenError(m, `duplicate property '${fname}' in object literal type`);
+        }
+        const fty = this.typeFromAnnotation(m.type, m);
+        this.assertNotVoid(fty, m, "object literal type property");
+        fields.set(fname, fty);
+      }
+      const anonName = this.recordAnonClass(fields, node);
+      return classOf(anonName);
     }
     unsupported(node, "type");
   }
@@ -6018,6 +6127,16 @@ class Emitter {
       return T_STRING;
     }
     if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
+    // Phase 1.5-6 prep: object literal expressions have no inferable type on
+    // their own — they need a contextual anonymous-class target. Reject here
+    // so the error surfaces at the literal site instead of inside a deeper
+    // emitExpression fallthrough.
+    if (ts.isObjectLiteralExpression(expr)) {
+      throw new CodegenError(
+        expr,
+        "object literal expression requires a contextually typed anonymous-class target (annotate the binding / return type)",
+      );
+    }
     if (ts.isIdentifier(expr)) {
       if (expr.text === "undefined") return T_UNDEFINED;
       const local = this.scope.lookup(expr.text);
@@ -6774,6 +6893,58 @@ class Emitter {
       const ctx = isInterfaceType(expected) ? undefined : expected;
       const raw = this.emitNewExpression(expr, ctx);
       return this.applyCoercion(raw, newType, expected, expr);
+    }
+    // Phase 1.5-6 prep: object literal expression `{ a: 1, b: "x" }` lowers to
+    // an anonymous-class positional ctor call. Requires a contextual anonymous
+    // class type (alias resolves to an anon class). property order in the
+    // source is irrelevant — args are emitted in field declaration order
+    // (alphabetical, see recordAnonClass). All fields are required and only
+    // plain `name: value` property assignments are accepted; shorthand,
+    // method shorthand, getter / setter, spread, and computed keys are
+    // rejected. Non-anon expected types (concrete class / iface / scalar /
+    // container) reject the literal here.
+    if (ts.isObjectLiteralExpression(expr)) {
+      if (!isClassType(expected) || !this.isAnonClassName(classNameOf(expected)!)) {
+        throw new CodegenError(
+          expr,
+          `object literal expression requires a contextually typed anonymous-class target, got ${typeIdent(expected)}`,
+        );
+      }
+      const className = classNameOf(expected)!;
+      const info = this.classes.get(className)!;
+      const seen = new Set<string>();
+      const valuesByField = new Map<string, ts.Expression>();
+      for (const prop of expr.properties) {
+        if (!ts.isPropertyAssignment(prop)) {
+          throw new CodegenError(
+            prop,
+            "object literal only supports plain `name: value` properties (no shorthand, method shorthand, getter / setter, spread)",
+          );
+        }
+        if (!ts.isIdentifier(prop.name)) {
+          throw new CodegenError(prop, "object literal property name must be a simple identifier");
+        }
+        const fname = prop.name.text;
+        if (seen.has(fname)) {
+          throw new CodegenError(prop, `duplicate property '${fname}' in object literal`);
+        }
+        seen.add(fname);
+        if (!info.fields.has(fname)) {
+          throw new CodegenError(prop, `property '${fname}' does not exist on type ${typeIdent(expected)}`);
+        }
+        valuesByField.set(fname, prop.initializer);
+      }
+      const missing = info.fieldOrder.filter((f) => !valuesByField.has(f));
+      if (missing.length > 0) {
+        throw new CodegenError(
+          expr,
+          `object literal is missing required property: ${missing.join(", ")} (for type ${typeIdent(expected)})`,
+        );
+      }
+      const args = info.fieldOrder.map((f) =>
+        this.emitWithExpected(valuesByField.get(f)!, info.fields.get(f)!),
+      );
+      return `topaz_class_${className}_new(${args.join(", ")})`;
     }
     const actual = this.inferType(expr);
     // Phase 1.5-6 prep: `void` has no value representation, so a void-returning
