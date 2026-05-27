@@ -307,7 +307,7 @@ src/ で grep 実数を確認した結果、以下は 0 件 or reject 文言の�
 [x] 1.5-6b                       Topaz 製 parser core + statement + declaration (1735 行)
 [x] 1.5-6e (oracle)              convertFromTsc + parser_check harness (1305 + 117 行)
 [x] 1.5-6 prep-destructuring     object destructuring `const { a, b } = x` (14 hits)
-[ ] 1.5-6 prep-optional-param    `param?: T` + object type `f?: T` (9 hits + 数件)
+[x] 1.5-6 prep-optional-param    `param?: T` + object type `f?: T` (9 hits + 数件)
 [ ] 1.5-6e (flip)                codegen 入力を `ts.SourceFile` → `Topaz.Module` に切替。
                                  convertFromTsc を本番経路に挟む。tests/smoke.sh pass で
                                  「codegen 挙動不変」を確認。ts.SyntaxKind 183 / ts.is* 142 /

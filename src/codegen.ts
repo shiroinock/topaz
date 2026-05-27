@@ -628,7 +628,21 @@ class Scope {
   }
 }
 
-type ParamInfo = { name: string; type: TopazType };
+// Phase 1.5-6 prep: `isOptional` flag tracks the syntactic `?` on a parameter
+// (function decl / class method / ctor). The type already includes
+// `T | undefined` (the `?` rewrites the type at collection time), so `type`
+// is the same as a hand-written `param: T | undefined`. The flag only
+// affects call-site arity: trailing optional positions may be omitted, and
+// each missing slot auto-fills with the undefined literal of `type`. Two fn
+// types are equal regardless of optional markers (they have the same callable
+// surface — see `typeEq` for the `fn` case).
+type ParamInfo = { name: string; type: TopazType; isOptional: boolean };
+
+function requiredParamCount(params: readonly ParamInfo[]): number {
+  let n = params.length;
+  while (n > 0 && params[n - 1]!.isOptional) n--;
+  return n;
+}
 
 type MethodInfo = {
   params: ParamInfo[];
@@ -651,6 +665,12 @@ type ClassInfo = {
   ctor: { params: ParamInfo[]; decl: ts.ConstructorDeclaration | undefined } | undefined;
   methods: Map<string, MethodInfo>;
   implements: string[]; // interface names this class declares to implement
+  // Phase 1.5-6 prep-optional-param: for anonymous classes synthesized from a
+  // TypeLiteral, the names of fields declared with `f?: T` (their type is
+  // already lifted to `T | undefined`; this set lets the object-literal
+  // expression branch auto-fill missing optional fields with undefined).
+  // Empty for user-declared classes.
+  optionalFields: Set<string>;
   // Phase 1.5-6 prep: anonymous classes synthesized from a TypeLiteral (e.g.
   // `type Pair = { a: number; b: string }`) carry the TypeLiteralNode as the
   // anchor; they have no user ClassDeclaration. The field is only ever read as
@@ -850,14 +870,28 @@ class Emitter {
   // ctor body with per-param `this->f = f;` writes.
   private anonClassByKey = new Map<string, string>(); // canonical key -> mangled name
   private anonClassCounter = 0;
-  private recordAnonClass(fields: Map<string, TopazType>, anchor: ts.TypeLiteralNode): string {
+  private recordAnonClass(
+    fields: Map<string, TopazType>,
+    optionalFields: Set<string>,
+    anchor: ts.TypeLiteralNode,
+  ): string {
+    // Optional markers participate in the canonical key so `{ a: number }` and
+    // `{ a?: number }` are *not* deduped to the same anon class (the latter has
+    // `a: number | undefined`, so field type already differs — but make it
+    // explicit so future field-type changes can't accidentally collapse them).
     const sorted = [...fields.keys()].sort();
-    const key = sorted.map((f) => `${f}:${typeIdent(fields.get(f)!)}`).join(",");
+    const key = sorted
+      .map((f) => `${f}${optionalFields.has(f) ? "?" : ""}:${typeIdent(fields.get(f)!)}`)
+      .join(",");
     const existing = this.anonClassByKey.get(key);
     if (existing) return existing;
     const mangled = `anon_${this.anonClassCounter++}`;
     this.anonClassByKey.set(key, mangled);
-    const params: ParamInfo[] = sorted.map((f) => ({ name: f, type: fields.get(f)! }));
+    const params: ParamInfo[] = sorted.map((f) => ({
+      name: f,
+      type: fields.get(f)!,
+      isOptional: optionalFields.has(f),
+    }));
     const fieldsOrdered = new Map<string, TopazType>();
     for (const f of sorted) fieldsOrdered.set(f, fields.get(f)!);
     const info: ClassInfo = {
@@ -868,6 +902,7 @@ class Emitter {
       ctor: { params, decl: undefined },
       methods: new Map(),
       implements: [],
+      optionalFields: new Set(optionalFields),
       decl: anchor,
     };
     this.classes.set(mangled, info);
@@ -1077,6 +1112,7 @@ class Emitter {
         ctor: undefined,
         methods: new Map(),
         implements: [],
+        optionalFields: new Set(),
         decl: cls,
       });
     }
@@ -2196,19 +2232,30 @@ class Emitter {
 
   private collectParams(parameters: ts.NodeArray<ts.ParameterDeclaration>): ParamInfo[] {
     const out: ParamInfo[] = [];
+    let sawOptional = false;
     for (const p of parameters) {
       if (!ts.isIdentifier(p.name)) {
         throw new CodegenError(p, "parameter must be a simple identifier");
       }
-      if (p.questionToken || p.initializer || p.dotDotDotToken) {
-        throw new CodegenError(p, "optional/default/rest parameters are unsupported");
+      if (p.initializer || p.dotDotDotToken) {
+        throw new CodegenError(p, "default/rest parameters are unsupported");
       }
       if (p.modifiers && p.modifiers.length > 0) {
         throw new CodegenError(p, "parameter property shorthand is unsupported; declare the field explicitly");
       }
-      const t = this.typeFromAnnotation(p.type, p);
-      this.assertNotVoid(t, p, "parameter type");
-      out.push({ name: p.name.text, type: t });
+      const isOptional = !!p.questionToken;
+      if (sawOptional && !isOptional) {
+        throw new CodegenError(p, "a required parameter cannot follow an optional parameter");
+      }
+      if (isOptional) sawOptional = true;
+      const annot = this.typeFromAnnotation(p.type, p);
+      this.assertNotVoid(annot, p, "parameter type");
+      // Phase 1.5-6 prep: `param?: T` is the syntactic sugar for
+      // `param: T | undefined`. Lift the declared type into the union here so
+      // the rest of codegen (narrowing, undefined wrap helpers, vtable
+      // signatures) sees a uniform representation regardless of source.
+      const t = isOptional ? makeUnion([annot, T_UNDEFINED]) : annot;
+      out.push({ name: p.name.text, type: t, isOptional });
     }
     return out;
   }
@@ -2634,7 +2681,7 @@ class Emitter {
           throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
         }
         seenNames.add(p.name.text);
-        params.push({ name: p.name.text, type: pt });
+        params.push({ name: p.name.text, type: pt, isOptional: false });
       }
       const ret = this.typeFromAnnotation(node.type, node);
       // Phase 1.5-6 prep: fn types cannot return void. emitFnTypedef would
@@ -2666,15 +2713,16 @@ class Emitter {
         throw new CodegenError(node, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
       }
       const fields = new Map<string, TopazType>();
+      // Phase 1.5-6 prep-optional-param: collect optional field names so the
+      // anon-class ctor and `recordAnonClass` can mark which positions accept
+      // an auto-filled `undefined` at the object-literal expression site.
+      const optionalFields = new Set<string>();
       for (const m of node.members) {
         if (!ts.isPropertySignature(m)) {
           throw new CodegenError(m, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
         }
         if (!ts.isIdentifier(m.name)) {
           throw new CodegenError(m, "object literal type property name must be a simple identifier");
-        }
-        if (m.questionToken) {
-          throw new CodegenError(m, "optional property `f?: T` in object literal type is unsupported (Phase 1.5-6 prep)");
         }
         if (m.modifiers) {
           for (const mod of m.modifiers) {
@@ -2690,11 +2738,17 @@ class Emitter {
         if (fields.has(fname)) {
           throw new CodegenError(m, `duplicate property '${fname}' in object literal type`);
         }
-        const fty = this.typeFromAnnotation(m.type, m);
-        this.assertNotVoid(fty, m, "object literal type property");
+        const annot = this.typeFromAnnotation(m.type, m);
+        this.assertNotVoid(annot, m, "object literal type property");
+        // Phase 1.5-6 prep-optional-param: `f?: T` is the syntactic sugar for
+        // `f: T | undefined`. Lift here so structural dedupe (canonical key
+        // includes typeIdent) collapses `{ f?: T }` and `{ f: T | undefined }`
+        // to the same anon class.
+        const fty = m.questionToken ? makeUnion([annot, T_UNDEFINED]) : annot;
+        if (m.questionToken) optionalFields.add(fname);
         fields.set(fname, fty);
       }
-      const anonName = this.recordAnonClass(fields, node);
+      const anonName = this.recordAnonClass(fields, optionalFields, node);
       return classOf(anonName);
     }
     unsupported(node, "type");
@@ -2702,17 +2756,12 @@ class Emitter {
 
   private formatSignature(fn: ts.FunctionDeclaration): string {
     const ret = this.typeFromAnnotation(fn.type, fn);
-    const params = fn.parameters
-      .map((p) => {
-        if (!ts.isIdentifier(p.name)) {
-          throw new CodegenError(p, "parameter must be a simple identifier");
-        }
-        if (p.questionToken || p.initializer || p.dotDotDotToken) {
-          throw new CodegenError(p, "optional/default/rest parameters are unsupported");
-        }
-        const t = this.typeFromAnnotation(p.type, p);
-        return `${cTypeName(t)} ${p.name.text}`;
-      })
+    // Phase 1.5-6 prep: `formatSignature` is the early C declaration pass; it
+    // must agree with `collectParams` on the lowered C type for each param
+    // (otherwise `int f(...)` and `int f(double, topaz_opt_number)` would
+    // disagree). Run the same `?` -> `T | undefined` rewrite here.
+    const params = this.collectParams(fn.parameters)
+      .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
     return `static ${cReturnTypeName(ret)} ${fn.name!.text}(${params || "void"})`;
   }
@@ -2724,10 +2773,12 @@ class Emitter {
     this.currentReturnType = sig.returnType;
     this.scope.push();
     try {
-      for (const p of fn.parameters) {
-        const name = (p.name as ts.Identifier).text;
-        const t = this.typeFromAnnotation(p.type, p);
-        this.scope.declare(name, t, /* isConst */ false, p);
+      // Phase 1.5-6 prep-optional-param: declare each param using the lifted
+      // type from `sig.params` (where `?`-marked params already carry
+      // `T | undefined`), not the raw annotation — otherwise narrowing would
+      // disagree with the actual C parameter type.
+      for (const p of sig.params) {
+        this.scope.declare(p.name, p.type, /* isConst */ false, fn);
       }
       const body = this.emitBlock(fn.body, 0);
       return `${this.formatSignature(fn)} ${body}`;
@@ -2795,7 +2846,7 @@ class Emitter {
       } else {
         throw new CodegenError(p, "arrow function parameter requires a type annotation (no contextual type available)");
       }
-      params.push({ name: p.name.text, type: pt });
+      params.push({ name: p.name.text, type: pt, isOptional: false });
     }
     let returnType: TopazType;
     if (arrow.type) {
@@ -2858,7 +2909,7 @@ class Emitter {
           throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
         }
         seenNames.add(p.name.text);
-        params.push({ name: p.name.text, type: pt });
+        params.push({ name: p.name.text, type: pt, isOptional: false });
       }
       let returnType: TopazType;
       if (cb.type) {
@@ -2991,7 +3042,7 @@ class Emitter {
         throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
       }
       seenNames.add(p.name.text);
-      params.push({ name: p.name.text, type: pt });
+      params.push({ name: p.name.text, type: pt, isOptional: false });
     }
 
     // Return type: annotation required (we don't infer from body yet) unless
@@ -3349,6 +3400,7 @@ class Emitter {
       ctor: undefined,
       methods: new Map(),
       implements: [],
+      optionalFields: new Set(),
       decl: generic.decl,
     };
     this.classes.set(mangled, info);
@@ -5346,15 +5398,7 @@ class Emitter {
         return `topaz_class_${className}_new()`;
       }
       const params = cls.ctor.params;
-      if (args.length !== params.length) {
-        throw new CodegenError(
-          expr,
-          `${cls.name}() expects ${params.length} argument(s), got ${args.length}`,
-        );
-      }
-      const argStr = args
-        .map((a, i) => this.emitWithExpected(a, params[i]!.type))
-        .join(", ");
+      const argStr = this.emitCallArgs(args, params, `${cls.name}()`, expr).join(", ");
       return `topaz_class_${className}_new(${argStr})`;
     }
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
@@ -5570,22 +5614,17 @@ class Emitter {
     if (ts.isIdentifier(callee)) {
       if (this.genericFunctions.has(callee.text)) {
         const resolved = this.resolveGenericCall(callee, expr)!;
-        const args = expr.arguments
-          .map((a, i) => this.emitWithExpected(a, resolved.sig.params[i]!.type))
-          .join(", ");
+        const args = this.emitCallArgs(
+          expr.arguments,
+          resolved.sig.params,
+          `${callee.text}()`,
+          expr,
+        ).join(", ");
         return `${resolved.mangled}(${args})`;
       }
       const sig = this.functionSigs.get(callee.text);
       if (sig) {
-        if (expr.arguments.length !== sig.params.length) {
-          throw new CodegenError(
-            expr,
-            `${callee.text}() expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
-          );
-        }
-        const args = expr.arguments
-          .map((a, i) => this.emitWithExpected(a, sig.params[i]!.type))
-          .join(", ");
+        const args = this.emitCallArgs(expr.arguments, sig.params, `${callee.text}()`, expr).join(", ");
         return `${callee.text}(${args})`;
       }
       // Phase 1.5-3.5e: fn-typed local (a binding holding an arrow / fn
@@ -5947,16 +5986,10 @@ class Emitter {
       }
       throw new CodegenError(callee, `class '${cls.name}' has no method '${mname}'`);
     }
-    if (expr.arguments.length !== method.params.length) {
-      throw new CodegenError(
-        expr,
-        `${cls.name}.${mname} expects ${method.params.length} argument(s), got ${expr.arguments.length}`,
-      );
-    }
     const base = this.emitExpression(callee.expression);
     const argParts = [
       base,
-      ...expr.arguments.map((a, i) => this.emitWithExpected(a, method.params[i]!.type)),
+      ...this.emitCallArgs(expr.arguments, method.params, `${cls.name}.${mname}`, expr),
     ];
     return `topaz_class_${cls.name}_method_${mname}(${argParts.join(", ")})`;
   }
@@ -5975,18 +6008,12 @@ class Emitter {
       }
       throw new CodegenError(callee, `interface '${iface.name}' has no method '${mname}'`);
     }
-    if (expr.arguments.length !== sig.params.length) {
-      throw new CodegenError(
-        expr,
-        `${iface.name}.${mname} expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
-      );
-    }
     const id = this.tmpCounter++;
     const tmp = `__topaz_ib_${id}`;
     const baseStr = this.emitExpression(callee.expression);
     const argParts = [
       `${tmp}.data`,
-      ...expr.arguments.map((a, i) => this.emitWithExpected(a, sig.params[i]!.type)),
+      ...this.emitCallArgs(expr.arguments, sig.params, `${iface.name}.${mname}`, expr),
     ];
     return `({ ${cTypeName(baseType)} ${tmp} = ${baseStr}; ${tmp}.vt->${mname}(${argParts.join(", ")}); })`;
   }
@@ -7085,16 +7112,24 @@ class Emitter {
         }
         valuesByField.set(fname, prop.initializer);
       }
-      const missing = info.fieldOrder.filter((f) => !valuesByField.has(f));
-      if (missing.length > 0) {
+      // Phase 1.5-6 prep-optional-param: `f?: T` fields may be omitted; each
+      // missing slot auto-fills with the undefined literal of the field's
+      // (already-lifted) `T | undefined` type. Required fields still error.
+      const missingRequired = info.fieldOrder.filter(
+        (f) => !valuesByField.has(f) && !info.optionalFields.has(f),
+      );
+      if (missingRequired.length > 0) {
         throw new CodegenError(
           expr,
-          `object literal is missing required property: ${missing.join(", ")} (for type ${typeIdent(expected)})`,
+          `object literal is missing required property: ${missingRequired.join(", ")} (for type ${typeIdent(expected)})`,
         );
       }
-      const args = info.fieldOrder.map((f) =>
-        this.emitWithExpected(valuesByField.get(f)!, info.fields.get(f)!),
-      );
+      const args = info.fieldOrder.map((f) => {
+        const fty = info.fields.get(f)!;
+        const v = valuesByField.get(f);
+        if (v) return this.emitWithExpected(v, fty);
+        return this.emitUndefinedLiteral(fty, expr);
+      });
       return `topaz_class_${className}_new(${args.join(", ")})`;
     }
     const actual = this.inferType(expr);
@@ -7112,6 +7147,38 @@ class Emitter {
   // (or bare `undefined`) target. Caller must have already type-checked.
   // Phase 1.5-3c: scalar `T | undefined` lowers to the predefined absent opt
   // struct (`topaz_opt_absent_<scalar>`).
+  // Phase 1.5-6 prep-optional-param: emit a positional arg list against a
+  // ParamInfo signature, allowing trailing `?`-marked slots to be omitted. For
+  // each omitted slot we synthesize an `undefined` literal of the param type
+  // (already lifted to `T | undefined` at collection time). Arity outside
+  // [requiredParamCount, params.length] is rejected with the canonical
+  // "expects N got M" message; the caller passes the human-readable name.
+  private emitCallArgs(
+    args: readonly ts.Expression[],
+    params: readonly ParamInfo[],
+    label: string,
+    anchor: ts.Node,
+  ): string[] {
+    const req = requiredParamCount(params);
+    if (args.length < req || args.length > params.length) {
+      const want = req === params.length ? `${params.length}` : `${req}..${params.length}`;
+      throw new CodegenError(
+        anchor,
+        `${label} expects ${want} argument(s), got ${args.length}`,
+      );
+    }
+    const out: string[] = [];
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i]!;
+      if (i < args.length) {
+        out.push(this.emitWithExpected(args[i]!, p.type));
+      } else {
+        out.push(this.emitUndefinedLiteral(p.type, anchor));
+      }
+    }
+    return out;
+  }
+
   private emitUndefinedLiteral(expected: TopazType, anchor: ts.Node): string {
     if (expected.kind === "undefined") {
       // Bare `undefined` target has no observable C representation; emit NULL

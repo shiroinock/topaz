@@ -467,15 +467,26 @@ class Converter {
 
   convertParams(ps: ts.NodeArray<ts.ParameterDeclaration>): FunctionParam[] {
     const out: FunctionParam[] = [];
+    // Phase 1.5-6 prep-optional-param: accept `param?: T` and enforce the
+    // trailing-only rule (a required param cannot follow an optional one), so
+    // the oracle agrees with the codegen / topaz_parser side. The `?` is
+    // preserved as `isOptional`; the type itself stays raw (codegen lifts to
+    // `T | undefined`).
+    let sawOptional = false;
     for (const p of ps) {
       if (p.dotDotDotToken) throw this.err(p, "rest parameter is unsupported");
       if (p.initializer) throw this.err(p, "default parameter is unsupported");
-      if (p.questionToken) throw this.err(p, "optional parameter is unsupported");
       if (!ts.isIdentifier(p.name)) throw this.err(p, "parameter name must be an identifier");
       if (!p.type) throw this.err(p, "parameter must have a type annotation");
+      const isOptional = !!p.questionToken;
+      if (sawOptional && !isOptional) {
+        throw this.err(p, "a required parameter cannot follow an optional parameter");
+      }
+      if (isOptional) sawOptional = true;
       out.push({
         name: p.name.text,
         type: this.convertType(p.type),
+        isOptional,
         ...this.span(p),
       });
     }

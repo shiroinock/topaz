@@ -200,10 +200,17 @@ run_fail_case object_literal_extra_field_fail examples/object_literal_extra_fiel
 run_fail_case object_literal_shorthand_fail examples/object_literal_shorthand_fail.ts "no shorthand, method shorthand"
 run_fail_case object_literal_spread_fail examples/object_literal_spread_fail.ts "no shorthand, method shorthand"
 run_fail_case object_literal_type_empty_fail examples/object_literal_type_empty_fail.ts "empty object literal type"
-run_fail_case object_literal_type_optional_fail examples/object_literal_type_optional_fail.ts "optional property"
 run_fail_case object_literal_type_method_fail examples/object_literal_type_method_fail.ts "only supports plain property signatures"
 run_fail_case object_literal_type_dup_field_fail examples/object_literal_type_dup_field_fail.ts "duplicate property 'a' in object literal type"
 run_fail_case object_literal_type_mismatch_fail examples/object_literal_type_mismatch_fail.ts "expected topaz_number, got topaz_string"
+
+run_case optional_param $'topaz\ntopaz!\n0007\n07\n****7\n12\n1\nanon\n2\nnamed\na:80\nb:9000\n0\n5\n15\n10\n35\nhi\nhi[x]\n1\n2\nnone\ny\ndefault\nonly\nfb\np'
+run_fail_case optional_param_non_trailing_fail examples/optional_param_non_trailing_fail.ts "a required parameter cannot follow an optional parameter"
+run_fail_case optional_param_too_few_fail examples/optional_param_too_few_fail.ts "expects 2..3 argument(s), got 1"
+run_fail_case optional_param_too_many_fail examples/optional_param_too_many_fail.ts "expects 1..2 argument(s), got 3"
+run_fail_case optional_param_unnarrowed_fail examples/optional_param_unnarrowed_fail.ts "expected topaz_number, got topaz_union_number_or_undefined"
+run_fail_case optional_field_unnarrowed_fail examples/optional_field_unnarrowed_fail.ts "expected topaz_number, got topaz_union_number_or_undefined"
+run_fail_case optional_param_type_mismatch_fail examples/optional_param_type_mismatch_fail.ts "expected topaz_union_number_or_undefined, got topaz_string"
 
 run_case object_destructuring $'3\n4\n7\n7\ntrue\nhi\n5\n9\n100\n200\n1\n3\nfirst\n10\n99\n6\n3\n4\n30\nb\n42\n5\n99\n8\n7\n42\n12\n14\n50\n60'
 run_fail_case object_destructuring_rename_fail examples/object_destructuring_rename_fail.ts "property rename / nested pattern"

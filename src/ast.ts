@@ -511,6 +511,7 @@ export type Decl =
 export type FunctionParam = {
   name: string;
   type: TypeNode;
+  isOptional: boolean;
   pos: number;
   end: number;
 };

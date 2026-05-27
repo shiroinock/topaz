@@ -294,12 +294,20 @@ export class Parser {
 
   parseFunctionParams(): Array<FunctionParam> {
     const out: Array<FunctionParam> = [];
+    // Phase 1.5-6 prep-optional-param: accept `param?: T`. Trailing-only is
+    // enforced here so the parser side matches the oracle / codegen rejection.
+    let sawOptional: boolean = false;
     while (!this.matchPunct(")")) {
       this.skipNewlines();
       const name: Token = this.expectIdent();
+      const isOptional: boolean = this.matchPunct("?");
       this.expectPunct(":");
       const ty: TypeNode = this.parseType();
-      out.push({ name: name.text, type: ty, pos: name.pos, end: ty.end });
+      if (sawOptional && !isOptional) {
+        throw this.error(name, "a required parameter cannot follow an optional parameter");
+      }
+      if (isOptional) sawOptional = true;
+      out.push({ name: name.text, type: ty, isOptional, pos: name.pos, end: ty.end });
       if (!this.matchPunct(",")) {
         this.expectPunct(")");
         break;
