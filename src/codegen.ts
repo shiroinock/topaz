@@ -4047,6 +4047,12 @@ class Emitter {
     ) {
       return undefined;
     }
+    // Phase 1.5-6 prep #19: `<id>.<disc> === "lit"` narrows a dunion-typed id
+    // to the matching variant (the same scope.narrow path `switch` uses). The
+    // undefined check below requires both sides to be identifiers, so this
+    // property-access form never collides with it.
+    const dn = this.extractDiscriminatorNarrowing(cond, tok, polarity);
+    if (dn) return dn;
     const leftIsUndef = ts.isIdentifier(cond.left) && cond.left.text === "undefined";
     const rightIsUndef = ts.isIdentifier(cond.right) && cond.right.text === "undefined";
     if (leftIsUndef === rightIsUndef) return undefined;
@@ -4064,6 +4070,55 @@ class Emitter {
       return { name: varNode.text, type: inner };
     }
     return { name: varNode.text, type: T_UNDEFINED };
+  }
+
+  // Phase 1.5-6 prep #19: interpret `<id>.<disc> === "lit"` (either argument
+  // order) as a discriminated-union narrowing. One operand must be a property
+  // access `id.disc` where id is a dunion identifier and disc its
+  // discriminator; the other a string literal naming a unique variant. `===`
+  // true (or `!==` false) selects that variant; the complement narrows only
+  // when exactly one other variant remains (2-variant dunion). Returns the
+  // narrowing valid when `cond` evaluates to `polarity`, else undefined.
+  private extractDiscriminatorNarrowing(
+    cond: ts.BinaryExpression,
+    tok: ts.SyntaxKind,
+    polarity: boolean,
+  ): { name: string; type: TopazType } | undefined {
+    const isLit = (e: ts.Expression): e is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral =>
+      ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e);
+    const isIdPA = (e: ts.Expression): e is ts.PropertyAccessExpression =>
+      ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression);
+    let pa: ts.PropertyAccessExpression;
+    let lit: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral;
+    if (isIdPA(cond.left) && isLit(cond.right)) {
+      pa = cond.left;
+      lit = cond.right;
+    } else if (isIdPA(cond.right) && isLit(cond.left)) {
+      pa = cond.right;
+      lit = cond.left;
+    } else {
+      return undefined;
+    }
+    const idName = (pa.expression as ts.Identifier).text;
+    const b = this.scope.lookup(idName);
+    if (!b || b.type.kind !== "dunion") return undefined;
+    const dunion = b.type;
+    if (pa.name.text !== dunion.discriminator) return undefined;
+    let matchCls: string | undefined;
+    for (const cname of dunion.variants) {
+      if (this.dunionLiteralFor(dunion, cname) === lit.text) {
+        matchCls = cname;
+        break;
+      }
+    }
+    if (!matchCls) return undefined;
+    const selectsMatch = (tok === ts.SyntaxKind.EqualsEqualsEqualsToken) === polarity;
+    if (selectsMatch) return { name: idName, type: classOf(matchCls) };
+    if (dunion.variants.length === 2) {
+      const other = dunion.variants.find((v) => v !== matchCls)!;
+      return { name: idName, type: classOf(other) };
+    }
+    return undefined;
   }
 
   private emitStatement(stmt: ts.Statement, indent: number): string {
@@ -5714,6 +5769,32 @@ class Emitter {
           }
           return `${valStr} ${op} NULL`;
         }
+      }
+      // Phase 1.5-6 prep #19: emit `&&` / `||` with compound-condition
+      // narrowing. The right operand is emitted under the narrowing implied by
+      // the left (positive for `&&`, negative for `||`) so a dunion narrowed by
+      // `x.kind === "lit"` on the left is accessible on the right. inferType
+      // (above) already type-checked the right under the same narrowing.
+      if (
+        tok === ts.SyntaxKind.AmpersandAmpersandToken ||
+        tok === ts.SyntaxKind.BarBarToken
+      ) {
+        const polarity = tok === ts.SyntaxKind.AmpersandAmpersandToken;
+        const lhs = this.emitExpression(expr.left);
+        const n = this.extractNarrowing(expr.left, polarity);
+        let rhs: string;
+        if (n) {
+          this.scope.push();
+          try {
+            this.scope.narrow(n.name, n.type);
+            rhs = this.emitExpression(expr.right);
+          } finally {
+            this.scope.pop();
+          }
+        } else {
+          rhs = this.emitExpression(expr.right);
+        }
+        return `(${lhs} ${polarity ? "&&" : "||"} ${rhs})`;
       }
       const op = this.binaryOp(expr.operatorToken);
       const lhs = this.emitExpression(expr.left);
@@ -7383,10 +7464,26 @@ class Emitter {
           return T_BOOLEAN;
         }
         case ts.SyntaxKind.AmpersandAmpersandToken:
-        case ts.SyntaxKind.BarBarToken:
+        case ts.SyntaxKind.BarBarToken: {
           this.expectType(expr.left, T_BOOLEAN);
-          this.expectType(expr.right, T_BOOLEAN);
+          // Phase 1.5-6 prep #19: `&&`'s right operand runs only when the left
+          // is true, so it sees the left's positive narrowing; `||`'s right
+          // runs when the left is false and sees the negative narrowing.
+          const polarity = kind === ts.SyntaxKind.AmpersandAmpersandToken;
+          const n = this.extractNarrowing(expr.left, polarity);
+          if (n) {
+            this.scope.push();
+            try {
+              this.scope.narrow(n.name, n.type);
+              this.expectType(expr.right, T_BOOLEAN);
+            } finally {
+              this.scope.pop();
+            }
+          } else {
+            this.expectType(expr.right, T_BOOLEAN);
+          }
           return T_BOOLEAN;
+        }
         case ts.SyntaxKind.EqualsToken: {
           this.checkAssignTarget(expr.left, expr);
           const lt = this.inferType(expr.left);
