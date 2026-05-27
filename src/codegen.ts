@@ -8042,6 +8042,15 @@ class Emitter {
       const cname = classNameOf(actual)!;
       return expected.variants.includes(cname);
     }
+    // Phase 1.5-6 prep #23: dunion -> wider dunion widening. A dunion value is
+    // assignable to another dunion when discriminators match and its variant
+    // set is a subset of the target's. Both share the `{ <disc>; void *data; }`
+    // fat layout, so the value is layout-compatible; coercion only re-wraps the
+    // same kind + payload into the wider typedef.
+    if (expected.kind === "dunion" && actual.kind === "dunion") {
+      if (actual.discriminator !== expected.discriminator) return false;
+      return actual.variants.every((v) => expected.variants.includes(v));
+    }
     return false;
   }
 
@@ -8378,6 +8387,24 @@ class Emitter {
       const literal = this.dunionLiteralFor(expected, cname);
       const litExpr = this.encodeStringLiteralCompound(literal);
       return `((${typeIdent(expected)}){ ${litExpr}, (void *)(${raw}) })`;
+    }
+    // Phase 1.5-6 prep #23: dunion -> wider dunion. Both typedefs are
+    // `{ topaz_string <disc>; void *data; }`, so the narrow value's
+    // discriminator + payload are re-wrapped into the wider struct. Bind the
+    // (possibly side-effectful) source once in a statement expression; the
+    // runtime `.kind` already carries the correct variant tag.
+    if (expected.kind === "dunion" && actual.kind === "dunion") {
+      if (actual.discriminator !== expected.discriminator) {
+        throw new CodegenError(anchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+      }
+      for (const v of actual.variants) {
+        if (!expected.variants.includes(v)) {
+          throw new CodegenError(anchor, `class '${v}' is not a variant of ${typeIdent(expected)}`);
+        }
+      }
+      const id = this.tmpCounter++;
+      const tmp = `__topaz_dw_${id}`;
+      return `({ ${typeIdent(actual)} ${tmp} = ${raw}; (${typeIdent(expected)}){ ${tmp}.${actual.discriminator}, ${tmp}.data }; })`;
     }
     // Phase 1.5-3e: string_literal "X" widens to plain string (the literal
     // already has the right C representation, so no transformation needed).
