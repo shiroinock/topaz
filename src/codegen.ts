@@ -4684,6 +4684,32 @@ class Emitter {
       // emitWithExpected threads `type` through ArrayLiteral / NewExpression
       // context typing and applies class -> interface coercion when needed.
       initExpr = this.emitWithExpected(decl.initializer, type);
+      // Phase 1.5-6 prep: initializer narrowing. `const x: U = init` where U is
+      // a discriminated union and init's static type is a concrete variant
+      // keeps the narrowed variant for subsequent reads (tsc CFA narrows the
+      // declared type at the assignment point). The C variable still holds the
+      // dunion fat pointer (initExpr already coerced into it), so reads route
+      // through the existing dunion -> variant `.data` cast in the identifier /
+      // property-access emit paths. Restricted to `const`: a `let` reassignment
+      // to a different variant would leave the narrowing stale (there is no
+      // narrowing-invalidation hook on plain assignment yet).
+      // Object / array literals and arrows are contextually typed — inferType
+      // rejects them without an expected type — and an object literal in a
+      // dunion slot stays unnarrowed by design (the common-field write check
+      // depends on it). Only initializers that type on their own (calls, `new`,
+      // identifiers, member reads) feed the narrowing.
+      const initBareTypeable =
+        !ts.isObjectLiteralExpression(decl.initializer) &&
+        !ts.isArrayLiteralExpression(decl.initializer) &&
+        !ts.isArrowFunction(decl.initializer);
+      if (isConst && type.kind === "dunion" && initBareTypeable) {
+        const initType = this.inferType(decl.initializer);
+        if (isClassType(initType) && type.variants.includes(classNameOf(initType)!)) {
+          this.scope.declare(name, type, isConst, decl);
+          this.scope.narrow(name, initType);
+          return { type, cName: name, initStr: ` = ${initExpr}` };
+        }
+      }
     } else {
       const initIsBareNew =
         ts.isNewExpression(decl.initializer) &&
@@ -7310,7 +7336,18 @@ class Emitter {
       if (isClassType(baseType)) {
         const cls = this.classes.get(classNameOf(baseType)!)!;
         const fieldType = cls.fields.get(expr.name.text);
-        if (fieldType) return fieldType;
+        if (fieldType) {
+          // A string-literal field (e.g. a discriminator) read off a concrete
+          // instance yields a runtime `topaz_string`; widen to `string` for
+          // consumption so console.log / template / concat dispatch correctly.
+          // This mirrors the dunion-discriminator read above (returns T_STRING)
+          // — both surface the same value. Now reachable because initializer
+          // narrowing (`const c: Circle | Square = new Circle(...)`) hands later
+          // reads the concrete class rather than the union. Coercing the read
+          // back into an expected string-literal stays (correctly) rejected.
+          if (fieldType.kind === "string_literal") return T_STRING;
+          return fieldType;
+        }
         if (cls.methods.has(expr.name.text)) {
           throw new CodegenError(
             expr,
