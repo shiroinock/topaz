@@ -192,6 +192,9 @@ run_fail_case type_alias_generic_fail examples/type_alias_generic_fail.ts "gener
 run_fail_case type_alias_circular_fail examples/type_alias_circular_fail.ts "circular type alias 'A'"
 run_fail_case type_alias_name_conflict_fail examples/type_alias_name_conflict_fail.ts "type alias 'Foo' collides with a class of the same name"
 run_fail_case type_alias_as_value_fail examples/type_alias_as_value_fail.ts "unknown identifier 'Count'"
+run_case type_alias_recursive $'6\n1\n2\n3\n42\n-42\n42\nnumber\nMap\n2\nnumber\nstring\n30\n70\n1\n16'
+run_fail_case type_alias_self_ref_fail examples/type_alias_self_ref_fail.ts "circular type alias 'A'"
+run_fail_case type_alias_array_self_ref_fail examples/type_alias_array_self_ref_fail.ts "circular type alias 'Foo'"
 
 run_case object_literal $'3\n4\n7\n30\n40\n3\n4\n100\n2\nalice\n30\ntrue\n5\nok\nfirst\n7\n8\n5\n3\n15\n2\n10\n-1\n42\ndeep\n0\n0\n5\n0\n30\nb\n3\n2\nhello\nworld\n5\n99'
 run_fail_case object_literal_no_context_fail examples/object_literal_no_context_fail.ts "requires a contextually typed anonymous-class target"

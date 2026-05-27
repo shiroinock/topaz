@@ -477,3 +477,29 @@ actual self-hosting epoch 入口の「lexer まで通す」目標は達成。次
 
 **次の blocker 観察**: prep #14 後は `src/codegen.ts:1` / `src/convert_from_tsc.ts:19` の `import * as ts from "typescript"` namespace import が残るが、これは **1.5-6e flip**(codegen 入力を `ts.SourceFile` → `Topaz.Module` に切替えて typescript 依存を消す本来の epoch)で消える。`src/parser_check.ts:13` の rename import は parser_check 自体が tooling なので self-host scope 外、当面温存可。`src/cli.ts:2` の `node:child_process`(`execFileSync("cc", ...)`)は prep #13 と同じ pattern で 1 helper 追加すれば解放可能(prep #15 候補)。
 
+### 11.13 prep #14 着地 (2026-05-28)
+
+**完了**: **recursive / mutually-recursive type alias** の解禁。SCC computation(Tarjan)で recursive alias を marking した後、recursive alias の body 内 TypeLiteralNode のみ事前に `anon_N` + placeholder ClassInfo を allocate(structural dedupe を skip)、2-phase で field を fill(sub-pass A = string_literal discriminator のみ、sub-pass B = full resolution via typeFromAnnotation)。alias body 自身が TypeLiteralNode なら `info.resolved = classOf(anon_N)` も set。pre-allocation を経由しない alias(body が TypeReference / Union / Array で TypeLiteralNode を含まないもの)は引き続き `resolving` flag で循環検出する = pure cycle (`type A = A;` / `type A = Array<A>;` / `type A = B; type B = A;`)は引き続き reject。
+
+**新規 method**: `collectAliasRefs(node, out)`(alias 間 dep を syntactic に収集)・`markRecursiveAliases()`(Tarjan SCC + recursive flag set)・`preAllocateRecursiveAnons()`(TypeLiteralNode を anon に bind、alias body 自体が TypeLiteralNode なら `info.resolved` も set)・`fillPreAllocatedAnonFields()`(sub-pass A + B で field 確定)。`emit()` の pass 順序に pass 1c 直後・pass 1d 前で 3 method を順に挿入。
+
+**typeFromAnnotation の TypeLiteralNode branch 改修**: 冒頭に `preAllocatedAnons.get(node)` check を挿入し、ヒットすれば classOf を即返す。field-fill 中の typeFromAnnotation 経路でも、後段の object literal expression の expected 型解決でも、同じ anon class が安定して返る。
+
+**非循環 alias の dedupe 維持**: pre-allocation は recursive 限定なので、`type Pair = { a; b }` と `type Pair2 = { a; b }` は引き続き `recordAnonClass` の structural dedupe(alphabetically sorted canonical key)で同 C struct に折り畳まれる。
+
+**回帰**: positive 1 本(`type_alias_recursive.ts` = ListNode 自己参照 + Expr dunion 自己参照 + TypeNode/TypeRef 相互参照 + Pair/Pair2 dedupe 維持 + Tree の Array<Tree> 自己参照、合計 16 出力)+ fail 2 本(`type_alias_self_ref_fail.ts` = `type A = A;`、`type_alias_array_self_ref_fail.ts` = `type Foo = Array<Foo>;`)。既存 `type_alias_circular_fail.ts`(`type A = B; type B = A;`)も維持。合計 155 ケース全 pass、parser_check も新規 3 ケース全 OK。
+
+**pass criterion 確認**: `node dist/cli.js src/ast.ts --emit-c-only`:
+- 旧 blocker: `src/ast.ts:29:19: circular type alias 'TypeNode'`
+- 新 blocker: `cTypeName: 'T | undefined' requires T to be a scalar, reference (array/map/set/class), or interface; got topaz_dunion_anon_0_or_anon_1_or_anon_2_or_anon_3_or_anon_50_or_anon_51_or_anon_52_or_anon_53_or_anon_6`(`T | undefined` で T が dunion のケース未対応 = prep #15 候補)
+
+`src/topaz_parser.ts` は同じ AST 経由なので同 blocker、`src/convert_from_tsc.ts` は namespace import で別 path、`src/parser_check.ts` は rename import で別 path。
+
+### 11.14 残 prep 候補 (2026-05-28 prep #14 着地後)
+
+**prep #15 候補(最有力)**: **`dunion | undefined`** の解禁。`src/ast.ts` 系で TypeNode dunion を `T | undefined` で使うケースが多数(`TypeRef | undefined` の field 等)。`cTypeName` の `T | undefined` 分岐で T が dunion の場合の C 表現を確定する必要がある(dunion は `{ topaz_string kind; void *data; }` の fat pointer なので、`.data == NULL` を absent sentinel に使うのが自然 = scalar の opt struct とは別経路)。prep #8 の Map の dunion value で deferred されていた `.get` narrowing もここで一緒に着地できる。
+
+**prep #16 候補**: **`node:child_process` の `execFileSync`** = `src/cli.ts:2` 経路。prep #13 と同じ syntactic shortcut パターンで解放可能、runtime に `topaz_exec_file_sync(cmd, args, opts)` helper を追加。argv は `Array<string>` 経由、戻り値は exit code(number)。
+
+**その後**: `src/convert_from_tsc.ts` / `src/codegen.ts` / `src/parser.ts` の `import * as ts from "typescript"` は **1.5-6e flip**(codegen 入力を `ts.SourceFile` → `Topaz.Module` に切替)で消える本筋。`src/parser_check.ts:13` の rename import は parser_check 自体が tooling なので self-host scope 外、当面温存可。
+

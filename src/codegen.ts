@@ -820,10 +820,28 @@ class Emitter {
   // Aliases are erased — they introduce no value-level binding and produce no C
   // identifier — so typeFromAnnotation simply substitutes the resolved TopazType
   // into the call site.
+  // Phase 1.5-6 prep #14: aliases that participate in a recursive SCC (computed
+  // syntactically from alias-to-alias references) get their nested
+  // TypeLiteralNodes pre-allocated into `preAllocatedAnons` so resolution can
+  // short-circuit the recordAnonClass dedupe path and reference the eventual
+  // anon class type before its fields are fully populated. Non-recursive aliases
+  // (the common case — `Pair` / `Pair2` etc.) still flow through the lazy
+  // structural-dedupe path so identical shapes collapse to one C struct.
   private typeAliases = new Map<
     string,
-    { decl: ts.TypeAliasDeclaration; resolved?: TopazType; resolving: boolean }
+    {
+      decl: ts.TypeAliasDeclaration;
+      resolved?: TopazType;
+      resolving: boolean;
+      recursive: boolean;
+    }
   >();
+  // Phase 1.5-6 prep #14: TypeLiteralNode -> mangled anon class name. Populated
+  // by preAllocateRecursiveAnons() walking the bodies of recursive aliases. A
+  // hit in typeFromAnnotation's TypeLiteralNode branch returns classOf(name)
+  // directly without recomputing the structural key (since fields aren't
+  // resolved yet at first reference and the canonical key would mismatch).
+  private preAllocatedAnons = new Map<ts.TypeLiteralNode, string>();
   // Phase 1.5-3.5e: each arrow expression lowers to (a) a static C function
   // `__topaz_arrow_<N>` and (b) optionally an env struct `__topaz_env_<N>`
   // for its captures. arrowDefLines accumulates both halves in source order
@@ -1041,6 +1059,271 @@ class Emitter {
     return field.value;
   }
 
+  // Phase 1.5-6 prep #14: syntactically collect alias-to-alias references
+  // reachable from `node`. Only references whose name is currently registered
+  // as a type alias are tracked — references to classes / interfaces /
+  // built-ins / type params are ignored (they don't participate in alias
+  // cycles). The walk covers every TypeNode shape the codegen accepts so the
+  // graph is faithful to what typeFromAnnotation would actually traverse.
+  private collectAliasRefs(node: ts.TypeNode, out: Set<string>): void {
+    if (ts.isParenthesizedTypeNode(node)) {
+      this.collectAliasRefs(node.type, out);
+      return;
+    }
+    if (ts.isUnionTypeNode(node)) {
+      for (const t of node.types) this.collectAliasRefs(t, out);
+      return;
+    }
+    if (ts.isArrayTypeNode(node)) {
+      this.collectAliasRefs(node.elementType, out);
+      return;
+    }
+    if (ts.isTypeReferenceNode(node)) {
+      if (ts.isIdentifier(node.typeName) && this.typeAliases.has(node.typeName.text)) {
+        out.add(node.typeName.text);
+      }
+      if (node.typeArguments) {
+        for (const t of node.typeArguments) this.collectAliasRefs(t, out);
+      }
+      return;
+    }
+    if (ts.isTypeLiteralNode(node)) {
+      for (const m of node.members) {
+        if (ts.isPropertySignature(m) && m.type) this.collectAliasRefs(m.type, out);
+      }
+      return;
+    }
+    if (ts.isFunctionTypeNode(node)) {
+      for (const p of node.parameters) {
+        if (p.type) this.collectAliasRefs(p.type, out);
+      }
+      if (node.type) this.collectAliasRefs(node.type, out);
+      return;
+    }
+    // Other shapes (literal types, primitive keywords, void / unknown) carry
+    // no alias references.
+  }
+
+  // Phase 1.5-6 prep #14: Tarjan SCC on the alias dependency graph. Any alias
+  // sitting in an SCC of size > 1 — or a singleton SCC that has a self-edge —
+  // is marked recursive and gets the pre-allocation treatment below. Strict
+  // self-loops via non-TypeLiteralNode bodies (`type A = A`) still hit the
+  // existing `resolving` cycle check; pre-allocation only changes behavior
+  // when the body (or a nested type position) is a TypeLiteralNode.
+  private markRecursiveAliases(): void {
+    if (this.typeAliases.size === 0) return;
+    const deps = new Map<string, string[]>();
+    for (const [name, info] of this.typeAliases) {
+      const out = new Set<string>();
+      this.collectAliasRefs(info.decl.type, out);
+      deps.set(name, [...out]);
+    }
+
+    // Tarjan's SCC.
+    const index = new Map<string, number>();
+    const lowlink = new Map<string, number>();
+    const onStack = new Set<string>();
+    const stack: string[] = [];
+    let counter = 0;
+    const sccs: string[][] = [];
+
+    const strongconnect = (v: string): void => {
+      index.set(v, counter);
+      lowlink.set(v, counter);
+      counter++;
+      stack.push(v);
+      onStack.add(v);
+      const successors = deps.get(v) ?? [];
+      for (const w of successors) {
+        if (!index.has(w)) {
+          strongconnect(w);
+          lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
+        } else if (onStack.has(w)) {
+          lowlink.set(v, Math.min(lowlink.get(v)!, index.get(w)!));
+        }
+      }
+      if (lowlink.get(v) === index.get(v)) {
+        const scc: string[] = [];
+        while (true) {
+          const w = stack.pop()!;
+          onStack.delete(w);
+          scc.push(w);
+          if (w === v) break;
+        }
+        sccs.push(scc);
+      }
+    };
+
+    for (const name of this.typeAliases.keys()) {
+      if (!index.has(name)) strongconnect(name);
+    }
+
+    for (const scc of sccs) {
+      const isRecursive = scc.length > 1
+        || (scc.length === 1 && (deps.get(scc[0]!) ?? []).includes(scc[0]!));
+      if (!isRecursive) continue;
+      for (const name of scc) {
+        this.typeAliases.get(name)!.recursive = true;
+      }
+    }
+  }
+
+  // Phase 1.5-6 prep #14: walk every TypeLiteralNode reachable from a recursive
+  // alias body and reserve an anon class name + placeholder ClassInfo. Skipping
+  // structural dedupe is intentional here: dedupe would require canonical keys
+  // (and therefore resolved field types) that we don't have until field-fill
+  // runs. Non-recursive aliases continue to dedupe via the regular
+  // recordAnonClass path so `type Pair = { a; b }` and `type Pair2 = { a; b }`
+  // still collapse to one C struct.
+  private preAllocateRecursiveAnons(): void {
+    const visit = (node: ts.TypeNode): void => {
+      if (ts.isParenthesizedTypeNode(node)) {
+        visit(node.type);
+        return;
+      }
+      if (ts.isUnionTypeNode(node)) {
+        for (const t of node.types) visit(t);
+        return;
+      }
+      if (ts.isArrayTypeNode(node)) {
+        visit(node.elementType);
+        return;
+      }
+      if (ts.isTypeReferenceNode(node)) {
+        if (node.typeArguments) {
+          for (const t of node.typeArguments) visit(t);
+        }
+        return;
+      }
+      if (ts.isTypeLiteralNode(node)) {
+        if (!this.preAllocatedAnons.has(node)) {
+          const mangled = `anon_${this.anonClassCounter++}`;
+          this.preAllocatedAnons.set(node, mangled);
+          const info: ClassInfo = {
+            name: mangled,
+            fields: new Map(),
+            fieldOrder: [],
+            fieldInits: new Map(),
+            ctor: { params: [], decl: undefined },
+            methods: new Map(),
+            implements: [],
+            optionalFields: new Set(),
+            decl: node,
+          };
+          this.classes.set(mangled, info);
+          this.classMonomorphs.set(mangled, {
+            mangled,
+            origName: mangled,
+            typeArgs: [],
+            subs: new Map(),
+          });
+          this.classMonomorphWorklist.push(mangled);
+        }
+        for (const m of node.members) {
+          if (ts.isPropertySignature(m) && m.type) visit(m.type);
+        }
+        return;
+      }
+      if (ts.isFunctionTypeNode(node)) {
+        for (const p of node.parameters) {
+          if (p.type) visit(p.type);
+        }
+        if (node.type) visit(node.type);
+        return;
+      }
+    };
+
+    for (const info of this.typeAliases.values()) {
+      if (!info.recursive) continue;
+      visit(info.decl.type);
+      if (ts.isTypeLiteralNode(info.decl.type)) {
+        const mangled = this.preAllocatedAnons.get(info.decl.type)!;
+        info.resolved = classOf(mangled);
+      }
+    }
+  }
+
+  // Phase 1.5-6 prep #14: two-phase populate the pre-allocated anon classes.
+  // Sub-pass A sets only string-literal-typed fields (`kind: "literal"`) so
+  // tryMakeDiscriminatedUnion can find a discriminator even mid-resolution of
+  // a sibling alias. Sub-pass B then fully resolves every member type via
+  // typeFromAnnotation; references back to other pre-allocated anons short-
+  // circuit through preAllocatedAnons. Validation (duplicate property name,
+  // empty `{}`, modifier filter, method signature reject, etc.) is performed
+  // here in sub-pass B — moving it up from the inline TypeLiteralNode branch
+  // is fine because the pre-allocated entries cover exactly the same nodes.
+  private fillPreAllocatedAnonFields(): void {
+    // Sub-pass A: populate string-literal discriminator fields. No recursion
+    // into typeFromAnnotation — direct AST inspection only.
+    for (const [literalNode, anonName] of this.preAllocatedAnons) {
+      const cls = this.classes.get(anonName)!;
+      for (const m of literalNode.members) {
+        if (!ts.isPropertySignature(m)) continue;
+        if (!ts.isIdentifier(m.name)) continue;
+        if (!m.type) continue;
+        if (ts.isLiteralTypeNode(m.type) && ts.isStringLiteral(m.type.literal)) {
+          const v = m.type.literal.text;
+          let ascii = true;
+          for (let i = 0; i < v.length; i++) {
+            if (v.charCodeAt(i) > 0x7e) { ascii = false; break; }
+          }
+          if (!ascii) continue;
+          cls.fields.set(m.name.text, { kind: "string_literal", value: v });
+        }
+      }
+    }
+
+    // Sub-pass B: fully resolve fields. Mirrors the validation in the inline
+    // TypeLiteralNode branch of typeFromAnnotation.
+    for (const [literalNode, anonName] of this.preAllocatedAnons) {
+      const cls = this.classes.get(anonName)!;
+      if (literalNode.members.length === 0) {
+        throw new CodegenError(literalNode, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
+      }
+      const fields = new Map<string, TopazType>();
+      const optionalFields = new Set<string>();
+      for (const m of literalNode.members) {
+        if (!ts.isPropertySignature(m)) {
+          throw new CodegenError(m, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
+        }
+        if (!ts.isIdentifier(m.name)) {
+          throw new CodegenError(m, "object literal type property name must be a simple identifier");
+        }
+        if (m.modifiers) {
+          for (const mod of m.modifiers) {
+            if (mod.kind !== ts.SyntaxKind.ReadonlyKeyword) {
+              throw new CodegenError(mod, `object literal type property modifier '${ts.SyntaxKind[mod.kind]}' is unsupported (Phase 1.5-6 prep)`);
+            }
+          }
+        }
+        if (!m.type) {
+          throw new CodegenError(m, "object literal type property requires a type annotation");
+        }
+        const fname = m.name.text;
+        if (fields.has(fname)) {
+          throw new CodegenError(m, `duplicate property '${fname}' in object literal type`);
+        }
+        const annot = this.typeFromAnnotation(m.type, m);
+        this.assertNotVoid(annot, m, "object literal type property");
+        const fty = m.questionToken ? makeUnion([annot, T_UNDEFINED]) : annot;
+        if (m.questionToken) optionalFields.add(fname);
+        fields.set(fname, fty);
+      }
+      const sorted = [...fields.keys()].sort();
+      const fieldsOrdered = new Map<string, TopazType>();
+      for (const f of sorted) fieldsOrdered.set(f, fields.get(f)!);
+      const params: ParamInfo[] = sorted.map((f) => ({
+        name: f,
+        type: fields.get(f)!,
+        isOptional: optionalFields.has(f),
+      }));
+      cls.fields = fieldsOrdered;
+      cls.fieldOrder = sorted;
+      cls.optionalFields = new Set(optionalFields);
+      cls.ctor = { params, decl: undefined };
+    }
+  }
+
   emit(sourceFiles: readonly ts.SourceFile[]): string {
     if (sourceFiles.length === 0) {
       throw new Error("codegen: at least one source file is required");
@@ -1192,8 +1475,18 @@ class Emitter {
           `generic type alias '${name}' is unsupported (Phase 1.5-6 prep)`,
         );
       }
-      this.typeAliases.set(name, { decl: alias, resolving: false });
+      this.typeAliases.set(name, { decl: alias, resolving: false, recursive: false });
     }
+
+    // Phase 1.5-6 prep #14: detect recursive aliases (SCC of alias-to-alias
+    // references) and pre-allocate anon class names for every TypeLiteralNode
+    // appearing inside their bodies. After this returns, references to those
+    // TypeLiteralNodes resolve via `preAllocatedAnons` without re-entering the
+    // alias being resolved — breaking the chicken-and-egg between
+    // `type TypeNode = TypeRef | ...` and `type TypeRef = { typeArgs: Array<TypeNode> }`.
+    this.markRecursiveAliases();
+    this.preAllocateRecursiveAnons();
+    this.fillPreAllocatedAnonFields();
 
     // Pass 2a: parse interface members (so classes can reference interfaces in
     // field/method types).
@@ -2800,6 +3093,14 @@ class Emitter {
     // rejected. Field order is alphabetical (see recordAnonClass) so two
     // TypeLiterals with the same shape collapse to the same C struct.
     if (ts.isTypeLiteralNode(node)) {
+      // Phase 1.5-6 prep #14: pre-allocated anon classes from recursive
+      // aliases short-circuit the dedupe path here. Field-fill has already
+      // populated this anon (or will, if we're currently inside its own fill
+      // pass). Either way the class type is the stable forward reference.
+      const preAllocated = this.preAllocatedAnons.get(node);
+      if (preAllocated !== undefined) {
+        return classOf(preAllocated);
+      }
       if (node.members.length === 0) {
         throw new CodegenError(node, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
       }
