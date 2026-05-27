@@ -975,3 +975,86 @@ Phase 1.5-3.5f-slice = `Array<T>.slice(start?: number, end?: number): Array<T>`�
   - 新 blocker: `cTypeName: 'T | undefined' requires T to be a scalar, reference (array/map/set/class), or interface; got topaz_dunion_anon_0_or_anon_1_or_anon_2_or_anon_3_or_anon_50_or_anon_51_or_anon_52_or_anon_53_or_anon_6`(`T | undefined` で T が dunion のケース未対応 = prep #15 候補)。`src/topaz_parser.ts` は同じ AST 経由なので同 blocker(順番に解禁)、`src/convert_from_tsc.ts` は `import * as ts from "typescript"`(namespace import)で別 path、`src/parser_check.ts` は import rename で別 path、`src/cli.ts` は `node:child_process` で別 prep。
 
 - **scope 外 / 将来課題**。(1) **`dunion | undefined`**: prep #15 の最有力候補、`cTypeName` の `T | undefined` 分岐で T が dunion の場合の C 表現を確定する必要がある(dunion は既に `{ kind; data }` の fat pointer なので `.data == NULL` を absent sentinel に使う形が自然、prep #8 の Map の dunion value で deferred されていた `.get` narrowing もここで一緒に着地)。(2) **forward reference の正規化**: 現状の collectAliasRefs は TypeReferenceNode の name を `typeAliases.has(name)` で filter しているが、`type A = B<T>;` の `B<T>` で `B` が generic class の場合は名前衝突 detect が必要(現状は class より alias を優先する prep #4 の policy で OK だが、generic class が後段で展開される時に anon との競合がないか別途確認)。(3) **TypeLiteralNode を持つ alias の同形性**: 異なる alias 名で完全に同じ shape の TypeLiteralNode を持つ(`type A = { kind: "x"; next: A }; type B = { kind: "x"; next: B };`)場合、現状の per-alias anon allocation では別の anon class になる(structural dedupe 経路ではない)、A と B の値は互換性無し。これは intended(各 recursive alias の identity を decl に紐付ける方針)、必要なら nominal vs structural の switch 設計を別途検討。(4) **Function type 経由の recursive**: `type Cb = (n: number) => Cb;`(self-recursive fn 型)は body が FunctionTypeNode で TypeLiteralNode を含まないため、現状 generative cycle として reject される。Fn 型は fat pointer なので C 表現は問題なく作れるが、fn 値の type identity check が monomorph 名で行われている現状で recursive fn 型の monomorph 名を確定できないため保留(必要なら fn typedef の forward decl で割れる)。
+
+## Phase 1.5-6 prep-dunion-optional 実装決定ログ(`T | undefined` for T = dunion + Map<scalar, dunion>.get narrowing)
+
+- **背景と動機**。prep #14(recursive type alias)で `src/ast.ts` の `TypeNode | TypeRef | UnionType | ...` の AST mutual recursion は通るようになったが、次の hit は **`T | undefined` で T が dunion** のパターン。新 blocker メッセージ:
+
+  ```
+  cTypeName: 'T | undefined' requires T to be a scalar, reference (array/map/set/class), or interface;
+  got topaz_dunion_anon_0_or_anon_1_or_anon_2_or_anon_3_or_...
+  ```
+
+  `src/ast.ts` の `TypeNode | undefined`(関数戻り値 / Map V / class field)で頻発、`TypeNode` が `TypeRef | UnionType | LiteralType | ArrayType | ...` の dunion なので `cTypeName` の union 分岐が dunion を inner に持つ T を拒否していた。prep #8(Array<dunion> 要素)で discriminated union を first-class container element として解禁した時に Map V の dunion は `.has` / `.delete` / `.size` / `.set` のみ動かして `.get` narrowing を「`dunion | undefined` への `!` / `??` 対応とセットで別 sub-step」として deferred していたので、ここを一気に着地させて prep #8 残を消化しつつ `src/ast.ts` も通すのが prep #15 の目的。
+
+- **C 表現の選択**。dunion は既に `{ topaz_string kind; void *data; }` の fat struct で、class / iface の reference 型と同じ shape。**absent sentinel は `.data == NULL`**(全 field zero-initialized = `{0}`)を採用 — class instance ポインタは `calloc` 由来で常に non-NULL、any wrapped variant の `.data` は class struct を指すので NULL と衝突しない。これで iface fat pointer の `.data == NULL` policy と完全に揃う(prep #15 の `===` / `!==` / `!` / `??` の emit branch は iface と統合する形で実装)。
+
+- **`cTypeName` の union branch 拡張**(`src/codegen.ts:431-482`)。従来は `isReferenceType(inner) || inner.kind === "iface"` のみ受理していた T を、`inner.kind === "dunion"` も accept する形に widening。C 型表現は `cTypeName(inner)` をそのまま返す = dunion struct = wrap 構造同一(scalar 時の `topaz_opt_<T>` のような追加 typedef は不要、`{0}` の zero-init で absent を表現できるため)。
+
+  ```ts
+  if (!isReferenceType(inner) && inner.kind !== "iface" && inner.kind !== "dunion") {
+    throw new Error(
+      `cTypeName: \`T | undefined\` requires T to be a scalar, reference (array/map/set/class), interface, or dunion; got ${typeIdent(inner)}`,
+    );
+  }
+  return cTypeName(inner);
+  ```
+
+- **`emitUndefinedLiteral` の dunion branch**(`src/codegen.ts:7951-7982`)。`inner.kind === "dunion"` のとき `((${typeIdent(inner)}){0})` の compound literal を返す(全 field zero = `.kind` = `{NULL, 0}`、`.data` = `NULL`)。`typeIdent(inner)` は既に `topaz_dunion_<C1>_or_<C2>_or_..._or_anon_N` の安定名を返すので、emit-site で同じ typedef を参照できる。
+
+  ```ts
+  if (inner.kind === "dunion") {
+    return `((${typeIdent(inner)}){0})`;
+  }
+  ```
+
+- **`===` / `!==` undefined の emit 統合**(`src/codegen.ts:5625-5650`)。dunion を iface と同 branch に統合して `.data ${op} NULL` を吐く(scalar の `topaz_opt_<T>.present` とは別経路、reference の NULL check とも別経路)。
+
+  ```ts
+  if (inner && (isInterfaceType(inner) || inner.kind === "dunion")) {
+    return `${valStr}.data ${op} NULL`;
+  }
+  ```
+
+- **narrowed identifier emit の widening**(`src/codegen.ts:5330+`)。switch / if narrowing で base が `dunion | undefined`、narrowed (`b.type`) が concrete class のとき、`((topaz_class_<C> *)(<id>).data)` を吐く。従来は `base.type.kind === "dunion"` の直接 case しか拾えず、`Tok | undefined` の中の dunion は素通り → `(cur)->text` の不正 C を生成していた。`withoutUndefined(base.type)` で union 中の dunion を抜き出してから判定する形に修正:
+
+  ```ts
+  if (isClassType(b.type)) {
+    const baseInner = base.type.kind === "union" ? withoutUndefined(base.type) : base.type;
+    if (baseInner && baseInner.kind === "dunion") {
+      const cname = classNameOf(b.type)!;
+      return `((topaz_class_${cname} *)(${expr.text}).data)`;
+    }
+  }
+  ```
+
+- **`!` (non-null assertion) for dunion**(`src/codegen.ts:5433-5453`)。iface と同 branch に統合、`({ <ct> __t = <val>; if (__t.data == NULL) { panic } __t; })` の stmt-expression で snapshot + NULL check + 戻し(class branch の `T *` NULL check / scalar branch の `.present` check と並列)。`inferType !` の operand check は `stripped.kind !== "dunion"` を gate に追加(non-optional dunion への `!` を no-op として reject、TS は warning のみだが Topaz は厳格に止める policy 維持)。
+
+  ```ts
+  if (isInterfaceType(stripped) || stripped.kind === "dunion") {
+    return `({ ${ct} ${tmp} = ${valStr}; if (${tmp}.data == NULL) { ${panic} } ${tmp}; })`;
+  }
+  ```
+
+- **`??` (nullish coalescing) for dunion**(`src/codegen.ts:5585-5604`)。同じく iface と同 branch、`({ <lct> __t = <lhs>; __t.data != NULL ? __t : (<rhs>); })` の stmt-expression で ternary lower(`__t` を 1 度 snapshot、`.data != NULL` で present 判定、RHS は emitWithExpected 経由なので class→dunion / anon→dunion coercion が自動)。`inferType ??` の LHS check に `inner.kind !== "dunion"` を gate を追加(no-op reject)。
+
+  ```ts
+  if (isInterfaceType(inner) || inner.kind === "dunion") {
+    return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.data != NULL ? ${tmp} : (${rhsStr}); })`;
+  }
+  ```
+
+- **Map<scalar, dunion>.get の `.get` narrowing は自動接続**。prep #8 で既に `topaz_opt_passthrough` macro + `((typeIdent(v)){0})` absent literal の経路を emitMapMonomorphMacro に入れていた。prep #15 の `cTypeName` / `emitUndefinedLiteral` 拡張だけで、`.get` の戻り値型 `V | undefined` が dunion で構成可能になり、narrowing 経路がそのまま走る(`.has` / `.delete` / `.size` / `.set` だけだった prep #8 の制約が `.get` まで自動的に届く形で完成)。回帰の (5) で `Map<string, Tok>.get("alpha")` → `Tok | undefined` → `!== undefined` で narrow → switch + `.text` / `.n` 読み出しが通ることを確認。
+
+- **`assignment 経路`は影響なし**。`cur = something` の RHS で dunion を組み立てるパターンは prep #11(dunion-context object literal)で `BinaryExpression` の EqualsToken case が ObjectLiteralExpression を `emitWithExpected(rhs, lt)` 経路に直接送る早期 return path を持っていたので、`cur = undefined`(`cur: Tok | undefined`)も同経路で正しく `emitUndefinedLiteral(unionType)` → `((typeIdent(dunion)){0})` を吐く形で動く。追加 plumbing 不要。
+
+- **strict subset の境界**。**受理**: (1) `let cur: T | undefined = new Variant(...)` の初期化 + class→dunion 包装、(2) `cur = undefined` 再代入 + `cur = new Variant(...)` 再代入、(3) `if (cur !== undefined) switch (cur.kind) { ... }` の narrow + switch、(4) `if (cur === undefined)` で「無い」分岐、(5) 関数 param / 戻り値で `T | undefined` を取り渡し、(6) `Map<scalar, T>.get` で `T | undefined`、(7) `!` で `T | undefined` → `T` 強制、(8) `??` で `T | undefined → T` の fallback、(9) `??` chain で `a ?? b ?? c` の chain narrow、(10) reference identity 保存(同じ `.get(k)` 2 回が同 underlying class instance を wrap した dunion 値を返す)。**reject**: (1) narrow 無しで `.kind` / `.<field>` 読み出し(`cannot access '.kind' on union type ...`)、(2) 既に `T` 型(`T | undefined` ではない)に `!`(`non-null assertion (!) requires a T | undefined operand`)、(3) 同じく既に `T` に `??`(`?? requires the left operand to be T | undefined`)、(4) `dunion | undefined` を Array / Map / Set 要素に詰める(`Array<T | undefined>` / `Map<K, T | undefined>` / `Set<T | undefined>` の monomorph が未整備、別 step、特に Set の elem は `.data` identity を absent と区別する hash 戦略が要る)。
+
+- **回帰**。positive 1 本(`dunion_optional.ts` = (1) `Tok | undefined` 変数初期化 + class→dunion 包装 + 3-variant switch narrowing、(2) `cur = undefined` 再代入 + `=== undefined` narrowing + `cur = new NumLit(42)` 後の switch、(3) `function describe(t: Tok | undefined): string` の早期 return narrowing + 3-variant switch、(4) `function lookup(tag: number): Tok | undefined` の 4 戻り値タグ、(5) `Map<string, Tok>.get` の `Tok | undefined` 戻り + narrowing + miss、(6) `!` で `Tok | undefined` → `Tok` 強制、(7) `??` で fallback concrete dunion、(8) `??` chain (`a ?? b ?? undefined`)、(9) `.data` reference identity 保存(同 `.get("alpha")` 2 回が同 underlying class instance を wrap)、合計 17 出力)+ fail 3 本(`dunion_optional_unnarrowed_fail.ts` = narrow 無しで `.kind` 読み出し、`dunion_optional_non_optional_bang_fail.ts` = 既に `Tok` に `!`、`dunion_optional_non_optional_coalesce_fail.ts` = 既に `Tok` に `??`)。合計 155 → **159 ケース全 pass**、parser_check も新規 4 ケース全 OK(positive 1 + fail 3、fail はいずれも parser を抜けて codegen で reject される = 両 accept 判定)。
+
+- **pass criterion 確認**。`node dist/cli.js src/ast.ts --emit-c-only -o /tmp/ast`:
+  - 旧 blocker(prep #14 着地後): `cTypeName: 'T | undefined' requires T to be a scalar...; got topaz_dunion_anon_0_or_anon_1_or_...`
+  - 新 blocker: 無し — `/tmp/ast.c` を 1473 行で emit、`cc -O2 -Iruntime -c /tmp/ast.c` で警告無くオブジェクト化。
+  - `src/topaz_parser.ts` は同じ AST を消費するので prep #15 の恩恵を直接受ける(まだ未測定だが、別の独立 blocker(`switch` の break 周りや fn-typed field 等)が残る可能性あり)。
+
+- **scope 外 / 将来課題**。(1) **`Array<dunion | undefined>` / `Map<scalar, dunion | undefined>` / `Set<dunion | undefined>`**: dunion 要素自体は prep #8 で解禁したが、その `T | undefined` 形は container の elem type として未対応(`elemTag` の dispatch に union branch が無い)。コードベース現状の `src/` 経路には登場しないので保留、必要になった時に Set の hash 戦略(absent と present の `.data` を識別する形)とセットで設計。(2) **`Iterator<dunion | undefined>`**: 同上、`for-of` の binding に `T | undefined` を持ち込む経路、現状未対応。(3) **無 narrow の switch 拒否**: 現状の prep #15 では `if (cur !== undefined)` block 内で `switch (cur.kind)` を書く形のみ受理。`switch (cur?.kind) { case ... }` のような optional chain + switch の組み合わせは未対応(`?.` は scalar / class / iface / Array index に限定、dunion field への `?.` は別 step)。(4) **`!` / `??` の chain 内 dunion-narrow transparency**: 現状の `??` chain `a ?? b ?? c` は LHS と RHS が独立に evaluate されるが、中間結果型は `T | undefined` のまま流れる。最終 RHS が T になる時点で T を返すロジックは scalar / class / iface / dunion で同じ tree を辿る(`inferType ??` の gate を `inner.kind !== "dunion"` で開けたので)、特殊 case 不要だが、`(a ?? b).kind` のような chain 末尾 + 直接 field 参照のパターンは中間が dunion のまま narrow が transfer されないので reject される(narrowed binding の lifetime が `??` の RHS 内に閉じない)。必要なら `const x = a ?? b; switch (x.kind)` で write down。

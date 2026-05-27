@@ -264,4 +264,9 @@ run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_i
 run_fail_case node_fs_namespace_import_fail examples/node_fs_namespace_import_fail.ts "namespace import of stdlib specifier 'node:fs'"
 run_fail_case node_fs_rename_import_fail examples/node_fs_rename_import_fail.ts "import rename"
 
+run_case dunion_optional $'ident=foo\nabsent\nnum=42\ni:hello\nn:7\neof\nnone\ni:a\nn:99\neof\nnone\ngot:alpha-text\nmiss\nbang:123\nnc:eof\nchain:alpha-text\nid-match'
+run_fail_case dunion_optional_unnarrowed_fail examples/dunion_optional_unnarrowed_fail.ts "cannot access '.kind' on union type"
+run_fail_case dunion_optional_non_optional_bang_fail examples/dunion_optional_non_optional_bang_fail.ts "non-null assertion"
+run_fail_case dunion_optional_non_optional_coalesce_fail examples/dunion_optional_non_optional_coalesce_fail.ts "left operand to be"
+
 echo "all tests passed"

@@ -463,9 +463,13 @@ function cTypeName(t: TopazType): string {
     if (isScalarType(inner)) {
       return `topaz_opt_${inner.kind}`;
     }
-    if (!isReferenceType(inner) && inner.kind !== "iface") {
+    // Phase 1.5-6 prep #15: dunion uses the same `{ kind, data }` fat struct
+    // as its C representation, and `.data == NULL` (zero-initialized struct)
+    // is the absent sentinel — identical shape to iface | undefined, so the
+    // C representation for `dunion | undefined` is just the dunion struct.
+    if (!isReferenceType(inner) && inner.kind !== "iface" && inner.kind !== "dunion") {
       throw new Error(
-        `cTypeName: \`T | undefined\` requires T to be a scalar, reference (array/map/set/class), or interface; got ${typeIdent(inner)}`,
+        `cTypeName: \`T | undefined\` requires T to be a scalar, reference (array/map/set/class), interface, or dunion; got ${typeIdent(inner)}`,
       );
     }
     return cTypeName(inner);
@@ -5326,9 +5330,16 @@ class Emitter {
       // Phase 1.5-3e: narrowed dunion -> class. The fat struct's `data` slot
       // holds the underlying class instance pointer; cast it back to the
       // concrete class type for downstream uses.
-      if (base.type.kind === "dunion" && isClassType(b.type)) {
-        const cname = classNameOf(b.type)!;
-        return `((topaz_class_${cname} *)(${expr.text}).data)`;
+      // Phase 1.5-6 prep #15: also fire when base is `dunion | undefined`
+      // (after an `!== undefined` narrow followed by a switch narrow). The C
+      // representation is still the dunion struct, so the `.data` cast works
+      // identically.
+      if (isClassType(b.type)) {
+        const baseInner = base.type.kind === "union" ? withoutUndefined(base.type) : base.type;
+        if (baseInner && baseInner.kind === "dunion") {
+          const cname = classNameOf(b.type)!;
+          return `((topaz_class_${cname} *)(${expr.text}).data)`;
+        }
       }
       // Phase 1.5-3f: narrowed unknown -> class. The base C type is `void *`
       // (the catch payload); cast to the concrete class pointer so field /
@@ -5446,7 +5457,8 @@ class Emitter {
       if (isScalarType(stripped)) {
         return `({ ${ct} ${tmp} = ${valStr}; if (!${tmp}.present) { ${panic} } ${tmp}.value; })`;
       }
-      if (isInterfaceType(stripped)) {
+      // Phase 1.5-6 prep #15: dunion shares iface's `.data == NULL` sentinel.
+      if (isInterfaceType(stripped) || stripped.kind === "dunion") {
         return `({ ${ct} ${tmp} = ${valStr}; if (${tmp}.data == NULL) { ${panic} } ${tmp}; })`;
       }
       return `({ ${ct} ${tmp} = ${valStr}; if (${tmp} == NULL) { ${panic} } ${tmp}; })`;
@@ -5597,7 +5609,8 @@ class Emitter {
           const presentBranch = rhsIsOptional ? tmp : `${tmp}.value`;
           return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.present ? ${presentBranch} : (${rhsStr}); })`;
         }
-        if (isInterfaceType(inner)) {
+        // Phase 1.5-6 prep #15: dunion shares iface's `.data == NULL` sentinel.
+        if (isInterfaceType(inner) || inner.kind === "dunion") {
           return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.data != NULL ? ${tmp} : (${rhsStr}); })`;
         }
         return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp} != NULL ? ${tmp} : (${rhsStr}); })`;
@@ -5638,7 +5651,10 @@ class Emitter {
             const want = tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? "false" : "true";
             return `${valStr}.present == ${want}`;
           }
-          if (inner && isInterfaceType(inner)) {
+          // Phase 1.5-6 prep #15: dunion uses the same fat-struct shape as
+          // iface; `.data == NULL` distinguishes the absent sentinel from any
+          // wrapped variant (variant ctors always store a non-NULL class ptr).
+          if (inner && (isInterfaceType(inner) || inner.kind === "dunion")) {
             return `${valStr}.data ${op} NULL`;
           }
           return `${valStr} ${op} NULL`;
@@ -7156,7 +7172,12 @@ class Emitter {
           `non-null assertion (\`!\`) requires a \`T | undefined\` operand; got ${typeIdent(inner)}`,
         );
       }
-      if (!isScalarType(stripped) && !isReferenceType(stripped) && !isInterfaceType(stripped)) {
+      // Phase 1.5-6 prep #15: dunion shares iface's fat-struct shape, so `!`
+      // works against the `.data == NULL` sentinel.
+      if (
+        !isScalarType(stripped) && !isReferenceType(stripped)
+        && !isInterfaceType(stripped) && stripped.kind !== "dunion"
+      ) {
         throw new CodegenError(
           expr,
           `non-null assertion on ${typeIdent(inner)} is unsupported`,
@@ -7275,7 +7296,12 @@ class Emitter {
               `\`??\` requires the left operand to be \`T | undefined\`; got ${typeIdent(lt)}`,
             );
           }
-          if (!isScalarType(inner) && !isReferenceType(inner) && !isInterfaceType(inner)) {
+          // Phase 1.5-6 prep #15: dunion shares iface's fat-struct shape, so
+          // `??` can use the `.data == NULL` sentinel as the fallback gate.
+          if (
+            !isScalarType(inner) && !isReferenceType(inner)
+            && !isInterfaceType(inner) && inner.kind !== "dunion"
+          ) {
             throw new CodegenError(
               expr,
               `\`??\` on ${typeIdent(lt)} is unsupported`,
@@ -7966,6 +7992,13 @@ class Emitter {
       if (isInterfaceType(inner)) {
         const iname = interfaceNameOf(inner)!;
         return `topaz_iface_${iname}_absent`;
+      }
+      // Phase 1.5-6 prep #15: dunion absent uses `.data == NULL` sentinel
+      // (zero-initialized fat struct — same shape as iface_<I>_absent). The
+      // `{0}` compound literal zero-fills both `.kind` (empty topaz_string)
+      // and `.data` (NULL).
+      if (inner.kind === "dunion") {
+        return `((${typeIdent(inner)}){0})`;
       }
       if (isReferenceType(inner)) {
         return `((${cTypeName(inner)})NULL)`;

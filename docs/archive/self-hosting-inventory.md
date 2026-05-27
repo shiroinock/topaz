@@ -503,3 +503,32 @@ actual self-hosting epoch 入口の「lexer まで通す」目標は達成。次
 
 **その後**: `src/convert_from_tsc.ts` / `src/codegen.ts` / `src/parser.ts` の `import * as ts from "typescript"` は **1.5-6e flip**(codegen 入力を `ts.SourceFile` → `Topaz.Module` に切替)で消える本筋。`src/parser_check.ts:13` の rename import は parser_check 自体が tooling なので self-host scope 外、当面温存可。
 
+
+### 11.15 prep #15 着地 (2026-05-28)
+
+**完了**: **`T | undefined` for T = dunion** の解禁 + **Map<scalar, dunion>.get narrowing** の同時着地。dunion は既に `{ topaz_string kind; void *data; }` の fat struct で、`.data == NULL`(`{0}` の zero-init)を absent sentinel として再利用(iface fat pointer と同形の policy、class instance ポインタは calloc 由来で常に non-NULL = sentinel と衝突しない)。
+
+**5 chokepoint の修正**:
+- `cTypeName` union branch: 受理条件に `inner.kind === "dunion"` を追加、C 型表現は `cTypeName(inner)` をそのまま返す。
+- `emitUndefinedLiteral`: dunion branch で `((typeIdent(inner)){0})` を吐く。
+- `===` / `!==` undefined emit: iface と統合して `.data ${op} NULL` を吐く branch に dunion を accept。
+- `!` (non-null) emit: 同じく iface と統合、`({ <ct> __t = <val>; if (__t.data == NULL) panic; __t; })`。
+- `??` (nullish coalescing) emit: iface と統合、`({ <lct> __t = <lhs>; __t.data != NULL ? __t : <rhs>; })`。
+- `inferType !` / `??` gate: 既存 reject 条件に `stripped.kind !== "dunion"` / `inner.kind !== "dunion"` を追加(no-op reject の policy 維持)。
+- **narrowed identifier emit の widening**(`src/codegen.ts:5330+`): switch / if narrowing で base が `dunion | undefined`、narrowed が concrete class のとき `((topaz_class_<C> *)(<id>).data)` を吐く。従来は `base.type.kind === "dunion"` の直接 case しか拾えなかったので `withoutUndefined(base.type)` で union 中の dunion を抜き出す形に修正(switch narrowing で `(cur)->text` の不正 C を吐いていた bug fix)。
+
+**Map<scalar, dunion>.get の `.get` narrowing は自動接続**: prep #8 で既に `topaz_opt_passthrough` macro + `((typeIdent(v)){0})` absent literal の経路を emitMapMonomorphMacro に入れていたので、prep #15 の `cTypeName` / `emitUndefinedLiteral` 拡張だけで narrowing 経路がそのまま走る。`.has` / `.delete` / `.size` / `.set` だけだった prep #8 から `.get` までを補完。
+
+**回帰**: positive 1 本(`dunion_optional.ts` = `Tok | undefined` の (1) 変数初期化 + class→dunion 包装 + 3-variant switch narrowing、(2) `undefined` 再代入 + `=== undefined` narrowing、(3) `Tok | undefined` param + 早期 return narrowing、(4) `Tok | undefined` 戻り値 fn、(5) `Map<string, Tok>.get` の `Tok | undefined` 戻り + narrowing、(6) `!` で `Tok | undefined` → `Tok`、(7) `??` で fallback concrete dunion、(8) `??` chain、(9) `.data` reference identity 保存、合計 17 出力)+ fail 3 本(`_unnarrowed_fail` / `_non_optional_bang_fail` / `_non_optional_coalesce_fail`)。合計 159 ケース全 pass、parser_check も新規 4 ケース全 OK。
+
+**pass criterion 確認**: `node dist/cli.js src/ast.ts --emit-c-only -o /tmp/ast`:
+- 旧 blocker: `cTypeName: 'T | undefined' requires T to be a scalar...; got topaz_dunion_anon_0_or_anon_1_or_...`
+- 新 blocker: 無し — `/tmp/ast.c` を 1473 行で emit、`cc -O2 -Iruntime -c /tmp/ast.c` で警告無くオブジェクト化。
+
+### 11.16 残 prep 候補 (2026-05-28 prep #15 着地後)
+
+**prep #16 候補(最有力)**: `src/ast.ts` を通したので、次は `src/topaz_parser.ts` を `--emit-c-only` で走らせて新 blocker を観察する番。AST が共通なので prep #15 までの恩恵を直接受けるが、parser 固有の hit(token-level switch の break 周り、文字列 escape sequence の `\xNN` decoder、`error.message` の throw chain、`Array<Token>` の slice 経由 lookahead 等)で独立 blocker が残る可能性あり。
+
+**prep #17 候補**: **`node:child_process` の `execFileSync`** = `src/cli.ts:2` 経路。prep #13 と同じ syntactic shortcut パターンで解放可能、runtime に `topaz_exec_file_sync(cmd, args, opts)` helper を追加。
+
+**その後**: `src/convert_from_tsc.ts` / `src/codegen.ts` / `src/parser.ts` の `import * as ts from "typescript"` は **1.5-6e flip**(codegen 入力を `ts.SourceFile` → `Topaz.Module` に切替)で消える本筋。
