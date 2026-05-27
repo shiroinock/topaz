@@ -4028,6 +4028,23 @@ class Emitter {
   ): { name: string; type: TopazType } | undefined {
     if (!ts.isBinaryExpression(cond)) return undefined;
     const tok = cond.operatorToken.kind;
+    // Phase 1.5-6 prep #20: De Morgan carry for compound conditions. `A && B`
+    // is true only when both A and B hold, so a polarity-true narrowing can be
+    // read off either operand (positive); `A || B` is false only when both
+    // fail, so a polarity-false narrowing reads off either (negative). We try
+    // the left operand first and fall back to the right. The opposite polarity
+    // is indeterminate — `!(A && B)` is `!A || !B`, neither forced — so we bail.
+    // This lets an early-exit guard like
+    // `if (t.kind !== "punct" || t.op !== op) throw ...` carry `t`'s
+    // discriminator narrowing onto the statements that follow the `if`.
+    if (tok === ts.SyntaxKind.AmpersandAmpersandToken) {
+      if (!polarity) return undefined;
+      return this.extractNarrowing(cond.left, true) ?? this.extractNarrowing(cond.right, true);
+    }
+    if (tok === ts.SyntaxKind.BarBarToken) {
+      if (polarity) return undefined;
+      return this.extractNarrowing(cond.left, false) ?? this.extractNarrowing(cond.right, false);
+    }
     // Phase 1.5-3f: `<id> instanceof ClassName` narrows id from `unknown` to
     // the concrete class on the positive branch. The negative branch can't
     // narrow (id could still be any other class), so we only return for

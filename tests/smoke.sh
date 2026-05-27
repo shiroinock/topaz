@@ -118,6 +118,7 @@ run_case optional_map_get $'10\n-1\n7\n0\nalpha\nabsent\n21\n-777'
 run_case dunion_basic $'12\n9\ncircle\nsquare\ncircle\nsquare\n5\n7'
 run_case dunion_common_field $'num a@0 num(42)\nop b@3 op(+)\neof c@5 eof\nb=3'
 run_case compound_narrow $'false\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\ntrue\nfalse\nfalse'
+run_case compound_carry_narrow $'(\n<mismatch>\n<mismatch>\nparen-(\n<other>\n<other>'
 
 run_case catch_unknown $'kaboom\n42\nfizz\nrethrow\ntrue\n99\nfalse'
 
@@ -158,6 +159,7 @@ run_fail_case optional_field_access_fail examples/optional_field_access_fail.ts 
 run_fail_case dunion_field_access_fail examples/dunion_field_access_fail.ts "cannot access '.radius' on discriminated union"
 run_fail_case dunion_common_field_write_fail examples/dunion_common_field_write_fail.ts "cannot assign to '.pos' on discriminated union"
 run_fail_case compound_narrow_no_left_fail examples/compound_narrow_no_left_fail.ts "has no member 'op'"
+run_fail_case compound_carry_indeterminate_fail examples/compound_carry_indeterminate_fail.ts "cannot access '.op' on discriminated union"
 run_fail_case catch_unknown_unnarrowed_fail examples/catch_unknown_unnarrowed_fail.ts "cannot access '.msg' on \`unknown\`"
 run_fail_case template_literal_unsupported_fail examples/template_literal_unsupported_fail.ts "template literal substitution must be number / boolean / string"
 run_fail_case for_of_map_fail examples/for_of_map_fail.ts "for-of requires an Array<T>"
@@ -302,5 +304,6 @@ run_cc_warnfree_case cond_equality
 run_cc_warnfree_case dunion_optional
 run_cc_warnfree_case dunion_common_field
 run_cc_warnfree_case compound_narrow
+run_cc_warnfree_case compound_carry_narrow
 
 echo "all tests passed"
