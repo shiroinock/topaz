@@ -264,6 +264,13 @@ run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_i
 run_fail_case node_fs_namespace_import_fail examples/node_fs_namespace_import_fail.ts "namespace import of stdlib specifier 'node:fs'"
 run_fail_case node_fs_rename_import_fail examples/node_fs_rename_import_fail.ts "import rename"
 
+run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
+run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"
+run_fail_case parse_int_arg_type_fail examples/parse_int_arg_type_fail.ts "parseInt first argument must be string"
+run_fail_case parse_int_radix_type_fail examples/parse_int_radix_type_fail.ts "parseInt radix argument must be number"
+run_fail_case parse_float_arity_fail examples/parse_float_arity_fail.ts "parseFloat expects exactly one argument"
+run_fail_case parse_int_as_value_fail examples/parse_int_as_value_fail.ts "unknown identifier 'parseInt'"
+
 run_case dunion_optional $'ident=foo\nabsent\nnum=42\ni:hello\nn:7\neof\nnone\ni:a\nn:99\neof\nnone\ngot:alpha-text\nmiss\nbang:123\nnc:eof\nchain:alpha-text\nid-match'
 run_fail_case dunion_optional_unnarrowed_fail examples/dunion_optional_unnarrowed_fail.ts "cannot access '.kind' on union type"
 run_fail_case dunion_optional_non_optional_bang_fail examples/dunion_optional_non_optional_bang_fail.ts "non-null assertion"

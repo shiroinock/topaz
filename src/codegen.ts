@@ -6133,6 +6133,15 @@ class Emitter {
       if (callee.text === "readFileSync") {
         return this.emitNodeFsReadFileSync(expr);
       }
+      // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
+      // String.fromCharCode / readFileSync these are recognized only at the
+      // call site — `let f = parseInt;` still falls to "unknown identifier".
+      if (callee.text === "parseInt") {
+        return this.emitParseInt(expr);
+      }
+      if (callee.text === "parseFloat") {
+        return this.emitParseFloat(expr);
+      }
       if (this.genericFunctions.has(callee.text)) {
         const resolved = this.resolveGenericCall(callee, expr)!;
         const args = this.emitCallArgs(
@@ -6569,6 +6578,61 @@ class Emitter {
     this.checkNodeFsReadFileSyncArgs(expr);
     const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     return `topaz_fs_read_text_file(${path})`;
+  }
+
+  // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
+  // auto-radix is unsupported); both args are type-checked here so emit-side
+  // and infer-side reject in lockstep (mirrors checkNodeFsReadFileSyncArgs).
+  private checkParseIntArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 2) {
+      throw new CodegenError(
+        expr,
+        "parseInt expects exactly two arguments: (s: string, radix: number)",
+      );
+    }
+    const sType = this.inferType(expr.arguments[0]!);
+    if (sType.kind !== "string") {
+      throw new CodegenError(
+        expr.arguments[0]!,
+        `parseInt first argument must be string, got ${typeIdent(sType)}`,
+      );
+    }
+    const rType = this.inferType(expr.arguments[1]!);
+    if (rType.kind !== "number") {
+      throw new CodegenError(
+        expr.arguments[1]!,
+        `parseInt radix argument must be number, got ${typeIdent(rType)}`,
+      );
+    }
+  }
+
+  private emitParseInt(expr: ts.CallExpression): string {
+    this.checkParseIntArgs(expr);
+    const s = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const radix = this.emitWithExpected(expr.arguments[1]!, T_NUMBER);
+    return `topaz_parse_int(${s}, ${radix})`;
+  }
+
+  private checkParseFloatArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(
+        expr,
+        "parseFloat expects exactly one argument: (s: string)",
+      );
+    }
+    const sType = this.inferType(expr.arguments[0]!);
+    if (sType.kind !== "string") {
+      throw new CodegenError(
+        expr.arguments[0]!,
+        `parseFloat argument must be string, got ${typeIdent(sType)}`,
+      );
+    }
+  }
+
+  private emitParseFloat(expr: ts.CallExpression): string {
+    this.checkParseFloatArgs(expr);
+    const s = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    return `topaz_parse_float(${s})`;
   }
 
   private inferStringMethodReturn(
@@ -7558,6 +7622,15 @@ class Emitter {
         if (callee.text === "readFileSync") {
           this.checkNodeFsReadFileSyncArgs(expr);
           return T_STRING;
+        }
+        // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
+        if (callee.text === "parseInt") {
+          this.checkParseIntArgs(expr);
+          return T_NUMBER;
+        }
+        if (callee.text === "parseFloat") {
+          this.checkParseFloatArgs(expr);
+          return T_NUMBER;
         }
         if (this.genericFunctions.has(callee.text)) {
           const resolved = this.resolveGenericCall(callee, expr)!;
