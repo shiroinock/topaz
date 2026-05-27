@@ -99,6 +99,12 @@ run_case while_count "10"
 run_case for_infinite $'10\n24\n4\n25'
 run_cc_warnfree_case for_infinite
 run_fail_case for_nonbool_cond_fail examples/for_nonbool_cond_fail.ts "expected topaz_boolean, got topaz_number"
+
+run_case ternary $'10\nno\n42\n-1\nneg\nzero\npos\n8\n77\n100\n1\n2\n9\n33\n-7'
+run_cc_warnfree_case ternary
+run_fail_case ternary_nonbool_cond_fail examples/ternary_nonbool_cond_fail.ts "expected topaz_boolean"
+run_fail_case ternary_incompatible_branches_fail examples/ternary_incompatible_branches_fail.ts "branches have incompatible types"
+
 run_case boolean_print $'true\nfalse\ntrue\ntrue'
 run_case mod_check $'1\n1\n-1\n1.5'
 run_case switch_check $'1699\n22'

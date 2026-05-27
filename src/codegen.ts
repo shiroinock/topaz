@@ -5864,7 +5864,75 @@ class Emitter {
     if (ts.isNewExpression(expr)) {
       return this.emitNewExpression(expr, /* expected */ undefined);
     }
+    if (ts.isConditionalExpression(expr)) {
+      return this.emitConditional(expr, /* expected */ undefined);
+    }
     unsupported(expr, "expression");
+  }
+
+  // Phase 1.5-6 prep #25: run `fn` with `n`'s narrowing installed on a fresh
+  // scope frame (no-op when `n` is undefined). Mirrors the push / narrow / pop
+  // dance the `if` / `&&` / `||` handlers do, factored out so the ternary's
+  // two branches can each be inferred / emitted under the polarity-correct
+  // narrowing read off the condition.
+  private underNarrowing<T>(
+    n: { name: string; type: TopazType } | undefined,
+    fn: () => T,
+  ): T {
+    if (!n) return fn();
+    this.scope.push();
+    try {
+      this.scope.narrow(n.name, n.type);
+      return fn();
+    } finally {
+      this.scope.pop();
+    }
+  }
+
+  // Phase 1.5-6 prep #25: conditional (ternary) `cond ? a : b`. The condition
+  // is strict boolean (same divergence as `if` / `while`). Each branch is
+  // emitted under the narrowing the condition implies (positive for the true
+  // arm, negative for the false arm), so `x !== undefined ? x.f : ...` reads
+  // the narrowed `x` — the same `extractNarrowing` path `if` uses. Both arms go
+  // through `emitWithExpected(_, target)` so they coerce to one shared C type
+  // (the C ternary requires both operands type-compatible); `target` is the
+  // contextual expected type when present, else the common branch type.
+  private emitConditional(
+    expr: ts.ConditionalExpression,
+    expected: TopazType | undefined,
+  ): string {
+    this.expectType(expr.condition, T_BOOLEAN);
+    const nTrue = this.extractNarrowing(expr.condition, true);
+    const nFalse = this.extractNarrowing(expr.condition, false);
+    const cond = this.emitExpression(expr.condition);
+    const target = expected ?? this.conditionalResultType(expr, nTrue, nFalse);
+    const a = this.underNarrowing(nTrue, () => this.emitWithExpected(expr.whenTrue, target));
+    const b = this.underNarrowing(nFalse, () => this.emitWithExpected(expr.whenFalse, target));
+    return `(${cond} ? (${a}) : (${b}))`;
+  }
+
+  // Phase 1.5-6 prep #25: the result type of a ternary with no contextual
+  // expected type. If the branches share a type (or one is assignable to the
+  // other — class -> interface / class -> dunion / dunion widening) the wider
+  // wins; a bare-`undefined` branch lifts the other to `T | undefined`. Two
+  // genuinely unrelated types are rejected (annotate the target to pick one) —
+  // we never synthesize an arbitrary multi-member union (unsupported type).
+  private conditionalResultType(
+    expr: ts.ConditionalExpression,
+    nTrue: { name: string; type: TopazType } | undefined,
+    nFalse: { name: string; type: TopazType } | undefined,
+  ): TopazType {
+    const tt = this.underNarrowing(nTrue, () => this.inferType(expr.whenTrue));
+    const tf = this.underNarrowing(nFalse, () => this.inferType(expr.whenFalse));
+    if (typeEq(tt, tf)) return tt;
+    if (this.isAssignableTo(tf, tt)) return tt;
+    if (this.isAssignableTo(tt, tf)) return tf;
+    if (tt.kind === "undefined") return makeUnion([tf, T_UNDEFINED]);
+    if (tf.kind === "undefined") return makeUnion([tt, T_UNDEFINED]);
+    throw new CodegenError(
+      expr,
+      `conditional (?:) branches have incompatible types: ${typeIdent(tt)} vs ${typeIdent(tf)} (annotate the target to pick one)`,
+    );
   }
 
   private emitArrayLiteral(
@@ -7264,6 +7332,14 @@ class Emitter {
       return T_STRING;
     }
     if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
+    // Phase 1.5-6 prep #25: a ternary's type is the common type of its two
+    // branches, each inferred under the narrowing the condition implies.
+    if (ts.isConditionalExpression(expr)) {
+      this.expectType(expr.condition, T_BOOLEAN);
+      const nTrue = this.extractNarrowing(expr.condition, true);
+      const nFalse = this.extractNarrowing(expr.condition, false);
+      return this.conditionalResultType(expr, nTrue, nFalse);
+    }
     // Phase 1.5-6 prep: object literal expressions have no inferable type on
     // their own — they need a contextual anonymous-class target. Reject here
     // so the error surfaces at the literal site instead of inside a deeper
@@ -8068,6 +8144,13 @@ class Emitter {
     // for interface). Without a `T | undefined` expected this is a type error.
     if (ts.isIdentifier(expr) && expr.text === "undefined") {
       return this.emitUndefinedLiteral(expected, expr);
+    }
+    // Phase 1.5-6 prep #25: thread the expected type into both ternary arms so
+    // each coerces to it (class -> interface / dunion, T -> T | undefined) and
+    // the two C operands share a type. Must run before the inferType fallback,
+    // which has no contextual target to coerce against.
+    if (ts.isConditionalExpression(expr)) {
+      return this.emitConditional(expr, expected);
     }
     // Phase 1.5-3.5e: arrows pick up param/return types contextually from the
     // expected fn type when annotations are missing. Pass expected through so
