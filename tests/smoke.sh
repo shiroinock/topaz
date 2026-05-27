@@ -76,6 +76,23 @@ run_fail_case() {
   echo "PASS [$label]"
 }
 
+# Phase 1.5-6 prep: assert the emitted C compiles clean under `-Wall -Wextra`.
+# The self-hosting pass criterion requires warning-free emission; this gate
+# defends specific constructs (e.g. equality conditions, which used to emit
+# `if ((a == b))` and trip -Wparentheses-equality) against regressions.
+run_cc_warnfree_case() {
+  local name="$1"
+  node dist/cli.js "examples/$name.ts" --emit-c-only -o "build/$name" > /dev/null
+  local warn
+  warn=$(cc -O2 -Iruntime -Wall -Wextra -c "build/$name.c" -o "build/$name.o" 2>&1)
+  if [[ -n "$warn" ]]; then
+    echo "FAIL [$name cc-warnfree]: emitted C is not warning-free under -Wall -Wextra" >&2
+    printf '%s\n' "$warn" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [$name cc-warnfree]"
+}
+
 run_case fib "5702887"
 run_case loop_sum "5050"
 run_case while_count "10"
@@ -275,5 +292,9 @@ run_case dunion_optional $'ident=foo\nabsent\nnum=42\ni:hello\nn:7\neof\nnone\ni
 run_fail_case dunion_optional_unnarrowed_fail examples/dunion_optional_unnarrowed_fail.ts "cannot access '.kind' on union type"
 run_fail_case dunion_optional_non_optional_bang_fail examples/dunion_optional_non_optional_bang_fail.ts "non-null assertion"
 run_fail_case dunion_optional_non_optional_coalesce_fail examples/dunion_optional_non_optional_coalesce_fail.ts "left operand to be"
+
+run_case cond_equality $'if-eq\nif-ne\nand\nor\nmixed\ndiffer\n3\n6\n2'
+run_cc_warnfree_case cond_equality
+run_cc_warnfree_case dunion_optional
 
 echo "all tests passed"

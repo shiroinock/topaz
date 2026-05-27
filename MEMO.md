@@ -275,7 +275,7 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 - [x] **1.5-3.5 (a〜h-spread) 完了** — template literal / for-of over Array / `!` / `??` / `?.` / arrow + closure / Array higher-order 5 種 / for-of over Set & Map.{values,keys} / Iterator<T> / Array<fn> storage / for-of over .entries() / array literal spread。決定ログは `docs/archive/implementation-log.md`。
 - [ ] **generic class の未対応領域の棚卸し**(`class Box<T> implements I` / type parameter constraint / default type parameter / generic class を Map / Set の key にする方向)。self-hosting で踏むものが 1 つでもあれば 1.5-N のいずれかに組み込む、踏まないなら Phase 2 に降ろす。src/ では generic class / generic function はユーザー定義 0 件のため、self-hosting からの逆流は今のところ無い。
 - [ ] generic 関数の戻り値が `Array<T>` の場合の monomorph 収集を、generic 関数経路と非 generic 経路で確実に同じ slot へ流すパスをドキュメント化(現状は self-hosting で踏むまで顕在化しない領域)。
-- [ ] **codegen 二重括弧の `-Wparentheses-equality` 警告除去**。汎用 binary emit (`src/codegen.ts:5664`) が常に `(${lhs} ${op} ${rhs})` で包むため、`===` / `!==` 比較を `if` / `while` / `for` の条件に直接書くと `if ((tag == 1.0))` となり cc が `-Wparentheses-equality` を出す(実害なし、既存 `dunion_optional` 等で発生)。self-hosting の pass criterion「emit C が `cc -Wall -Wextra` で警告なし」に必要。条件 emit 側で外側括弧を 1 枚剥がすか、equality を非括弧で吐く分岐を入れる。dev experience / codegen 品質改善カテゴリ。
+- [x] **codegen 二重括弧の `-Wparentheses-equality` 警告除去**。汎用 binary emit で op が `==` / `!=` の時だけ外側括弧を付けない分岐を追加(`if (a == b)`)。C と TS で equality の優先順位が一致し、TS 優先順位規則上 equality が高優先演算子の非括弧オペランドにならない(明示括弧は ParenthesizedExpression で再 wrap)ため意味不変。決定ログは `docs/adr/0004`。回帰 `cond_equality` + 新ヘルパ `run_cc_warnfree_case`(emit-C を `-Wall -Wextra` で warning ゼロ assert)。
 
 ---
 

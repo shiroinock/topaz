@@ -5661,7 +5661,17 @@ class Emitter {
         }
       }
       const op = this.binaryOp(expr.operatorToken);
-      return `(${this.emitExpression(expr.left)} ${op} ${this.emitExpression(expr.right)})`;
+      const lhs = this.emitExpression(expr.left);
+      const rhs = this.emitExpression(expr.right);
+      // `==` / `!=` carry the same precedence in C as `===` / `!==` in TS, and
+      // TS precedence guarantees an equality is never an unparenthesized
+      // operand of a higher-precedence op (explicit source parens arrive as a
+      // ParenthesizedExpression and re-wrap at the paren branch). So the outer
+      // parens the generic wrap would add are always redundant for equality —
+      // dropping them avoids clang's -Wparentheses-equality on `if ((a == b))`
+      // (the operands keep their own wraps, so nested forms stay correct).
+      if (op === "==" || op === "!=") return `${lhs} ${op} ${rhs}`;
+      return `(${lhs} ${op} ${rhs})`;
     }
     if (ts.isCallExpression(expr)) {
       return this.emitCall(expr);
