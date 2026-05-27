@@ -8212,6 +8212,21 @@ class Emitter {
     // rejected. Non-anon expected types (concrete class / iface / scalar /
     // container) reject the literal here.
     if (ts.isObjectLiteralExpression(expr)) {
+      // Phase 1.5-6 prep #16: `dunion | undefined` (or `anon | undefined`)
+      // contextual target (e.g. `let b: ForOfBinding | undefined = { ... }`).
+      // Strip the `undefined` variant, emit the literal against the inner type
+      // (dunion branch below or the anon-class fallthrough), then widen via
+      // applyCoercion. The widening is a no-op on the C representation: the
+      // dunion / anon-class value is a fat struct / pointer whose shape already
+      // matches the `T | undefined` slot (see emitUndefinedLiteral's dunion
+      // `.data == NULL` sentinel and applyCoercion's union branch).
+      if (expected.kind === "union" && containsUndefined(expected)) {
+        const inner = withoutUndefined(expected);
+        if (inner) {
+          const innerC = this.emitWithExpected(expr, inner);
+          return this.applyCoercion(innerC, inner, expected, expr);
+        }
+      }
       // Phase 1.5-6 prep #11: dunion contextual target. Find the discriminator
       // property (`kind: "..."`) in the literal, narrow to the variant class
       // whose discriminator string-literal field matches, recurse with the
