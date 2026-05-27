@@ -5745,6 +5745,9 @@ class Emitter {
       if (isSetType(baseType)) {
         return this.emitSetMethodCall(expr, callee, baseType);
       }
+      if (baseType.kind === "string") {
+        return this.emitStringMethodCall(expr, callee);
+      }
       if (isClassType(baseType)) {
         return this.emitClassMethodCall(expr, callee, baseType);
       }
@@ -6048,6 +6051,90 @@ class Emitter {
       return `topaz_array_${name}_join(${base}, ${sepStr})`;
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+  }
+
+  // Phase 1.5-6 prep #10: String.prototype.charCodeAt / .slice. Arguments
+  // are number-EXACT (no number-literal-via-string coercion), and missing
+  // slice args lower to `(double)NAN` so topaz_slice_normalize picks the
+  // default. charCodeAt requires exactly one argument; slice accepts 0..2.
+  private emitStringMethodCall(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+  ): string {
+    const method = callee.name.text;
+    const base = this.emitExpression(callee.expression);
+    if (method === "charCodeAt") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "String.charCodeAt expects exactly one argument");
+      }
+      const argType = this.inferType(expr.arguments[0]!);
+      if (argType.kind !== "number") {
+        throw new CodegenError(
+          expr.arguments[0]!,
+          `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
+        );
+      }
+      const idx = this.emitWithExpected(expr.arguments[0]!, T_NUMBER);
+      return `topaz_string_char_code_at(${base}, ${idx})`;
+    }
+    if (method === "slice") {
+      if (expr.arguments.length > 2) {
+        throw new CodegenError(expr, "String.slice expects at most two arguments");
+      }
+      for (const arg of expr.arguments) {
+        const at = this.inferType(arg);
+        if (at.kind !== "number") {
+          throw new CodegenError(
+            arg,
+            `String.slice argument must be number, got ${typeIdent(at)}`,
+          );
+        }
+      }
+      const startExpr = expr.arguments.length >= 1
+        ? `(double)(${this.emitWithExpected(expr.arguments[0]!, T_NUMBER)})`
+        : "(double)NAN";
+      const endExpr = expr.arguments.length >= 2
+        ? `(double)(${this.emitWithExpected(expr.arguments[1]!, T_NUMBER)})`
+        : "(double)NAN";
+      return `topaz_string_slice(${base}, ${startExpr}, ${endExpr})`;
+    }
+    throw new CodegenError(callee, `unsupported method '.${method}' on topaz_string`);
+  }
+
+  private inferStringMethodReturn(
+    expr: ts.CallExpression,
+    callee: ts.PropertyAccessExpression,
+  ): TopazType {
+    const method = callee.name.text;
+    if (method === "charCodeAt") {
+      if (expr.arguments.length !== 1) {
+        throw new CodegenError(expr, "String.charCodeAt expects exactly one argument");
+      }
+      const argType = this.inferType(expr.arguments[0]!);
+      if (argType.kind !== "number") {
+        throw new CodegenError(
+          expr.arguments[0]!,
+          `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
+        );
+      }
+      return T_NUMBER;
+    }
+    if (method === "slice") {
+      if (expr.arguments.length > 2) {
+        throw new CodegenError(expr, "String.slice expects at most two arguments");
+      }
+      for (const arg of expr.arguments) {
+        const at = this.inferType(arg);
+        if (at.kind !== "number") {
+          throw new CodegenError(
+            arg,
+            `String.slice argument must be number, got ${typeIdent(at)}`,
+          );
+        }
+      }
+      return T_STRING;
+    }
+    throw new CodegenError(callee, `unsupported method '.${method}' on topaz_string`);
   }
 
   private emitMapMethodCall(
@@ -6951,6 +7038,9 @@ class Emitter {
             );
           }
           throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+        }
+        if (baseType.kind === "string") {
+          return this.inferStringMethodReturn(expr, callee);
         }
         if (isClassType(baseType)) {
           const cls = this.classes.get(classNameOf(baseType)!)!;
