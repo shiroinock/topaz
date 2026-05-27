@@ -6506,6 +6506,44 @@ class Emitter {
     return `({ ${fnTypeName} ${tmp} = ${calleeStr}; ${tmp}.fn(${callArgs}); })`;
   }
 
+  // Phase 1.5-6 prep: lower an IIFE `(arrow)(args)` where the arrow has no
+  // return annotation, using the call-site `expected` type as the arrow's
+  // contextual return type. Params come from the inferred argument types
+  // (annotated arrow params override them, mirroring inferArrowType /
+  // emitArrowFunction), so an unannotated `() => { ... }` block body emits its
+  // returns coerced to `expected`. Dispatch reuses the same fat-pointer call
+  // form as emitFnValueCall (callee evaluated once into a temp).
+  private emitContextualIIFE(
+    expr: ts.CallExpression,
+    arrow: ts.ArrowFunction,
+    expected: TopazType,
+  ): string {
+    for (const a of expr.arguments) {
+      if (ts.isSpreadElement(a)) {
+        throw new CodegenError(a, "spread in call arguments is unsupported");
+      }
+    }
+    const expectedFn: TopazType = {
+      kind: "fn",
+      params: expr.arguments.map((a, i) => ({
+        name: `__p${i}`,
+        type: this.inferType(a),
+        isOptional: false,
+      })),
+      returnType: expected,
+    };
+    const fnType = this.inferArrowType(arrow, expectedFn);
+    if (fnType.kind !== "fn") throw new Error("emitContextualIIFE: not fn");
+    const arrowStr = this.emitArrowFunction(arrow, expectedFn);
+    const args = expr.arguments
+      .map((a, i) => this.emitWithExpected(a, fnType.params[i]!.type))
+      .join(", ");
+    const tmp = `__topaz_fc_${this.tmpCounter++}`;
+    const fnTypeName = typeIdent(fnType);
+    const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
+    return `({ ${fnTypeName} ${tmp} = ${arrowStr}; ${tmp}.fn(${callArgs}); })`;
+  }
+
   private emitArrayMethodCall(
     expr: ts.CallExpression,
     callee: ts.PropertyAccessExpression,
@@ -8397,6 +8435,21 @@ class Emitter {
         return this.emitUndefinedLiteral(fty, expr);
       });
       return `topaz_class_${className}_new(${args.join(", ")})`;
+    }
+    // Phase 1.5-6 prep: IIFE `(() => { ... })(args)` whose arrow lacks a return
+    // annotation. Such an arrow has no self-contained type — we don't infer
+    // block-body returns — so the plain inferType fallthrough below would throw
+    // "arrow requires an explicit return type". But at an emitWithExpected site
+    // the call's result type IS the arrow's return type, so supply `expected`
+    // contextually (see emitContextualIIFE). Arrows WITH a return annotation
+    // type on their own and fall through to the normal call path (their return
+    // may differ from `expected`, so we must not override it).
+    if (ts.isCallExpression(expr) && !expr.questionDotToken) {
+      let callee: ts.Expression = expr.expression;
+      while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+      if (ts.isArrowFunction(callee) && !callee.type) {
+        return this.emitContextualIIFE(expr, callee, expected);
+      }
     }
     const actual = this.inferType(expr);
     // Phase 1.5-6 prep: `void` has no value representation, so a void-returning

@@ -105,6 +105,10 @@ run_cc_warnfree_case ternary
 run_fail_case ternary_nonbool_cond_fail examples/ternary_nonbool_cond_fail.ts "expected topaz_boolean"
 run_fail_case ternary_incompatible_branches_fail examples/ternary_incompatible_branches_fail.ts "branches have incompatible types"
 
+run_case iife_contextual_return $'30\ntwo\n7\n5\n9\n0\n7'
+run_cc_warnfree_case iife_contextual_return
+run_fail_case iife_no_context_fail examples/iife_no_context_fail.ts "arrow function requires an explicit return type annotation"
+
 run_case boolean_print $'true\nfalse\ntrue\ntrue'
 run_case mod_check $'1\n1\n-1\n1.5'
 run_case switch_check $'1699\n22'
