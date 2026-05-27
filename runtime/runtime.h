@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 typedef double topaz_number;
 typedef bool topaz_boolean;
@@ -215,6 +216,16 @@ static inline topaz_string topaz_fs_read_text_file(topaz_string path) {
   buf[size] = '\0';
   topaz_string r = { buf, (size_t)size };
   return r;
+}
+
+// Phase 1.5-6 prep #17: node:fs.existsSync(path) -> bool. access(F_OK) probe;
+// returns true for files and directories alike (matches Node existsSync). The
+// path is copied into the arena to NUL-terminate (topaz_string is not).
+static inline bool topaz_fs_exists(topaz_string path) {
+  char *cpath = (char *)topaz_arena_alloc(path.len + 1);
+  memcpy(cpath, path.data, path.len);
+  cpath[path.len] = '\0';
+  return access(cpath, F_OK) == 0;
 }
 
 // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s) for the

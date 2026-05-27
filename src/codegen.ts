@@ -6451,6 +6451,11 @@ class Emitter {
       if (callee.text === "readFileSync") {
         return this.emitNodeFsReadFileSync(expr);
       }
+      // Phase 1.5-6 prep #17: `existsSync(path)` -> bool, same syntactic
+      // shortcut path as readFileSync (loader accepts the `node:fs` specifier).
+      if (callee.text === "existsSync") {
+        return this.emitNodeFsExistsSync(expr);
+      }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
@@ -6934,6 +6939,31 @@ class Emitter {
     this.checkNodeFsReadFileSyncArgs(expr);
     const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     return `topaz_fs_read_text_file(${path})`;
+  }
+
+  // Phase 1.5-6 prep #17: `existsSync(path)` の引数検査。第 1 引数は string 一個
+  // のみ (Node の options 第 2 引数は未対応)。emit/infer 両経路で同じ reject。
+  private checkNodeFsExistsSyncArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(
+        expr,
+        "existsSync expects exactly one argument: (path: string)",
+      );
+    }
+    const pathArg = expr.arguments[0]!;
+    const pathType = this.inferType(pathArg);
+    if (pathType.kind !== "string") {
+      throw new CodegenError(
+        pathArg,
+        `existsSync path argument must be string, got ${typeIdent(pathType)}`,
+      );
+    }
+  }
+
+  private emitNodeFsExistsSync(expr: ts.CallExpression): string {
+    this.checkNodeFsExistsSyncArgs(expr);
+    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    return `topaz_fs_exists(${path})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
@@ -8019,6 +8049,11 @@ class Emitter {
         if (callee.text === "readFileSync") {
           this.checkNodeFsReadFileSyncArgs(expr);
           return T_STRING;
+        }
+        // Phase 1.5-6 prep #17: existsSync types as boolean.
+        if (callee.text === "existsSync") {
+          this.checkNodeFsExistsSyncArgs(expr);
+          return T_BOOLEAN;
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
         if (callee.text === "parseInt") {

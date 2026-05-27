@@ -309,9 +309,14 @@ run_fail_case node_fs_read_file_path_type_fail examples/node_fs_read_file_path_t
 run_fail_case node_fs_read_file_encoding_not_literal_fail examples/node_fs_read_file_encoding_not_literal_fail.ts "encoding argument must be the string literal"
 run_fail_case node_fs_read_file_unknown_encoding_fail examples/node_fs_read_file_unknown_encoding_fail.ts "encoding argument must be \"utf8\""
 run_fail_case node_fs_read_file_as_value_fail examples/node_fs_read_file_as_value_fail.ts "unknown identifier 'readFileSync'"
-run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'existsSync'"
+run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'writeFileSync'"
 run_fail_case node_fs_namespace_import_fail examples/node_fs_namespace_import_fail.ts "namespace import of stdlib specifier 'node:fs'"
 run_fail_case node_fs_rename_import_fail examples/node_fs_rename_import_fail.ts "import rename"
+
+run_case node_fs_exists $'true\nfalse\ntrue\nfound\ntrue\nfalse\ntrue\ntrue'
+run_fail_case node_fs_exists_arity_fail examples/node_fs_exists_arity_fail.ts "existsSync expects exactly one argument"
+run_fail_case node_fs_exists_path_type_fail examples/node_fs_exists_path_type_fail.ts "existsSync path argument must be string"
+run_fail_case node_fs_exists_as_value_fail examples/node_fs_exists_as_value_fail.ts "unknown identifier 'existsSync'"
 
 run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
 run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"

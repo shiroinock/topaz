@@ -133,9 +133,9 @@ function validateImport(filePath: string, stmt: ts.ImportDeclaration): void {
 
 // Phase 1.5-6 prep #13: stdlib specifier。loader は visit を skip し、import
 // 経由で取り込んだ識別子は codegen 側で syntactic shortcut として処理する。
-// 現状は `node:fs` から `readFileSync` 1 個だけを受理。
+// 現状は `node:fs` から `readFileSync` / `existsSync` (1.5-6 prep #17) を受理。
 const STDLIB_SPECIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["node:fs", new Set(["readFileSync"])],
+  ["node:fs", new Set(["readFileSync", "existsSync"])],
 ]);
 
 function isStdlibSpecifier(spec: string): boolean {
