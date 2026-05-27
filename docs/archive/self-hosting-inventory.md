@@ -418,3 +418,9 @@ src/ で grep 実数を確認した結果、以下は 0 件 or reject 文言の�
 
 **判断**: prep #9 として scalar literal 初期化子に限定して file-static 化を実装する。lexer.ts / parser.ts / codegen.ts の `const` 利用箇所のうち、scalar literal で初期化されているもののみ hoist 対象。string literal / object literal / `new` / 関数呼び出しは main() body 残置のまま(別途 closure 拡張 or 別 sub-step)。
 
+### 11.7 prep #9 着地 (2026-05-27)
+
+**完了**: module-level `const NAME: T = LIT;` を `static const T NAME = LIT;` に hoist。受理する initializer は (a) `NumericLiteral`、(b) `TrueKeyword` / `FalseKeyword`、(c) 単項 `+` / `-` を冠した `NumericLiteral` のみ(scalar 3 の `number` / `boolean` 限定、`string` リテラルは C の `topaz_string` compound literal 化が別 step なので main() body 残置)。`Emitter.tryHoistModuleConst` が判定 + (1) scope.stack[0] へ binding 登録、(2) `static const ...` 行を C 出力に追加、(3) main() body 走査時に hoisted statement を skip する 3 操作を 1 chokepoint で実施。出力 slot は `monomorphFwdSlot` の直後・interface vtable wrapper の前(全 static C 関数より前)に配置、annotation がある場合は inferred lit 型と EXACT 一致を要求(不一致なら hoist せず regular emitVarDecls 経路に落として通常の型エラーを surface)。`let` / 複数 declaration / destructuring / 非 scalar literal initializer / annotation 型不一致は全部 hoist 対象外で main() body に残るため、関数 body からの reference は引き続き `unknown identifier` で reject(`module_const_hoist_let_fail` / `module_const_hoist_nonscalar_fail` で回帰)。
+
+**pass criterion 確認**: `node dist/cli.js src/lexer.ts --emit-c-only` → 新規 blocker = `unsupported method '.charCodeAt' on topaz_string` (lexer.ts:193)。`CHAR_0` 系の hoist は通り、`peek(offset)` メソッド body が runtime に存在しない string メソッドを叩いて落ちる位置まで前進。次の prep #10 は string 系メソッド(`.charCodeAt(i): number` / `.slice(s, e)?: string` 等)を runtime + codegen に追加。
+

@@ -1368,6 +1368,33 @@ class Emitter {
     const monomorphFwdSlot = out.length;
     out.push("");
 
+    // Phase 1.5-6 prep #9: module-level `const` decls with scalar-literal
+    // initializers are hoisted to file scope as `static const T NAME = LIT;`
+    // and registered in scope.stack[0] so emitted static C functions
+    // (user fns, class methods, iface wrappers) can resolve them. Without
+    // this, top-level consts live only in main()'s frame and function bodies
+    // get "unknown identifier" at codegen time. Only number / boolean literal
+    // (incl. unary +/- on numeric literal) qualify — string / object / `new` /
+    // call initializers stay in main() body (handled in a later step). The
+    // hoisted statement is skipped in the main() loop below so it doesn't
+    // re-emit as a local.
+    const moduleConstSlot = out.length;
+    out.push("");
+    const hoistedTopLevel: Set<ts.Statement> = new Set();
+    {
+      const hoistLines: string[] = [];
+      for (const stmt of topLevel) {
+        const line = this.tryHoistModuleConst(stmt);
+        if (line !== undefined) {
+          hoistedTopLevel.add(stmt);
+          hoistLines.push(line);
+        }
+      }
+      if (hoistLines.length > 0) {
+        out[moduleConstSlot] = hoistLines.join("\n") + "\n";
+      }
+    }
+
     // Emit per-(interface, implementing-class) wrapper functions and the
     // static const vtable instances. These must come before user function /
     // class method definitions so coercion sites (`&topaz_iface_I_for_C_vt`)
@@ -1421,6 +1448,11 @@ class Emitter {
     out.push("int main(void) {");
     this.scope.push();
     for (const stmt of topLevel) {
+      // Phase 1.5-6 prep #9: hoisted module consts are already emitted at
+      // file scope and registered in scope.stack[0]; emitting them again as
+      // local decls would shadow the hoisted bindings inside main() body and
+      // duplicate the storage.
+      if (hoistedTopLevel.has(stmt)) continue;
       out.push(this.emitStatement(stmt, 1));
     }
     this.scope.pop();
@@ -3953,6 +3985,67 @@ class Emitter {
     const inner = this.emitStatement(stmt, indent + 1);
     this.scope.pop();
     return `${pad}{\n${inner}\n${pad}}`;
+  }
+
+  // Phase 1.5-6 prep #9: try to hoist a top-level `const NAME: T = LIT;` to
+  // a file-static `static const T NAME = LIT;`. Returns the C declaration
+  // line on success (and registers the binding in scope.stack[0] as a
+  // side effect); returns undefined for any decl that doesn't qualify
+  // (let, multi-binding list, destructuring, no initializer, non-scalar
+  // literal initializer, type-annotation mismatch, etc.) — those fall
+  // through to the regular emitVarDecls path inside main() body.
+  private tryHoistModuleConst(stmt: ts.Statement): string | undefined {
+    if (!ts.isVariableStatement(stmt)) return undefined;
+    const list = stmt.declarationList;
+    const isConst = (list.flags & ts.NodeFlags.Const) !== 0;
+    if (!isConst) return undefined;
+    if (list.declarations.length !== 1) return undefined;
+    const d = list.declarations[0]!;
+    if (!ts.isIdentifier(d.name)) return undefined;
+    if (!d.initializer) return undefined;
+    const lit = this.tryScalarLiteralInit(d.initializer);
+    if (!lit) return undefined;
+    let type: TopazType = lit.type;
+    if (d.type) {
+      const annotated = this.typeFromAnnotation(d.type, d);
+      if (!typeEq(annotated, lit.type)) return undefined;
+      type = annotated;
+    }
+    const name = d.name.text;
+    this.scope.declare(name, type, /* isConst */ true, d);
+    return `static const ${cTypeName(type)} ${name} = ${lit.cExpr};`;
+  }
+
+  // Phase 1.5-6 prep #9: recognize the set of initializers that are
+  // representable as a C compile-time constant expression of scalar type.
+  // Only number / boolean literals (with optional unary +/- on number)
+  // qualify; string literals are kept in main() body for now because the
+  // `topaz_string` struct literal form needs separate accommodation.
+  private tryScalarLiteralInit(
+    expr: ts.Expression,
+  ): { type: TopazType; cExpr: string } | undefined {
+    if (ts.isNumericLiteral(expr)) {
+      const t = expr.text;
+      return { type: T_NUMBER, cExpr: /[.eE]/.test(t) ? t : `${t}.0` };
+    }
+    if (expr.kind === ts.SyntaxKind.TrueKeyword) {
+      return { type: T_BOOLEAN, cExpr: "true" };
+    }
+    if (expr.kind === ts.SyntaxKind.FalseKeyword) {
+      return { type: T_BOOLEAN, cExpr: "false" };
+    }
+    if (
+      ts.isPrefixUnaryExpression(expr) &&
+      (expr.operator === ts.SyntaxKind.MinusToken ||
+        expr.operator === ts.SyntaxKind.PlusToken) &&
+      ts.isNumericLiteral(expr.operand)
+    ) {
+      const t = expr.operand.text;
+      const num = /[.eE]/.test(t) ? t : `${t}.0`;
+      const op = expr.operator === ts.SyntaxKind.MinusToken ? "-" : "+";
+      return { type: T_NUMBER, cExpr: `${op}${num}` };
+    }
+    return undefined;
   }
 
   private emitVarDecls(list: ts.VariableDeclarationList, indent: number): string {
