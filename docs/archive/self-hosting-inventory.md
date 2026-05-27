@@ -330,3 +330,91 @@ src/ で grep 実数を確認した結果、以下は 0 件 or reject 文言の�
 
 4. **call-arg spread (`f(...args)`) / `f?.()` optional call** は src/ で使われていないため、引き続き reject のまま 1.5-6 通過可能(将来 needed になったら別 step)。
 
+## 11. Actual self-hosting epoch 入口の hit 棚卸し (2026-05-27, prep 7 ステップ完了直後)
+
+`npm run build` 後に `node dist/cli.js src/<file>.ts --emit-c-only` を src/ 各ファイルに対して順番に叩いた実測結果。1.5-6e flip 着地前の現状確認。
+
+### 11.1 ファイル別 first hit 一覧
+
+| ファイル | 行数 | 最初の CodegenError / LoaderError | 種別 |
+|---|---:|---|---|
+| `ast.ts` | 12.4 KB | **✓ 通過**(C 出力成功、ast.c 生成) | — |
+| `lexer.ts` | 21.6 KB | `lexer.ts:181: no Array monomorph for element type topaz_dunion_anon_0_or_..._anon_9`(`tokens: Array<Token> = []`、Token は 11 variant 構造的 dunion) | **NEW: container-of-dunion 未対応** |
+| `loader.ts` | 5.6 KB | `loader.ts:1:28: non-relative module specifier 'node:fs' is unsupported` | 既知: §10.5 の 1.5-6f |
+| `parser.ts` | 0.3 KB | `parser.ts:1:30: non-relative module specifier 'node:fs' is unsupported` | 既知: 1.5-6f |
+| `cli.ts` | 4.5 KB | `cli.ts:2:30: non-relative module specifier 'node:child_process' is unsupported` | 既知: 1.5-6f |
+| `parser_check.ts` | 4.5 KB | `parser_check.ts:13:10: import rename ('import { a as b }') is unsupported` | 既知: §10.5 で「Node 専用 dev tool として扱う」案 |
+| `topaz_parser.ts` | 53.7 KB | `topaz_parser.ts:48:30: non-relative module specifier 'node:fs' is unsupported`(末尾 `parseFile` の `readFileSync` のみ) | 既知: 1.5-6f / または entry を別 file に分割 |
+| `convert_from_tsc.ts` | 47.1 KB | `convert_from_tsc.ts:19:1: namespace import ('import * as X from "..."')` | **1.5-6e flip で消滅予定**(本ファイルごと oracle 用に Node 専用化で吸収可) |
+| `codegen.ts` | 317.9 KB | `codegen.ts:1:1: namespace import ('import * as X from "..."')`(`import * as ts from "typescript"`) | **1.5-6e flip で消滅予定**(`import * as Topaz from "./ast"` に置換) |
+
+### 11.2 NEW finding: container-of-dunion 未対応 = 1.5-6 prep #8 候補
+
+§10.2 の「残 4 syntactic ブロッカー」では拾えていなかった本物の新規ブロッカー。`elemTag(t)` の `default` branch が `union` / `iter` 以外の不可型(=`dunion`)を struct-shape mismatch メッセージで落とすため、Topaz サブセット内で書かれた lexer / parser / codegen のいずれも「Array<discriminated union>」を踏んだ瞬間に止まる。
+
+**根拠 — Array of dunion を使うサイト(grep 実測)**:
+
+- `lexer.ts:181 tokens: Array<Token> = []`(Token = 11 variant dunion、即時 hit)
+- `ast.ts:316 | { kind: "arrow_block_body"; stmts: Array<Stmt> }` 他、Stmt / Expr / Decl / ModuleItem / TypeNode / ClassMember / InterfaceMember 各々の `Array<*>` 18 箇所(ast.ts 自体は type-only なので未 hit、しかし parser / codegen がインスタンス化すれば全部 hit)
+- `codegen.ts:227 const flat: TopazType[] = []` 他、`Array<TopazType>` を多数(`paramTypes` / `typeArgs` / `mangleMonomorph` args など 8 箇所、parser の `flat` 引数 / 内部 collect バッファとして実体化される)
+
+**実装方針(初手見立て)**:
+
+- elemTag に `dunion` case を追加: `topaz_dunion_<variants-sorted>` を `dunion_<variants-sorted>` などに短縮した tag を返し、Array / Map / Set の monomorph キーに混ぜる。
+- storage 表現: dunion は variant ごとの class instance ポインタの「tagged pointer」より、現状の `topaz_class_<C> *` を `void *` で包んで `__topaz_class_tag` で discriminate するパターンが綺麗(field 読み書きは narrow 後の `instanceof` 経由を要求、union の field shape 不一致を type system が保証)。
+- `recordArrayMonomorph` / `recordMapMonomorph` / `recordSetMonomorph` の dunion 受理ゲートを開ける(struct field 型は variant 共通の `void *`、emit ヘルパは既存の anon class 経路を再利用)。
+- 制約: variant が同一 anon class shape 群か、または `instanceof` の右辺で narrow 可能な concrete class 群でのみ受理(generic class monomorph 同一性は引き続き concrete name で見る)。
+- 並列で `for-of over Array<dunion>` の iteration が動くこと、`.map` / `.filter` などの higher-order に dunion elem を渡せること、`.push` / `[i] = v` の RHS が variant に対して narrowing なしで自動 widen することを check(class→iface coercion と同じ「dunion 内 variant への coercion」)。
+
+**reject 維持されるべき形**:
+
+- variant が `dunion` または `union` を含む再帰: depth 制限なしで mangle すると無限大になる → 「dunion variant に dunion / union を含むのは未対応」で reject。
+- `Array<T | undefined>`(undefined-union): 引き続き reject(§10.2 の `T | undefined` storage と同じ別の話、別 step で扱う)。
+- `Map<scalar, dunion>` の K に dunion: 既存の `Map` key が scalar 限定なので無関係(K 側は触らない)。
+
+### 11.3 1.5-6e flip との順序判断
+
+3 案 ある:
+
+(A) **prep #8(container-of-dunion)→ 1.5-6e flip → prep #9(node:fs / path / process builtin gating)**: lexer.ts と codegen.ts の両方が prep #8 解禁で初めて Topaz サブセット内に収まる。flip 中は codegen.ts を書き換えるので `Array<TopazType>` を多用する書き換えで詰まらない。**推奨案**。
+
+(B) **1.5-6e flip 先行 → prep #8 を flip 完了直後に**: 6e flip 自体は `ts.SourceFile` → `Topaz.Module` の置換が本質で、container-of-dunion は flip 完了後の self-host pass で初めて hit する。ただし flip 後の codegen.ts 自身が `Array<TopazType>` を多用するので、flip 完了 ≠ self-host 通過 になり、結局 prep #8 を挟む。順序が後ろにずれるだけ。
+
+(C) **prep #8 を後回しにして src/ を node:* と namespace import なしの「コア」だけにスリム化**: lexer / parser / codegen のコア部分を `Array<dunion>` 不使用に書き換える(=タグごとに別配列を持つ手書き union)。コスト > 利益、却下。
+
+**結論: (A) を採用**。1.5-6 prep #8 として container-of-dunion を着地させてから flip に入る。flip 直前にもう一度 `node dist/cli.js src/lexer.ts --emit-c-only` を叩いて lexer が syntactic に通ることを確認、それを self-hosting エポックの「最小通過確認」として記録する。
+
+### 11.4 Phase 1.5-6f(stdlib 拡張)で扱う node:* 依存の確定リスト
+
+| 依存元 | API | 用途 | Topaz 側でどう提供するか |
+|---|---|---|---|
+| `loader.ts:1` | `node:fs` の `existsSync` | import path 解決時の file 存在確認 | `topaz_fs_exists(path: string): boolean` |
+| `loader.ts:2` | `node:path` の `dirname` / `resolve` | 相対 import の path 計算 | `topaz_path_dirname(p: string): string` / `topaz_path_resolve(base: string, rel: string): string` |
+| `parser.ts:1` | `node:fs` の `readFileSync` | tsc parse 前のソース読み込み | `topaz_fs_read_text(path: string): string` |
+| `cli.ts:1` | `node:child_process` の `execFileSync` | cc 呼び出し | `topaz_process_spawn(cmd: string, args: Array<string>): number` |
+| `cli.ts:2` | `node:fs` の `mkdirSync` / `writeFileSync` | 出力 dir 作成 + .c ファイル書き込み | `topaz_fs_mkdir_p(path: string): void` / `topaz_fs_write_text(path: string, content: string): void` |
+| `topaz_parser.ts:48` | `node:fs` の `readFileSync` | `parseFile` entry の便利関数(分割可能) | 1.5-6f で同上 builtin、または entry を CLI 側に外出し |
+
+すべて Phase 1.5-6f の範囲。runtime.h に thin wrapper を追加し、loader が `node:*` specifier を「Topaz builtin module」として受理する gate を開ける(現状の reject は明示エラー、prep #9 として gate のみ追加でも可)。
+
+### 11.5 prep #8 着地後の確認 (2026-05-27)
+
+**完了**: container-of-dunion(Array / Map / Set の値 / 要素方向に dunion)の monomorph macro 拡張 + Set 要素の `.data` pointer identity 経路。`elemTag` / `cElemTypeForContainer` / `emitArrayMonomorphMacro` / `emitMapMonomorphMacro` / `emitSetMonomorphMacro` / `emitSetElemHelpers` の 6 chokepoint に dunion 分岐を追加、`arrayOf` / `mapOf` / `setOf` の gate に dunion を accepted kinds として追加。`examples/array_of_dunion.ts` 17 出力で push 経路 / for-of switch narrowing / `[i]` read/write / mixed array literal / discriminator 読み出し / `.pop` / reference identity / Map<scalar, dunion> の `.has` `.delete` `.size` `.set` / Set<dunion> reference identity を回帰。
+
+**pass criterion 確認**: `node dist/cli.js src/lexer.ts --emit-c-only` → 新規 blocker = **module-level const hoisting**(`src/lexer.ts:102` で `unknown identifier 'CHAR_0'`)。これは prep #8 で解禁したかった container-of-dunion(lexer.ts:181 の `tokens: Array<Token> = [];` で Token が dunion なため)とは別の独立した hit。Token が discriminated union として読めるところまで container 経路は伸びている。
+
+**deferred to 別 sub-step**: `dunion | undefined` への `!` / `??` narrowing(Map.get の戻り値が `dunion | V_absent_sentinel` になる経路)。array_of_dunion.ts の Map セクションは `.has` / `.delete` / `.size` のみで通している。
+
+### 11.6 NEW finding: module-level const hoisting = 1.5-6 prep #9
+
+`src/lexer.ts:102` で `unknown identifier 'CHAR_0'` が出る。原因は module-level の `const CHAR_0: number = 48;` 等が `main()` body 内に入ってしまい、同 module の `function isDigit` が C 側で `static topaz_boolean isDigit(...)` として emit されたとき body から `CHAR_0` が見えない。
+
+**現状の挙動**: top-level `let` / `const` declaration は root module のみ受理、`main()` body の冒頭に入る。非 root module の top-level statement は明示エラー(`module_basic_*` の運用)。だが root module であっても、関数 declaration は C の file-static として emit されるため、関数 body から見ると CHAR_0 は scope 外。
+
+**lower 戦略 候補**:
+- (a) module-level `const` を C の file-static `static const <ty> <name>` として emit、main() body には declaration をそのまま入れず file-scope に hoist する(scalar literal 初期化子限定)。
+- (b) initializer が string literal や container literal の場合は file-static const 化が難しい(C の static initializer 制約)。lexer.ts の `CHAR_0` 系は全て scalar number literal なので (a) で十分。
+- (c) initializer が複雑な式(function call、object literal、`new`)の場合は main() body 内のまま、関数定義側を closure 化する選択肢もあるが、現状の codegen には closure 経路が無いので scope 拡張が必要。
+
+**判断**: prep #9 として scalar literal 初期化子に限定して file-static 化を実装する。lexer.ts / parser.ts / codegen.ts の `const` 利用箇所のうち、scalar literal で初期化されているもののみ hoist 対象。string literal / object literal / `new` / 関数呼び出しは main() body 残置のまま(別途 closure 拡張 or 別 sub-step)。
+

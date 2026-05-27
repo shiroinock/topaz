@@ -130,9 +130,13 @@ function arrayElem(t: TopazType): TopazType | undefined {
 function arrayOf(elem: TopazType): TopazType | undefined {
   // Phase 1.5-3.5g-array-fn: fn elems are accepted; Map / Set keep rejecting
   // fn at their mapOf / setOf gates (fn equality / hashing is undefined).
+  // Phase 1.5-6 prep #8: dunion elems are accepted (Array / Map<scalar, dunion>
+  // / Set<dunion>); recursive dunion/union variants are rejected at
+  // tryMakeDiscriminatedUnion so by the time we get a `dunion` here the
+  // variants are guaranteed to be concrete classes.
   if (
     !isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)
-    && elem.kind !== "fn"
+    && elem.kind !== "fn" && elem.kind !== "dunion"
   ) return undefined;
   return { kind: "array", elem };
 }
@@ -147,7 +151,9 @@ function mapValue(t: TopazType): TopazType | undefined {
 
 function mapOf(k: TopazType, v: TopazType): TopazType | undefined {
   if (!isScalarType(k)) return undefined;
-  if (!isScalarType(v) && !isClassType(v) && !isInterfaceType(v)) return undefined;
+  // Phase 1.5-6 prep #8: dunion value type is accepted (storage shape =
+  // iface, absent sentinel = `{0}` with `.data == NULL`). Key stays scalar.
+  if (!isScalarType(v) && !isClassType(v) && !isInterfaceType(v) && v.kind !== "dunion") return undefined;
   return { kind: "map", key: k, value: v };
 }
 
@@ -156,7 +162,9 @@ function setElem(t: TopazType): TopazType | undefined {
 }
 
 function setOf(elem: TopazType): TopazType | undefined {
-  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)) return undefined;
+  // Phase 1.5-6 prep #8: Set<dunion> uses `.data` pointer as the identity key,
+  // matching Set<class> / Set<iface> reference-identity semantics.
+  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion") return undefined;
   return { kind: "set", elem };
 }
 
@@ -261,6 +269,16 @@ function elemTag(t: TopazType): string {
       return `class_${t.name}`;
     case "iface":
       return `iface_${t.name}`;
+    case "dunion":
+      // Phase 1.5-6 prep #8: discriminated class union as a container element.
+      // The dunion typedef is `{ topaz_string kind; void *data; }` (emitted in
+      // emitDunionTypedef), so storage is a single struct value — no nested
+      // pointer indirection. Variants are required to be concrete classes;
+      // recursive dunion/union variants are rejected at typeFromAnnotation.
+      // Tag is typeIdent stripped of the `topaz_` prefix so the resulting
+      // `topaz_array_dunion_A_or_B` / `topaz_map_<K>_dunion_A_or_B` /
+      // `topaz_set_dunion_A_or_B` mangle is unique per variant set.
+      return typeIdent(t).slice("topaz_".length);
     case "undefined":
       throw new Error("elemTag: bare undefined cannot be a container element");
     case "union":
@@ -1764,6 +1782,13 @@ class Emitter {
       cElem = `topaz_class_${classNameOf(elem)!} *`;
     } else if (isInterfaceType(elem)) {
       cElem = `topaz_iface_${interfaceNameOf(elem)!}`;
+    } else if (elem.kind === "dunion") {
+      // Phase 1.5-6 prep #8: Array<dunion> stores the fat `{ kind, void *data }`
+      // struct as a value. Each element costs 16 bytes (two pointers on LP64)
+      // — same as topaz_iface_<I>. push / [i] = / for-of all see the dunion
+      // value directly; variant narrowing happens via switch on `.kind` or
+      // `instanceof` against `.data`.
+      cElem = typeIdent(elem);
     } else {
       throw new Error(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
@@ -1805,6 +1830,11 @@ class Emitter {
       optAbsent = "NULL";
     } else if (isInterfaceType(v)) {
       optAbsent = `topaz_iface_${interfaceNameOf(v)!}_absent`;
+    } else if (v.kind === "dunion") {
+      // Phase 1.5-6 prep #8: dunion absent uses `.data == NULL` sentinel
+      // (same shape as iface). The compound literal zero-initializes both
+      // `.kind` (empty topaz_string) and `.data` (NULL).
+      optAbsent = `((${typeIdent(v)}){0})`;
     } else {
       throw new Error(`emitMapMonomorphMacro: scalar V should be pre-expanded in runtime.h, got ${typeIdent(v)}`);
     }
@@ -1827,6 +1857,10 @@ class Emitter {
       const iname = interfaceNameOf(elem)!;
       hashFn = `topaz_hash_iface_${iname}`;
       eqFn = `topaz_key_eq_iface_${iname}`;
+    } else if (elem.kind === "dunion") {
+      const tag2 = elemTag(elem);
+      hashFn = `topaz_hash_${tag2}`;
+      eqFn = `topaz_key_eq_${tag2}`;
     } else {
       throw new Error(`unexpected set element type ${typeIdent(elem)} for monomorph emission`);
     }
@@ -1869,6 +1903,18 @@ class Emitter {
         `static inline topaz_boolean topaz_key_eq_iface_${iname}(${iType} a, ${iType} b) { return a.data == b.data; }`,
       ];
     }
+    if (elem.kind === "dunion") {
+      // Phase 1.5-6 prep #8: Set<dunion> uses the `.data` pointer as the
+      // identity key (same reference-identity semantics as Set<class> and
+      // Set<iface>). Two dunion values wrapping the same underlying class
+      // instance compare equal regardless of variant tag.
+      const tag = elemTag(elem);
+      const cty = typeIdent(elem);
+      return [
+        `static inline size_t topaz_hash_${tag}(${cty} v) { return topaz_hash_pointer(v.data); }`,
+        `static inline topaz_boolean topaz_key_eq_${tag}(${cty} a, ${cty} b) { return a.data == b.data; }`,
+      ];
+    }
     throw new Error(`unexpected set element type ${typeIdent(elem)} for helper emission`);
   }
 
@@ -1876,6 +1922,10 @@ class Emitter {
     if (isClassType(elem)) return `topaz_class_${classNameOf(elem)!} *`;
     if (isInterfaceType(elem)) return `topaz_iface_${interfaceNameOf(elem)!}`;
     if (isScalarType(elem)) return typeIdent(elem);
+    // Phase 1.5-6 prep #8: dunion stores the fat `{ kind, void *data }` struct
+    // value directly. The typedef is already emitted (emitDunionTypedef) ahead
+    // of the container macros (see emit() containerMonomorphSlot order).
+    if (elem.kind === "dunion") return typeIdent(elem);
     throw new Error(`unexpected container element type ${typeIdent(elem)}`);
   }
 
