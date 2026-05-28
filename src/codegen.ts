@@ -6456,6 +6456,15 @@ class Emitter {
       if (callee.text === "existsSync") {
         return this.emitNodeFsExistsSync(expr);
       }
+      // Phase 1.5-6 prep #18: node:path.dirname / resolve, same call-site
+      // shortcut (loader accepts the `node:path` specifier). bare value use
+      // falls to "unknown identifier" like the node:fs builtins.
+      if (callee.text === "dirname") {
+        return this.emitNodePathDirname(expr);
+      }
+      if (callee.text === "resolve") {
+        return this.emitNodePathResolve(expr);
+      }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
@@ -6964,6 +6973,60 @@ class Emitter {
     this.checkNodeFsExistsSyncArgs(expr);
     const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     return `topaz_fs_exists(${path})`;
+  }
+
+  // Phase 1.5-6 prep #18: node:path.dirname(p) の引数検査。1 引数 string のみ
+  // (Node の dirname は単項)。emit/infer 両経路で同じ reject。
+  private checkNodePathDirnameArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(
+        expr,
+        "dirname expects exactly one argument: (path: string)",
+      );
+    }
+    const pathArg = expr.arguments[0]!;
+    const pathType = this.inferType(pathArg);
+    if (pathType.kind !== "string") {
+      throw new CodegenError(
+        pathArg,
+        `dirname path argument must be string, got ${typeIdent(pathType)}`,
+      );
+    }
+  }
+
+  private emitNodePathDirname(expr: ts.CallExpression): string {
+    this.checkNodePathDirnameArgs(expr);
+    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    return `topaz_path_dirname(${path})`;
+  }
+
+  // Phase 1.5-6 prep #18: node:path.resolve(...segments) は variadic。1 個以上の
+  // string 引数を要求し、`topaz_path_resolve(n, seg0, seg1, ...)` に lower する
+  // (runtime 側で getcwd フォールバック + 正規化)。
+  private checkNodePathResolveArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length < 1) {
+      throw new CodegenError(
+        expr,
+        "resolve expects at least one argument: (...segments: string[])",
+      );
+    }
+    for (const arg of expr.arguments) {
+      const argType = this.inferType(arg);
+      if (argType.kind !== "string") {
+        throw new CodegenError(
+          arg,
+          `resolve segment argument must be string, got ${typeIdent(argType)}`,
+        );
+      }
+    }
+  }
+
+  private emitNodePathResolve(expr: ts.CallExpression): string {
+    this.checkNodePathResolveArgs(expr);
+    const segs = expr.arguments
+      .map((a) => this.emitWithExpected(a, T_STRING))
+      .join(", ");
+    return `topaz_path_resolve(${expr.arguments.length}, ${segs})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
@@ -8054,6 +8117,15 @@ class Emitter {
         if (callee.text === "existsSync") {
           this.checkNodeFsExistsSyncArgs(expr);
           return T_BOOLEAN;
+        }
+        // Phase 1.5-6 prep #18: node:path.dirname / resolve type as string.
+        if (callee.text === "dirname") {
+          this.checkNodePathDirnameArgs(expr);
+          return T_STRING;
+        }
+        if (callee.text === "resolve") {
+          this.checkNodePathResolveArgs(expr);
+          return T_STRING;
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
         if (callee.text === "parseInt") {

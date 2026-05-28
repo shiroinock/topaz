@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <setjmp.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -226,6 +227,172 @@ static inline bool topaz_fs_exists(topaz_string path) {
   memcpy(cpath, path.data, path.len);
   cpath[path.len] = '\0';
   return access(cpath, F_OK) == 0;
+}
+
+// Phase 1.5-6 prep #18: node:path.dirname / resolve (POSIX). Ports of Node's
+// path.posix algorithms so the self-hosted loader resolves module specifiers
+// identically. Topaz targets Unix only, so the Windows path handling is
+// dropped. Results live in the arena (released at process exit).
+
+// path.posix.dirname(p): directory portion. Strips a trailing slash run, then
+// returns everything up to the last separator; "." when there is none, "/" for
+// an absolute path with no other separator. Mirrors Node's posixDirname.
+static inline topaz_string topaz_path_dirname(topaz_string p) {
+  if (p.len == 0) { topaz_string dot = { ".", 1 }; return dot; }
+  bool has_root = p.data[0] == '/';
+  long end = -1;
+  bool matched_slash = true;
+  for (long i = (long)p.len - 1; i >= 1; --i) {
+    if (p.data[i] == '/') {
+      if (!matched_slash) { end = i; break; }
+    } else {
+      matched_slash = false;
+    }
+  }
+  if (end == -1) {
+    topaz_string r = has_root ? (topaz_string){ "/", 1 } : (topaz_string){ ".", 1 };
+    return r;
+  }
+  if (has_root && end == 1) { topaz_string r = { "//", 2 }; return r; }
+  char *buf = (char *)topaz_arena_alloc((size_t)end + 1);
+  memcpy(buf, p.data, (size_t)end);
+  buf[end] = '\0';
+  topaz_string r = { buf, (size_t)end };
+  return r;
+}
+
+// Port of Node's normalizeString for POSIX: collapses "." / ".." / repeated and
+// trailing separators against [path, len]. allow_above_root keeps leading ".."
+// (used when the accumulated path is not yet absolute). Output is never longer
+// than the input, so a len+1 arena buffer is sufficient.
+static inline topaz_string topaz_path_normalize_string(
+    const char *path, size_t len, bool allow_above_root) {
+  char *res = (char *)topaz_arena_alloc(len + 1);
+  size_t res_len = 0;
+  size_t last_segment_length = 0;
+  long last_slash = -1;
+  int dots = 0;
+  char code = 0;
+  for (size_t i = 0; i <= len; ++i) {
+    if (i < len) code = path[i];
+    else if (code == '/') break;
+    else code = '/';
+
+    if (code == '/') {
+      if (last_slash == (long)i - 1 || dots == 1) {
+        // NOOP: empty segment or "."
+      } else if (dots == 2) {
+        if (res_len < 2 || last_segment_length != 2 ||
+            res[res_len - 1] != '.' || res[res_len - 2] != '.') {
+          if (res_len > 2) {
+            long lsi = -1;
+            for (long k = (long)res_len - 1; k >= 0; --k) {
+              if (res[k] == '/') { lsi = k; break; }
+            }
+            if (lsi == -1) {
+              res_len = 0;
+              last_segment_length = 0;
+            } else {
+              res_len = (size_t)lsi;
+              long lsi2 = -1;
+              for (long k = (long)res_len - 1; k >= 0; --k) {
+                if (res[k] == '/') { lsi2 = k; break; }
+              }
+              last_segment_length = res_len - 1 - (size_t)lsi2;
+            }
+            last_slash = (long)i;
+            dots = 0;
+            continue;
+          } else if (res_len != 0) {
+            res_len = 0;
+            last_segment_length = 0;
+            last_slash = (long)i;
+            dots = 0;
+            continue;
+          }
+        }
+        if (allow_above_root) {
+          if (res_len > 0) { res[res_len++] = '/'; }
+          res[res_len++] = '.';
+          res[res_len++] = '.';
+          last_segment_length = 2;
+        }
+      } else {
+        size_t seg_start = (size_t)(last_slash + 1);
+        size_t seg_len = i - seg_start;
+        if (res_len > 0) { res[res_len++] = '/'; }
+        memcpy(res + res_len, path + seg_start, seg_len);
+        res_len += seg_len;
+        last_segment_length = i - (size_t)last_slash - 1;
+      }
+      last_slash = (long)i;
+      dots = 0;
+    } else if (code == '.' && dots != -1) {
+      ++dots;
+    } else {
+      dots = -1;
+    }
+  }
+  res[res_len] = '\0';
+  topaz_string r = { res, res_len };
+  return r;
+}
+
+// path.posix.resolve(...segments): build an absolute, normalized path. Segments
+// are joined right-to-left until an absolute one is seen; getcwd() is the final
+// fallback. Variadic args are topaz_string (passed by value through varargs).
+static inline topaz_string topaz_path_resolve(int n, ...) {
+  topaz_string *args =
+      (topaz_string *)topaz_arena_alloc(sizeof(topaz_string) * (n > 0 ? n : 1));
+  va_list ap;
+  va_start(ap, n);
+  for (int i = 0; i < n; ++i) args[i] = va_arg(ap, topaz_string);
+  va_end(ap);
+
+  char *resolved = (char *)topaz_arena_alloc(1);
+  resolved[0] = '\0';
+  size_t resolved_len = 0;
+  bool absolute = false;
+  char cwd[4096];
+
+  for (int i = n - 1; i >= -1 && !absolute; --i) {
+    const char *seg;
+    size_t seg_len;
+    if (i >= 0) {
+      seg = args[i].data;
+      seg_len = args[i].len;
+    } else {
+      if (!getcwd(cwd, sizeof(cwd))) {
+        fputs("topaz: path.resolve getcwd failed\n", stderr);
+        abort();
+      }
+      seg = cwd;
+      seg_len = strlen(cwd);
+    }
+    if (seg_len == 0) continue;
+    size_t new_len = seg_len + 1 + resolved_len;
+    char *nb = (char *)topaz_arena_alloc(new_len + 1);
+    memcpy(nb, seg, seg_len);
+    nb[seg_len] = '/';
+    memcpy(nb + seg_len + 1, resolved, resolved_len);
+    nb[new_len] = '\0';
+    resolved = nb;
+    resolved_len = new_len;
+    absolute = seg[0] == '/';
+  }
+
+  topaz_string norm = topaz_path_normalize_string(resolved, resolved_len, !absolute);
+  if (absolute) {
+    char *out = (char *)topaz_arena_alloc(norm.len + 2);
+    out[0] = '/';
+    memcpy(out + 1, norm.data, norm.len);
+    out[norm.len + 1] = '\0';
+    topaz_string r = { out, norm.len + 1 };
+    return r;
+  }
+  if (norm.len > 0) return norm;
+  topaz_string dot = { ".", 1 };
+  return dot;
 }
 
 // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s) for the
