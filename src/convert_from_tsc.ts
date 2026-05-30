@@ -118,6 +118,16 @@ export function convertFromTsc(sf: ts.SourceFile): SourceModule {
   return c.convertModule();
 }
 
+// Phase 1.5-6e-1 seam: standalone type converter exposed for codegen's
+// strangler-fig migration. codegen's type machine consumes Topaz `TypeNode`,
+// but its callers still hold tsc `ts.TypeNode`; this shim bridges the boundary
+// at each call site (see `Emitter.typeAnno`). `sf` is required for span (pos /
+// end) computation. The boundary moves inward over 6e-2..6e-4 and vanishes at
+// 6e-5 once the entry is `convertFromTsc(sf)` alone.
+export function convertType(node: ts.TypeNode, sf: ts.SourceFile): TypeNode {
+  return new Converter(sf).convertType(node);
+}
+
 class Converter {
   sf: ts.SourceFile;
 
@@ -1271,7 +1281,7 @@ class Converter {
           throw this.err(p, "fn-type parameter name must be an identifier");
         }
         if (!p.type) throw this.err(p, "fn-type parameter must have a type annotation");
-        params.push({ name: p.name.text, type: this.convertType(p.type) });
+        params.push({ name: p.name.text, type: this.convertType(p.type), ...this.span(p) });
       }
       const f: TypeFn = {
         kind: "type_fn",
@@ -1338,7 +1348,7 @@ class Converter {
           throw this.err(p, "type literal method param name must be an identifier");
         }
         if (!p.type) throw this.err(p, "type literal method param must have a type annotation");
-        params.push({ name: p.name.text, type: this.convertType(p.type) });
+        params.push({ name: p.name.text, type: this.convertType(p.type), ...this.span(p) });
       }
       const md: TypeLiteralMethod = {
         kind: "type_lit_method",

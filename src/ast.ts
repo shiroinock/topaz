@@ -85,6 +85,11 @@ export type TypeFn = {
 export type TypeFnParam = {
   name: string;
   type: TypeNode;
+  // Span of the whole parameter (name through type), used as the diagnostic
+  // anchor for fn-type / method-signature parameter errors in codegen. Stripped
+  // before parser-oracle comparison, so the topaz parser only needs to fill it.
+  pos: number;
+  end: number;
 };
 
 export type TypeStrLit = {

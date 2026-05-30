@@ -1714,7 +1714,7 @@ export class Parser {
       const name: Token = this.expectIdent();
       this.expectPunct(":");
       const ty: TypeNode = this.parseType();
-      params.push({ name: name.text, type: ty });
+      params.push({ name: name.text, type: ty, pos: name.pos, end: ty.end });
       if (!this.matchPunct(",")) {
         this.expectPunct(")");
         break;
@@ -1750,7 +1750,7 @@ export class Parser {
           const pn: IdentToken = this.expectIdent();
           this.expectPunct(":");
           const pt: TypeNode = this.parseType();
-          params.push({ name: pn.text, type: pt });
+          params.push({ name: pn.text, type: pt, pos: pn.pos, end: pt.end });
           if (!this.matchPunct(",")) {
             this.expectPunct(")");
             break;
