@@ -136,10 +136,10 @@ function validateImport(filePath: string, stmt: ts.ImportDeclaration): void {
 // 現状は `node:fs` から `readFileSync` / `existsSync` (1.5-6 prep #17) /
 // `writeFileSync` (1.5-6 prep #19) / `mkdirSync` (1.5-6 prep #20)、
 // `node:path` から `dirname` / `resolve` (1.5-6 prep #18) /
-// `basename` (1.5-6 prep #21) を受理。
+// `basename` (1.5-6 prep #21) / `extname` (1.5-6 prep #22) を受理。
 const STDLIB_SPECIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["node:fs", new Set(["readFileSync", "existsSync", "writeFileSync", "mkdirSync"])],
-  ["node:path", new Set(["dirname", "resolve", "basename"])],
+  ["node:path", new Set(["dirname", "resolve", "basename", "extname"])],
 ]);
 
 function isStdlibSpecifier(spec: string): boolean {

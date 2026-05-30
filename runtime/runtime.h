@@ -527,6 +527,49 @@ static inline topaz_string topaz_path_basename_ext(
   return r;
 }
 
+// Phase 1.5-6 prep #22: node:path.extname(p) — extension of the last path
+// segment, including the leading dot. Mirrors Node's path.posix.extname:
+// returns "" when the last segment has no dot, is exactly "." / "..", or
+// starts with a single leading dot and has no other dot (`.bashrc` -> "").
+// RTL scan tracks (start_dot, end, start_part, pre_dot_state) jointly so the
+// "leading-dot-only" edge case can be ruled out in one pass.
+static inline topaz_string topaz_path_extname(topaz_string p) {
+  long start_dot = -1;
+  long start_part = 0;
+  long end = -1;
+  bool matched_slash = true;
+  int pre_dot_state = 0;
+  for (long i = (long)p.len - 1; i >= 0; --i) {
+    char code = p.data[i];
+    if (code == '/') {
+      if (!matched_slash) { start_part = i + 1; break; }
+      continue;
+    }
+    if (end == -1) {
+      matched_slash = false;
+      end = i + 1;
+    }
+    if (code == '.') {
+      if (start_dot == -1) start_dot = i;
+      else if (pre_dot_state != 1) pre_dot_state = 1;
+    } else if (start_dot != -1) {
+      pre_dot_state = -1;
+    }
+  }
+  if (start_dot == -1 || end == -1 || pre_dot_state == 0 ||
+      (pre_dot_state == 1 && start_dot == end - 1 &&
+       start_dot == start_part + 1)) {
+    topaz_string r = { "", 0 };
+    return r;
+  }
+  size_t out_len = (size_t)(end - start_dot);
+  char *buf = (char *)topaz_arena_alloc(out_len + 1);
+  memcpy(buf, p.data + start_dot, out_len);
+  buf[out_len] = '\0';
+  topaz_string r = { buf, out_len };
+  return r;
+}
+
 // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s) for the
 // self-hosted number-literal parser. The codegen requires an explicit radix
 // for parseInt (1-arg auto-radix is a footgun, unused in src/). Both copy into

@@ -6480,6 +6480,10 @@ class Emitter {
       if (callee.text === "basename") {
         return this.emitNodePathBasename(expr);
       }
+      // Phase 1.5-6 prep #22: node:path.extname(p), same call-site shortcut.
+      if (callee.text === "extname") {
+        return this.emitNodePathExtname(expr);
+      }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
@@ -7172,6 +7176,31 @@ class Emitter {
     }
     const ext = this.emitWithExpected(expr.arguments[1]!, T_STRING);
     return `topaz_path_basename_ext(${path}, ${ext})`;
+  }
+
+  // Phase 1.5-6 prep #22: node:path.extname(p) の引数検査。1 引数 string。
+  // Node の path.posix.extname と同じシグネチャ。emit/infer 両経路で同じ reject。
+  private checkNodePathExtnameArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(
+        expr,
+        "extname expects exactly one argument: (path: string)",
+      );
+    }
+    const pathArg = expr.arguments[0]!;
+    const pathType = this.inferType(pathArg);
+    if (pathType.kind !== "string") {
+      throw new CodegenError(
+        pathArg,
+        `extname path argument must be string, got ${typeIdent(pathType)}`,
+      );
+    }
+  }
+
+  private emitNodePathExtname(expr: ts.CallExpression): string {
+    this.checkNodePathExtnameArgs(expr);
+    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    return `topaz_path_extname(${path})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
@@ -8284,6 +8313,11 @@ class Emitter {
         // Phase 1.5-6 prep #21: node:path.basename types as string.
         if (callee.text === "basename") {
           this.checkNodePathBasenameArgs(expr);
+          return T_STRING;
+        }
+        // Phase 1.5-6 prep #22: node:path.extname types as string.
+        if (callee.text === "extname") {
+          this.checkNodePathExtnameArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.

@@ -351,6 +351,11 @@ run_fail_case node_path_basename_path_type_fail examples/node_path_basename_path
 run_fail_case node_path_basename_ext_type_fail examples/node_path_basename_ext_type_fail.ts "basename ext argument must be string"
 run_fail_case node_path_basename_as_value_fail examples/node_path_basename_as_value_fail.ts "unknown identifier 'basename'"
 
+run_case node_path_extname $'.html\n.md\n.\ntrue\ntrue\n.md\n.ts\ntrue\n.gz\ntrue\ntrue\ntrue\n.tsx'
+run_fail_case node_path_extname_arity_fail examples/node_path_extname_arity_fail.ts "extname expects exactly one argument"
+run_fail_case node_path_extname_type_fail examples/node_path_extname_type_fail.ts "extname path argument must be string"
+run_fail_case node_path_extname_as_value_fail examples/node_path_extname_as_value_fail.ts "unknown identifier 'extname'"
+
 run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
 run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"
 run_fail_case parse_int_arg_type_fail examples/parse_int_arg_type_fail.ts "parseInt first argument must be string"
