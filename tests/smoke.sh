@@ -360,6 +360,16 @@ run_case node_path_join $'.\n.\nfoo/bar\n/foo/bar\n/bar\n../b\na/b/c/\na\n/\n.\n
 run_fail_case node_path_join_type_fail examples/node_path_join_type_fail.ts "join segment argument must be string"
 run_fail_case node_path_join_as_value_fail examples/node_path_join_as_value_fail.ts "unknown identifier 'join'"
 
+run_case node_child_process_exec $'hello from child\nparent line\none two\n\nx=2'
+run_fail_case node_child_process_exec_arity_fail examples/node_child_process_exec_arity_fail.ts "execFileSync expects exactly three arguments"
+run_fail_case node_child_process_exec_cmd_type_fail examples/node_child_process_exec_cmd_type_fail.ts "execFileSync cmd argument must be string"
+run_fail_case node_child_process_exec_args_type_fail examples/node_child_process_exec_args_type_fail.ts "execFileSync args argument must be Array<string>"
+run_fail_case node_child_process_exec_opts_not_object_fail examples/node_child_process_exec_opts_not_object_fail.ts "options argument must be the literal"
+run_fail_case node_child_process_exec_opts_wrong_key_fail examples/node_child_process_exec_opts_wrong_key_fail.ts "options property must be \`stdio: \"inherit\"\`"
+run_fail_case node_child_process_exec_opts_wrong_value_fail examples/node_child_process_exec_opts_wrong_value_fail.ts "\`stdio\` must be the string literal \"inherit\""
+run_fail_case node_child_process_exec_as_value_fail examples/node_child_process_exec_as_value_fail.ts "execFileSync returns void and cannot be used as a value"
+run_fail_case node_child_process_unknown_named_import_fail examples/node_child_process_unknown_named_import_fail.ts "unsupported named import 'spawnSync'"
+
 run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
 run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"
 run_fail_case parse_int_arg_type_fail examples/parse_int_arg_type_fail.ts "parseInt first argument must be string"

@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 typedef double topaz_number;
@@ -842,6 +843,62 @@ static inline elem_t topaz_array_##name##_set(                                  
 TOPAZ_ARRAY_DEFINE(number, topaz_number)
 TOPAZ_ARRAY_DEFINE(boolean, topaz_boolean)
 TOPAZ_ARRAY_DEFINE(string, topaz_string)
+
+// Phase 1.5-6 prep #24: node:child_process.execFileSync(cmd, args,
+// { stdio: "inherit" }) -> void. fork + execvp + waitpid; stdio inherits the
+// parent (no pipe handling required). argv is built into the arena from the
+// topaz_string command and Array<string> arg list, each element copied to a
+// NUL-terminated buffer because execvp wants C strings. Non-zero exit and
+// termination by signal both abort — matches Node's "throw on non-zero"
+// behaviour, just collapsed to abort since Topaz has no JS-style Error to
+// raise out of a runtime helper. stdout/stderr are flushed before fork so
+// buffered parent output isn't interleaved with the child's inherited fds.
+static inline void topaz_child_exec_inherit(topaz_string cmd, topaz_array_string *args) {
+  char **argv = (char **)topaz_arena_alloc(sizeof(char *) * (args->len + 2));
+  char *ccmd = (char *)topaz_arena_alloc(cmd.len + 1);
+  memcpy(ccmd, cmd.data, cmd.len);
+  ccmd[cmd.len] = '\0';
+  argv[0] = ccmd;
+  for (size_t i = 0; i < args->len; ++i) {
+    topaz_string a = args->data[i];
+    char *carg = (char *)topaz_arena_alloc(a.len + 1);
+    memcpy(carg, a.data, a.len);
+    carg[a.len] = '\0';
+    argv[i + 1] = carg;
+  }
+  argv[args->len + 1] = NULL;
+  fflush(stdout);
+  fflush(stderr);
+  pid_t pid = fork();
+  if (pid < 0) {
+    fputs("topaz: execFileSync fork failed\n", stderr);
+    abort();
+  }
+  if (pid == 0) {
+    execvp(argv[0], argv);
+    // execvp only returns on error. Use _exit so the child does not flush the
+    // parent's stdio buffers a second time.
+    fputs("topaz: execFileSync exec failed for '", stderr);
+    fputs(argv[0], stderr);
+    fputs("'\n", stderr);
+    _exit(127);
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) {
+      fputs("topaz: execFileSync waitpid failed\n", stderr);
+      abort();
+    }
+  }
+  if (WIFSIGNALED(status)) {
+    fputs("topaz: execFileSync child terminated by signal\n", stderr);
+    abort();
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    fputs("topaz: execFileSync child exited with non-zero status\n", stderr);
+    abort();
+  }
+}
 
 // Phase 1.3b: hash helpers + monomorphized Map/Set.
 //

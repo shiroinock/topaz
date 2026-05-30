@@ -6490,6 +6490,11 @@ class Emitter {
       if (callee.text === "join") {
         return this.emitNodePathJoin(expr);
       }
+      // Phase 1.5-6 prep #24: node:child_process.execFileSync(cmd, args,
+      // { stdio: "inherit" }) -> void。stdio inherit 固定の call-site shortcut。
+      if (callee.text === "execFileSync") {
+        return this.emitNodeChildProcessExecFileSync(expr);
+      }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
@@ -7088,6 +7093,73 @@ class Emitter {
     this.checkNodeFsMkdirSyncArgs(expr);
     const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     return `topaz_fs_mkdir_p(${path})`;
+  }
+
+  // Phase 1.5-6 prep #24: `execFileSync(cmd, args, { stdio: "inherit" })` の
+  // 引数検査。Node の `execFileSync(file, args, options)` の 3 引数形に固定し、
+  // stdio は inherit のみ受理(child の stdout/stderr/stdin が親 fd を共有)。
+  // mkdirSync と同じく options は syntactic object literal で `stdio: "inherit"`
+  // 1 property だけ。emit/infer 両経路で同じ reject。
+  private checkNodeChildProcessExecFileSyncArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 3) {
+      throw new CodegenError(
+        expr,
+        "execFileSync expects exactly three arguments: (cmd: string, args: string[], { stdio: \"inherit\" })",
+      );
+    }
+    const cmdArg = expr.arguments[0]!;
+    const cmdType = this.inferType(cmdArg);
+    if (cmdType.kind !== "string") {
+      throw new CodegenError(
+        cmdArg,
+        `execFileSync cmd argument must be string, got ${typeIdent(cmdType)}`,
+      );
+    }
+    const argsArg = expr.arguments[1]!;
+    const argsType = this.inferType(argsArg);
+    const expectedArgs = arrayOf(T_STRING)!;
+    if (!typeEq(argsType, expectedArgs)) {
+      throw new CodegenError(
+        argsArg,
+        `execFileSync args argument must be Array<string>, got ${typeIdent(argsType)}`,
+      );
+    }
+    const optsArg = expr.arguments[2]!;
+    if (!ts.isObjectLiteralExpression(optsArg)) {
+      throw new CodegenError(
+        optsArg,
+        "execFileSync options argument must be the literal { stdio: \"inherit\" }",
+      );
+    }
+    if (optsArg.properties.length !== 1) {
+      throw new CodegenError(
+        optsArg,
+        "execFileSync options literal must contain exactly one property: { stdio: \"inherit\" }",
+      );
+    }
+    const prop = optsArg.properties[0]!;
+    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== "stdio") {
+      throw new CodegenError(
+        prop,
+        "execFileSync options property must be `stdio: \"inherit\"`",
+      );
+    }
+    const init = prop.initializer;
+    if (!ts.isStringLiteral(init) || init.text !== "inherit") {
+      throw new CodegenError(
+        init,
+        "execFileSync `stdio` must be the string literal \"inherit\"",
+      );
+    }
+  }
+
+  private emitNodeChildProcessExecFileSync(expr: ts.CallExpression): string {
+    this.checkNodeChildProcessExecFileSyncArgs(expr);
+    const expectedArgs = arrayOf(T_STRING)!;
+    this.recordArrayMonomorph(expectedArgs);
+    const cmd = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const args = this.emitWithExpected(expr.arguments[1]!, expectedArgs);
+    return `topaz_child_exec_inherit(${cmd}, ${args})`;
   }
 
   // Phase 1.5-6 prep #18: node:path.dirname(p) の引数検査。1 引数 string のみ
@@ -8356,6 +8428,11 @@ class Emitter {
         if (callee.text === "join") {
           this.checkNodePathJoinArgs(expr);
           return T_STRING;
+        }
+        // Phase 1.5-6 prep #24: execFileSync returns void; reject value use
+        // (mirrors writeFileSync / mkdirSync).
+        if (callee.text === "execFileSync") {
+          throw new CodegenError(expr, "execFileSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
         if (callee.text === "parseInt") {
