@@ -309,7 +309,7 @@ run_fail_case node_fs_read_file_path_type_fail examples/node_fs_read_file_path_t
 run_fail_case node_fs_read_file_encoding_not_literal_fail examples/node_fs_read_file_encoding_not_literal_fail.ts "encoding argument must be the string literal"
 run_fail_case node_fs_read_file_unknown_encoding_fail examples/node_fs_read_file_unknown_encoding_fail.ts "encoding argument must be \"utf8\""
 run_fail_case node_fs_read_file_as_value_fail examples/node_fs_read_file_as_value_fail.ts "unknown identifier 'readFileSync'"
-run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'mkdirSync'"
+run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'unlinkSync'"
 run_fail_case node_fs_namespace_import_fail examples/node_fs_namespace_import_fail.ts "namespace import of stdlib specifier 'node:fs'"
 run_fail_case node_fs_rename_import_fail examples/node_fs_rename_import_fail.ts "import rename"
 
@@ -323,6 +323,19 @@ run_fail_case node_fs_write_file_arity_fail examples/node_fs_write_file_arity_fa
 run_fail_case node_fs_write_file_path_type_fail examples/node_fs_write_file_path_type_fail.ts "writeFileSync path argument must be string"
 run_fail_case node_fs_write_file_content_type_fail examples/node_fs_write_file_content_type_fail.ts "writeFileSync content argument must be string"
 run_fail_case node_fs_write_file_as_value_fail examples/node_fs_write_file_as_value_fail.ts "writeFileSync returns void and cannot be used as a value"
+
+# cleanup any tree from a previous run so the "create from scratch" assertion is
+# valid; an EBUSY / "Directory not empty" from a flaky filesystem must not abort
+# the suite, the test itself is idempotent.
+rm -rf /tmp/topaz_mkdir_test 2>/dev/null || true
+run_case node_fs_mkdir $'true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue'
+run_fail_case node_fs_mkdir_arity_fail examples/node_fs_mkdir_arity_fail.ts "mkdirSync expects exactly two arguments"
+run_fail_case node_fs_mkdir_path_type_fail examples/node_fs_mkdir_path_type_fail.ts "mkdirSync path argument must be string"
+run_fail_case node_fs_mkdir_opts_not_object_fail examples/node_fs_mkdir_opts_not_object_fail.ts "options argument must be the literal"
+run_fail_case node_fs_mkdir_opts_wrong_key_fail examples/node_fs_mkdir_opts_wrong_key_fail.ts "options property must be \`recursive: true\`"
+run_fail_case node_fs_mkdir_opts_recursive_false_fail examples/node_fs_mkdir_opts_recursive_false_fail.ts "\`recursive\` must be the literal \`true\`"
+run_fail_case node_fs_mkdir_opts_extra_prop_fail examples/node_fs_mkdir_opts_extra_prop_fail.ts "options literal must contain exactly one property"
+run_fail_case node_fs_mkdir_as_value_fail examples/node_fs_mkdir_as_value_fail.ts "mkdirSync returns void and cannot be used as a value"
 
 run_case node_path_basic $'/foo/bar\n/foo\nfoo\n.\n/\n/\n/foo/bar\n/a/c\n/a/b/d\n/foo/bar/baz\n/bar\n/x/w\n/a/b/util.ts\n/pkg/src\ntrue'
 run_fail_case node_path_dirname_arity_fail examples/node_path_dirname_arity_fail.ts "dirname expects exactly one argument"

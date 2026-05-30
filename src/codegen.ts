@@ -6461,6 +6461,11 @@ class Emitter {
       if (callee.text === "writeFileSync") {
         return this.emitNodeFsWriteFileSync(expr);
       }
+      // Phase 1.5-6 prep #20: `mkdirSync(path, { recursive: true })` -> void.
+      // Recursive-only: the options literal is the only accepted second arg.
+      if (callee.text === "mkdirSync") {
+        return this.emitNodeFsMkdirSync(expr);
+      }
       // Phase 1.5-6 prep #18: node:path.dirname / resolve, same call-site
       // shortcut (loader accepts the `node:path` specifier). bare value use
       // falls to "unknown identifier" like the node:fs builtins.
@@ -7013,6 +7018,61 @@ class Emitter {
     const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     const content = this.emitWithExpected(expr.arguments[1]!, T_STRING);
     return `topaz_fs_write_text_file(${path}, ${content})`;
+  }
+
+  // Phase 1.5-6 prep #20: `mkdirSync(path, { recursive: true })` の引数検査。
+  // recursive-only に固定する (非 recursive は Topaz では使い道が無い)。第2引数は
+  // **必ず** `{ recursive: true }` の syntactic object literal でなければ
+  // ならない — 変数や別 shape の options は受けない (runtime は常に recursive
+  // mkdir を呼ぶので、call-site で「単純な誤読」を防ぐためにここで shape を
+  // 固定する)。emit/infer 両経路で同じ reject。
+  private checkNodeFsMkdirSyncArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 2) {
+      throw new CodegenError(
+        expr,
+        "mkdirSync expects exactly two arguments: (path: string, { recursive: true })",
+      );
+    }
+    const pathArg = expr.arguments[0]!;
+    const pathType = this.inferType(pathArg);
+    if (pathType.kind !== "string") {
+      throw new CodegenError(
+        pathArg,
+        `mkdirSync path argument must be string, got ${typeIdent(pathType)}`,
+      );
+    }
+    const optsArg = expr.arguments[1]!;
+    if (!ts.isObjectLiteralExpression(optsArg)) {
+      throw new CodegenError(
+        optsArg,
+        "mkdirSync options argument must be the literal { recursive: true }",
+      );
+    }
+    if (optsArg.properties.length !== 1) {
+      throw new CodegenError(
+        optsArg,
+        "mkdirSync options literal must contain exactly one property: { recursive: true }",
+      );
+    }
+    const prop = optsArg.properties[0]!;
+    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== "recursive") {
+      throw new CodegenError(
+        prop,
+        "mkdirSync options property must be `recursive: true`",
+      );
+    }
+    if (prop.initializer.kind !== ts.SyntaxKind.TrueKeyword) {
+      throw new CodegenError(
+        prop.initializer,
+        "mkdirSync `recursive` must be the literal `true`",
+      );
+    }
+  }
+
+  private emitNodeFsMkdirSync(expr: ts.CallExpression): string {
+    this.checkNodeFsMkdirSyncArgs(expr);
+    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    return `topaz_fs_mkdir_p(${path})`;
   }
 
   // Phase 1.5-6 prep #18: node:path.dirname(p) の引数検査。1 引数 string のみ
@@ -8162,6 +8222,10 @@ class Emitter {
         // (mirrors Array.push / console.log).
         if (callee.text === "writeFileSync") {
           throw new CodegenError(expr, "writeFileSync returns void and cannot be used as a value");
+        }
+        // Phase 1.5-6 prep #20: mkdirSync returns void; reject value use.
+        if (callee.text === "mkdirSync") {
+          throw new CodegenError(expr, "mkdirSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #18: node:path.dirname / resolve type as string.
         if (callee.text === "dirname") {

@@ -1,6 +1,7 @@
 #ifndef TOPAZ_RUNTIME_H
 #define TOPAZ_RUNTIME_H
 
+#include <errno.h>
 #include <math.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -10,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 typedef double topaz_number;
@@ -248,6 +250,44 @@ static inline void topaz_fs_write_text_file(topaz_string path, topaz_string cont
   fclose(fp);
   if (put != content.len) {
     fputs("topaz: writeFileSync short write\n", stderr);
+    abort();
+  }
+}
+
+// Phase 1.5-6 prep #20: node:fs.mkdirSync(path, { recursive: true }) -> void.
+// Walks the path segments left-to-right and mkdir(0777)'s each prefix; EEXIST
+// is ignored (matches Node's recursive mode). A non-EEXIST failure aborts with
+// the offending segment for debuggability. Empty path is a no-op (Node throws
+// ENOENT; we keep it quiet to match the spirit of "ensure dir exists"). The
+// codegen side accepts only the `{ recursive: true }` options literal, so this
+// function does not need a non-recursive code path.
+static inline void topaz_fs_mkdir_p(topaz_string path) {
+  if (path.len == 0) return;
+  char *buf = (char *)topaz_arena_alloc(path.len + 1);
+  memcpy(buf, path.data, path.len);
+  buf[path.len] = '\0';
+  size_t i = 0;
+  // skip leading '/' so the first separator does not produce an empty prefix.
+  while (i < path.len && buf[i] == '/') i++;
+  while (i < path.len) {
+    while (i < path.len && buf[i] != '/') i++;
+    char saved = buf[i];
+    buf[i] = '\0';
+    if (mkdir(buf, 0777) != 0 && errno != EEXIST) {
+      fputs("topaz: mkdirSync failed to create '", stderr);
+      fputs(buf, stderr);
+      fputs("'\n", stderr);
+      abort();
+    }
+    buf[i] = saved;
+    while (i < path.len && buf[i] == '/') i++;
+  }
+  // tail prefix (no trailing slash): mkdir the full path. Trailing slash case
+  // already mkdir'd everything in the loop above, so buf is already complete.
+  if (buf[0] != '\0' && mkdir(buf, 0777) != 0 && errno != EEXIST) {
+    fputs("topaz: mkdirSync failed to create '", stderr);
+    fputs(buf, stderr);
+    fputs("'\n", stderr);
     abort();
   }
 }
