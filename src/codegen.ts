@@ -5578,6 +5578,16 @@ class Emitter {
     if (ts.isElementAccessExpression(expr) && expr.questionDotToken) {
       return this.emitOptionalElementAccess(expr);
     }
+    // Phase 1.5-6 prep #25: `import.meta.url` is the sole accepted MetaProperty
+    // form. Lower to a runtime helper that resolves the running executable
+    // path as a `file://` URL (matches Node's `import.meta.url` shape).
+    if (ts.isPropertyAccessExpression(expr) && ts.isMetaProperty(expr.expression)) {
+      this.checkImportMetaUrl(expr);
+      return `topaz_runtime_module_url()`;
+    }
+    if (ts.isMetaProperty(expr)) {
+      this.rejectBareMetaProperty(expr);
+    }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
       // Phase 1.5-3e: `dunion.kind` reads the discriminator string from the
@@ -6495,6 +6505,11 @@ class Emitter {
       if (callee.text === "execFileSync") {
         return this.emitNodeChildProcessExecFileSync(expr);
       }
+      // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
+      // `file://...` URL を local path に変換するだけの 1 引数 string 関数。
+      if (callee.text === "fileURLToPath") {
+        return this.emitNodeUrlFileURLToPath(expr);
+      }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
@@ -7160,6 +7175,70 @@ class Emitter {
     const cmd = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     const args = this.emitWithExpected(expr.arguments[1]!, expectedArgs);
     return `topaz_child_exec_inherit(${cmd}, ${args})`;
+  }
+
+  // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
+  // `file://...` URL の path 部分(scheme + 空 host を剥がす)+ percent-decode
+  // して local path を返す 1 引数 string 関数。Node の fileURLToPath は
+  // posix と win32 で挙動が分かれるが、self-hosting の実行環境は POSIX 限定で
+  // 構築するので POSIX 寄りに固定。
+  private checkNodeUrlFileURLToPathArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(
+        expr,
+        "fileURLToPath expects exactly one argument: (url: string)",
+      );
+    }
+    const urlArg = expr.arguments[0]!;
+    const urlType = this.inferType(urlArg);
+    if (urlType.kind !== "string") {
+      throw new CodegenError(
+        urlArg,
+        `fileURLToPath argument must be string, got ${typeIdent(urlType)}`,
+      );
+    }
+  }
+
+  private emitNodeUrlFileURLToPath(expr: ts.CallExpression): string {
+    this.checkNodeUrlFileURLToPathArgs(expr);
+    const url = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    return `topaz_url_file_url_to_path(${url})`;
+  }
+
+  // Phase 1.5-6 prep #25: `import.meta.url` 受理パスの validation。Node の
+  // `import.meta.X` 系で受け入れるのは `url` のみ(self-hosting で実際に踏むのは
+  // `dirname(fileURLToPath(import.meta.url))` の 1 形のみ)。`new.target` を含む
+  // 他の MetaProperty / `import.meta.<他>` は全 reject。
+  private checkImportMetaUrl(expr: ts.PropertyAccessExpression): void {
+    const meta = expr.expression as ts.MetaProperty;
+    if (meta.keywordToken !== ts.SyntaxKind.ImportKeyword) {
+      throw new CodegenError(
+        expr,
+        "unsupported meta property (only `import.meta.url` is accepted)",
+      );
+    }
+    if (meta.name.text !== "meta") {
+      throw new CodegenError(
+        expr,
+        `unsupported \`import.${meta.name.text}\` (only \`import.meta.url\` is accepted)`,
+      );
+    }
+    if (expr.name.text !== "url") {
+      throw new CodegenError(
+        expr,
+        `unsupported \`import.meta.${expr.name.text}\` (only \`import.meta.url\` is accepted)`,
+      );
+    }
+  }
+
+  private rejectBareMetaProperty(expr: ts.MetaProperty): never {
+    if (expr.keywordToken === ts.SyntaxKind.NewKeyword) {
+      throw new CodegenError(expr, "`new.target` is unsupported");
+    }
+    throw new CodegenError(
+      expr,
+      "bare `import.meta` is unsupported (only `import.meta.url` is accepted)",
+    );
   }
 
   // Phase 1.5-6 prep #18: node:path.dirname(p) の引数検査。1 引数 string のみ
@@ -7836,6 +7915,15 @@ class Emitter {
       const { fieldType } = this.resolveOptionalFieldType(expr);
       return makeUnion([fieldType, T_UNDEFINED]);
     }
+    // Phase 1.5-6 prep #25: `import.meta.url` types as string. Any other
+    // `import.meta.*` or bare `import.meta` is rejected.
+    if (ts.isPropertyAccessExpression(expr) && ts.isMetaProperty(expr.expression)) {
+      this.checkImportMetaUrl(expr);
+      return T_STRING;
+    }
+    if (ts.isMetaProperty(expr)) {
+      this.rejectBareMetaProperty(expr);
+    }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
       if (baseType.kind === "union") {
@@ -8433,6 +8521,11 @@ class Emitter {
         // (mirrors writeFileSync / mkdirSync).
         if (callee.text === "execFileSync") {
           throw new CodegenError(expr, "execFileSync returns void and cannot be used as a value");
+        }
+        // Phase 1.5-6 prep #25: node:url.fileURLToPath types as string.
+        if (callee.text === "fileURLToPath") {
+          this.checkNodeUrlFileURLToPathArgs(expr);
+          return T_STRING;
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
         if (callee.text === "parseInt") {

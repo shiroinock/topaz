@@ -138,11 +138,13 @@ function validateImport(filePath: string, stmt: ts.ImportDeclaration): void {
 // `node:path` から `dirname` / `resolve` (1.5-6 prep #18) /
 // `basename` (1.5-6 prep #21) / `extname` (1.5-6 prep #22) /
 // `join` (1.5-6 prep #23)、
-// `node:child_process` から `execFileSync` (1.5-6 prep #24) を受理。
+// `node:child_process` から `execFileSync` (1.5-6 prep #24)、
+// `node:url` から `fileURLToPath` (1.5-6 prep #25) を受理。
 const STDLIB_SPECIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["node:fs", new Set(["readFileSync", "existsSync", "writeFileSync", "mkdirSync"])],
   ["node:path", new Set(["dirname", "resolve", "basename", "extname", "join"])],
   ["node:child_process", new Set(["execFileSync"])],
+  ["node:url", new Set(["fileURLToPath"])],
 ]);
 
 function isStdlibSpecifier(spec: string): boolean {

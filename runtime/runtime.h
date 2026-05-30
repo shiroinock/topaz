@@ -14,6 +14,9 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 typedef double topaz_number;
 typedef bool topaz_boolean;
@@ -898,6 +901,113 @@ static inline void topaz_child_exec_inherit(topaz_string cmd, topaz_array_string
     fputs("topaz: execFileSync child exited with non-zero status\n", stderr);
     abort();
   }
+}
+
+// Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> path. Strip the
+// `file://` scheme + optional empty/`localhost` authority and percent-decode
+// the remaining bytes. POSIX target only — Windows drive letters / backslash
+// translation are out of scope. Aborts on a non-`file:` URL, a non-absolute
+// path, or malformed percent escapes (matches Node's ERR_INVALID_URL family
+// collapsed to abort since we have no Error class).
+static inline topaz_string topaz_url_file_url_to_path(topaz_string url) {
+  static const char PREFIX[] = "file://";
+  const size_t plen = sizeof(PREFIX) - 1;
+  if (url.len < plen || memcmp(url.data, PREFIX, plen) != 0) {
+    fputs("topaz: fileURLToPath: URL must start with 'file://'\n", stderr);
+    abort();
+  }
+  const char *cur = url.data + plen;
+  const char *end = url.data + url.len;
+  if (cur < end && *cur != '/') {
+    const char *host_end = cur;
+    while (host_end < end && *host_end != '/') host_end++;
+    size_t host_len = (size_t)(host_end - cur);
+    if (!(host_len == 9 && memcmp(cur, "localhost", 9) == 0)) {
+      fputs("topaz: fileURLToPath: only empty / 'localhost' file URL hosts are supported\n", stderr);
+      abort();
+    }
+    cur = host_end;
+  }
+  if (cur >= end || *cur != '/') {
+    fputs("topaz: fileURLToPath: file URL path must be absolute\n", stderr);
+    abort();
+  }
+  size_t cap = (size_t)(end - cur);
+  char *buf = (char *)topaz_arena_alloc(cap);
+  size_t out = 0;
+  while (cur < end) {
+    char c = *cur;
+    if (c == '%') {
+      if (cur + 3 > end) {
+        fputs("topaz: fileURLToPath: truncated percent-encoding\n", stderr);
+        abort();
+      }
+      char h = cur[1], l = cur[2];
+      int hv = (h >= '0' && h <= '9') ? h - '0'
+              : (h >= 'a' && h <= 'f') ? h - 'a' + 10
+              : (h >= 'A' && h <= 'F') ? h - 'A' + 10 : -1;
+      int lv = (l >= '0' && l <= '9') ? l - '0'
+              : (l >= 'a' && l <= 'f') ? l - 'a' + 10
+              : (l >= 'A' && l <= 'F') ? l - 'A' + 10 : -1;
+      if (hv < 0 || lv < 0) {
+        fputs("topaz: fileURLToPath: invalid percent-encoding\n", stderr);
+        abort();
+      }
+      buf[out++] = (char)((hv << 4) | lv);
+      cur += 3;
+    } else {
+      buf[out++] = c;
+      cur++;
+    }
+  }
+  topaz_string r = { buf, out };
+  return r;
+}
+
+// Phase 1.5-6 prep #25: `import.meta.url` -> "file://<realpath of executable>".
+// In Node ESM `import.meta.url` is the URL of the current module; in a native
+// AOT binary the equivalent reference point is the running executable. The
+// answer is fixed across the process lifetime, so cache it on first call.
+static inline topaz_string topaz_runtime_module_url(void) {
+  static char cache[4096];
+  static size_t cache_len = 0;
+  if (cache_len == 0) {
+    char raw[4096];
+#if defined(__APPLE__)
+    uint32_t sz = sizeof(raw);
+    if (_NSGetExecutablePath(raw, &sz) != 0) {
+      fputs("topaz: import.meta.url: _NSGetExecutablePath buffer too small\n", stderr);
+      abort();
+    }
+#elif defined(__linux__)
+    ssize_t n = readlink("/proc/self/exe", raw, sizeof(raw) - 1);
+    if (n < 0) {
+      fputs("topaz: import.meta.url: readlink(/proc/self/exe) failed\n", stderr);
+      abort();
+    }
+    raw[n] = '\0';
+#else
+    fputs("topaz: import.meta.url: unsupported platform\n", stderr);
+    abort();
+#endif
+    char resolved[4096];
+    if (!realpath(raw, resolved)) {
+      fputs("topaz: import.meta.url: realpath failed\n", stderr);
+      abort();
+    }
+    size_t rlen = strlen(resolved);
+    static const char SCHEME[] = "file://";
+    size_t slen = sizeof(SCHEME) - 1;
+    if (slen + rlen >= sizeof(cache)) {
+      fputs("topaz: import.meta.url: executable path too long\n", stderr);
+      abort();
+    }
+    memcpy(cache, SCHEME, slen);
+    memcpy(cache + slen, resolved, rlen);
+    cache_len = slen + rlen;
+  }
+  topaz_string r = { cache, cache_len };
+  return r;
 }
 
 // Phase 1.3b: hash helpers + monomorphized Map/Set.
