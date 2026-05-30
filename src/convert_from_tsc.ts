@@ -129,6 +129,24 @@ export function convertType(node: ts.TypeNode, sf: ts.SourceFile): TypeNode {
   return new Converter(sf).convertType(node);
 }
 
+// Phase 1.5-6e-2 seam: standalone expression / statement / block converters
+// exposed for codegen's strangler-fig migration. The SCC (emit/infer) consumes
+// Topaz `Expr` / `Stmt`, but decl-land callers (function / method / ctor bodies,
+// field initializers, root top-level statements) still hold tsc nodes; these
+// shims bridge the boundary at each call site. The boundary moves inward over
+// 6e-3..6e-4 and vanishes at 6e-5.
+export function convertExpr(node: ts.Expression, sf: ts.SourceFile): Expr {
+  return new Converter(sf).convertExpr(node);
+}
+
+export function convertStmt(node: ts.Statement, sf: ts.SourceFile): Stmt {
+  return new Converter(sf).convertStmt(node);
+}
+
+export function convertBlock(node: ts.Block, sf: ts.SourceFile): BlockStmt {
+  return new Converter(sf).convertBlock(node);
+}
+
 class Converter {
   sf: ts.SourceFile;
 
@@ -586,7 +604,7 @@ class Converter {
     const d = list.declarations[0]!;
     if (d.exclamationToken) throw this.err(d, "definite-assignment assertion is unsupported");
     if (ts.isObjectBindingPattern(d.name)) {
-      if (d.type) throw this.err(d, "type annotation on destructuring pattern is unsupported");
+      if (d.type) throw this.err(d, "type annotation on object destructuring pattern is unsupported");
       if (!d.initializer) throw this.err(d, "destructuring binding requires an initializer");
       const bindings: VarDestrBinding[] = [];
       for (const el of d.name.elements) {
@@ -594,13 +612,13 @@ class Converter {
           throw this.err(el, "rest element in object destructuring is unsupported");
         }
         if (el.propertyName) {
-          throw this.err(el, "property rename in object destructuring is unsupported");
+          throw this.err(el, "property rename / nested pattern in object destructuring is unsupported");
         }
         if (el.initializer) {
           throw this.err(el, "default value in object destructuring is unsupported");
         }
         if (!ts.isIdentifier(el.name)) {
-          throw this.err(el, "nested pattern in object destructuring is unsupported");
+          throw this.err(el, "property rename / nested pattern in object destructuring is unsupported");
         }
         bindings.push({
           name: el.name.text,
@@ -1043,7 +1061,15 @@ class Converter {
           ...this.span(p),
         });
       } else {
-        throw this.err(p, `unsupported object literal member ${ts.SyntaxKind[p.kind]}`);
+        // Phase 1.5-6e-2: align with codegen's object-literal emit wording so
+        // the method-shorthand fail-case's expected substring still matches
+        // when the reject surfaces from convert (method shorthand / getter /
+        // setter reach here; spread is converted to `prop_spread` and rejected
+        // later in codegen with the same wording).
+        throw this.err(
+          p,
+          "object literal only supports `name: value` and `name` shorthand properties (no method shorthand, getter / setter, spread)",
+        );
       }
     }
     return { kind: "object_lit", props, ...this.span(e) };

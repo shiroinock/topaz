@@ -1,6 +1,42 @@
 import * as ts from "typescript";
-import { convertType } from "./convert_from_tsc.js";
-import type { TypeNode, TypeLiteralNode } from "./ast.js";
+import { convertType, convertExpr, convertStmt, convertBlock } from "./convert_from_tsc.js";
+import type {
+  TypeNode,
+  TypeLiteralNode,
+  Expr,
+  Stmt,
+  BlockStmt,
+  IdentExpr,
+  CallExpr,
+  ArrowExpr,
+  PropAccessExpr,
+  ElemAccessExpr,
+  BinOpExpr,
+  TernaryExpr,
+  ArrayLitExpr,
+  NewExpr,
+  TemplateLitExpr,
+  PrefixOpExpr,
+  PostfixOpExpr,
+  AssignExpr,
+  ForOfStmt,
+  VarDeclStmt,
+  VarDestrDeclStmt,
+  SwitchStmt,
+  SwitchCase,
+  ContinueStmt,
+  ThrowStmt,
+  TryStmt,
+  ForStmt,
+} from "./ast.js";
+
+// Phase 1.5-6e-2: ambient SourceFile for the migrated emit/infer SCC. Topaz
+// `Expr` / `Stmt` nodes carry a `pos` but not their SourceFile, so `CodegenError`
+// resolves `file:line:col` from this module-level value (set at every decl-land
+// → SCC boundary, save/restore-style). The Topaz `pos` equals the tsc
+// `getStart(sf)` recorded by convert, so positions are byte-identical to the
+// pre-migration tsc-anchored errors.
+let g_currentSf: ts.SourceFile | undefined;
 
 // Phase 1.4c-3: TopazType is a structured tagged-union. Until 1.4c-2 we used a
 // string-union ("topaz_array_class_Box" etc.) keyed by canonical C identifier,
@@ -381,46 +417,26 @@ function typeKey(t: TopazType): string {
 // Phase 1.5-3.5e: capture-analysis filter for identifiers that name compile-
 // time concepts rather than runtime values (so they should never be treated
 // as captures even if they appear inside an arrow body).
+// Phase 1.5-6e-2: a string-literal VALUE in the Topaz AST is either a `str_lit`
+// or a no-substitution `template_lit` (head only, empty subs). Both surface the
+// same cooked text. Returns the text, or undefined when `e` is neither.
+function stringLitText(e: Expr): string | undefined {
+  if (e.kind === "str_lit") return e.value;
+  if (e.kind === "template_lit" && e.subs.length === 0) return e.head;
+  return undefined;
+}
+
 function isBuiltinName(name: string): boolean {
   // `undefined` lowers via emitUndefinedLiteral, never via a binding lookup.
   // `console` is a synthetic namespace handled directly in emitCall.
   return name === "undefined" || name === "console";
 }
 
-// Phase 1.5-3.5e: an identifier node is a "reference position" if reading
-// the identifier yields a value (vs. naming a property, parameter name, type
-// reference, etc.). Capture analysis only follows reference positions; the
-// other identifier sites either re-bind a name (declaration) or address a
-// member that has no scope binding (property access RHS).
-function isReferencePosition(node: ts.Identifier): boolean {
-  const parent = node.parent;
-  if (!parent) return true;
-  // Property access RHS (`obj.name`) and method-call RHS — `name` is a member
-  // lookup, not a scope binding.
-  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
-  // Property assignment key (`key: value`) is a member name, not a scope ref.
-  // Shorthand (`{ name }`) is the opposite — `name` reads the variable, so it
-  // falls through to `return true` below (it is a reference position).
-  if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
-  // Parameter name, variable declaration name, binding name, class member
-  // name, function name, etc. are declarations, not references.
-  if (ts.isParameter(parent) && parent.name === node) return false;
-  if (ts.isVariableDeclaration(parent) && parent.name === node) return false;
-  if (ts.isFunctionDeclaration(parent) && parent.name === node) return false;
-  if (ts.isClassDeclaration(parent) && parent.name === node) return false;
-  if (ts.isInterfaceDeclaration(parent) && parent.name === node) return false;
-  if (ts.isMethodDeclaration(parent) && parent.name === node) return false;
-  if (ts.isPropertyDeclaration(parent) && parent.name === node) return false;
-  if (ts.isPropertySignature(parent) && parent.name === node) return false;
-  if (ts.isMethodSignature(parent) && parent.name === node) return false;
-  // Type references / qualified names — purely compile-time.
-  if (ts.isTypeReferenceNode(parent)) return false;
-  if (ts.isQualifiedName(parent)) return false;
-  // import/export bits.
-  if (ts.isImportSpecifier(parent)) return false;
-  if (ts.isExportSpecifier(parent)) return false;
-  return true;
-}
+// Phase 1.5-6e-2: capture analysis no longer needs an `isReferencePosition`
+// predicate. The Topaz Expr/Stmt walk in `collectCaptures` only descends into
+// real sub-expressions, so member names / property keys / declaration names —
+// which are plain strings in the Topaz AST, not Expr nodes — are never visited
+// as identifier references. Reference-position semantics fall out structurally.
 
 // C type used in declarations and signatures. Reference types (Array/Map/Set
 // /Class) are pointers so assignment shares storage. Interfaces are passed by
@@ -537,15 +553,28 @@ class CodegenError extends Error {
   // string form lets the migrated type machine — which walks Topaz `TypeNode`
   // that don't carry their SourceFile — build positions via `Emitter.typeErr`
   // (pos + the ambient `currentTypeSf`).
-  constructor(nodeOrFormatted: ts.Node | string, message?: string) {
+  constructor(nodeOrFormatted: ts.Node | { pos: number } | string, message?: string) {
     if (typeof nodeOrFormatted === "string") {
       super(nodeOrFormatted);
       return;
     }
     const node = nodeOrFormatted;
-    const sf = node.getSourceFile();
+    if (typeof (node as { getSourceFile?: unknown }).getSourceFile === "function") {
+      const tscNode = node as ts.Node;
+      const sf = tscNode.getSourceFile();
+      if (sf) {
+        const { line, character } = sf.getLineAndCharacterOfPosition(tscNode.getStart(sf));
+        super(`${sf.fileName}:${line + 1}:${character + 1}: ${message}`);
+      } else {
+        super(message ?? "");
+      }
+      return;
+    }
+    // Phase 1.5-6e-2: Topaz node `{ pos }` — resolve the file from the ambient
+    // SourceFile set at the decl-land → SCC boundary.
+    const sf = g_currentSf;
     if (sf) {
-      const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+      const { line, character } = sf.getLineAndCharacterOfPosition((node as { pos: number }).pos);
       super(`${sf.fileName}:${line + 1}:${character + 1}: ${message}`);
     } else {
       super(message ?? "");
@@ -553,8 +582,11 @@ class CodegenError extends Error {
   }
 }
 
-function unsupported(node: ts.Node, what: string): never {
-  throw new CodegenError(node, `unsupported ${what} (${ts.SyntaxKind[node.kind]})`);
+function unsupported(node: ts.Node | { kind: string }, what: string): never {
+  if (typeof (node as { kind: unknown }).kind === "string") {
+    throw new CodegenError(node as { pos: number }, `unsupported ${what} (${(node as { kind: string }).kind})`);
+  }
+  throw new CodegenError(node as ts.Node, `unsupported ${what} (${ts.SyntaxKind[(node as ts.Node).kind]})`);
 }
 
 // Phase 1.5-2: top-level の class / interface / function 宣言で `export` 修飾子
@@ -819,6 +851,14 @@ class Emitter {
   private interfaces = new Map<string, InterfaceInfo>();
   private currentClass: string | undefined;
   private currentReturnType: TopazType | undefined;
+  // Phase 1.5-6e-2: enclosing-construct stack for `continue` validation. Topaz
+  // nodes carry no `.parent`, so we maintain the loop / switch nesting context
+  // explicitly: a `"loop"` frame is pushed around while / do / for / for-of
+  // bodies, a `"switch"` frame around switch case-body emission. A nested arrow
+  // is a function boundary and resets the stack (save / clear / restore).
+  // On a `continue`: empty stack → outside a loop; top is `"switch"` → inside
+  // switch (lowers to do/while(0)); top is `"loop"` → allowed.
+  private loopCtx: Array<"loop" | "switch"> = [];
   // Phase 1.5-X: number of `try` frames currently live on the C stack within
   // the function being emitted (incremented only around a try *body*, not the
   // catch body — topaz_throw / the normal-path pop already removed the frame by
@@ -1158,13 +1198,13 @@ class Emitter {
   // reads). The final variant is the no-check fall-through since the type
   // guarantees `.data` wraps one of the variants.
   private emitDunionCommonFieldAccess(
-    expr: ts.PropertyAccessExpression,
+    expr: PropAccessExpr,
     t: Extract<TopazType, { kind: "dunion" }>,
   ): string {
-    const field = expr.name.text;
+    const field = expr.name;
     const id = this.tmpCounter++;
     const tmp = `__topaz_dcf_${id}`;
-    const data = `(${this.emitExpression(expr.expression)}).data`;
+    const data = `(${this.emitExpression(expr.receiver)}).data`;
     let chain = "";
     for (let i = 0; i < t.variants.length; i++) {
       const cname = t.variants[i]!;
@@ -1876,7 +1916,10 @@ class Emitter {
       // local decls would shadow the hoisted bindings inside main() body and
       // duplicate the storage.
       if (hoistedTopLevel.has(stmt)) continue;
-      out.push(this.emitStatement(stmt, 1));
+      // Phase 1.5-6e-2: decl-land → SCC boundary. Convert the tsc top-level
+      // statement to Topaz under the module's SourceFile and emit via the
+      // migrated SCC.
+      out.push(this.emitStatementBoundary(stmt));
     }
     this.scope.pop();
     out.push("  return 0;");
@@ -2210,7 +2253,7 @@ class Emitter {
   // pointer { .state, .next }. Used by standalone `.values()` / `.keys()` call
   // sites (the for-of hash-form lowering bypasses this and walks slots in-line).
   private emitIterConstruction(
-    recvExpr: ts.Expression,
+    recvExpr: Expr,
     containerType: TopazType,
     source: "map_values" | "map_keys" | "set_values",
     elemType: TopazType,
@@ -2825,6 +2868,22 @@ class Emitter {
     const ctor = info.ctor!;
     this.currentClass = info.name;
     this.scope.push();
+    // Phase 1.5-6e-2: ctor body / field initializers feed the migrated SCC, so
+    // set the ambient SourceFile. The declaring module is the ctor decl's sf
+    // when an explicit ctor exists, else the class decl's (a real tsc
+    // ClassDeclaration for user classes; anon classes carry no field inits and
+    // no user body, so the SCC is never entered for them).
+    const declSf =
+      (ctor.decl && ctor.decl.getSourceFile()) ||
+      (typeof (info.decl as { getSourceFile?: unknown }).getSourceFile === "function"
+        ? (info.decl as ts.ClassDeclaration).getSourceFile()
+        : undefined);
+    const savedG = g_currentSf;
+    const savedT = this.currentTypeSf;
+    if (declSf) {
+      g_currentSf = declSf;
+      this.currentTypeSf = declSf;
+    }
     try {
       const anchor = ctor.decl ?? info.decl;
       for (const p of ctor.params) {
@@ -2838,7 +2897,7 @@ class Emitter {
       bodyLines.push(
         `  ${TOPAZ_THIS}->__topaz_class_tag = &topaz_class_${info.name}_tag;`,
       );
-      this.emitFieldInitializers(info, bodyLines);
+      this.emitFieldInitializers(info, bodyLines, declSf);
       // Phase 1.5-6 prep: positional all-args auto-ctor (anonymous class
       // synthesized from a TypeLiteral). When `decl === undefined` and the
       // ctor carries params, each param maps 1:1 to a field of the same name
@@ -2852,11 +2911,12 @@ class Emitter {
       // Phase 1.5-6 prep: auto-synthesized ctors (decl === undefined) have no
       // user body — the field initializer block above is the entire body.
       if (ctor.decl) {
+        const ctorSf = ctor.decl.getSourceFile();
         for (const s of ctor.decl.body!.statements) {
           if (ts.isReturnStatement(s)) {
             throw new CodegenError(s, "`return` inside a constructor is unsupported");
           }
-          bodyLines.push(this.emitStatement(s, 1));
+          bodyLines.push(this.emitStatement(convertStmt(s, ctorSf), 1));
         }
       }
       bodyLines.push(`  return ${TOPAZ_THIS};`);
@@ -2865,6 +2925,8 @@ class Emitter {
     } finally {
       this.scope.pop();
       this.currentClass = undefined;
+      g_currentSf = savedG;
+      this.currentTypeSf = savedT;
     }
   }
 
@@ -2877,13 +2939,16 @@ class Emitter {
   // takes care of class → iface coercion, string-literal widening, and scalar
   // opt wrap; we route through it so initializer sites match assignment
   // sites.
-  private emitFieldInitializers(info: ClassInfo, out: string[]): void {
+  private emitFieldInitializers(info: ClassInfo, out: string[], declSf: ts.SourceFile | undefined): void {
     if (info.fieldInits.size === 0) return;
     for (const fname of info.fieldOrder) {
       const init = info.fieldInits.get(fname);
       if (!init) continue;
       const fty = info.fields.get(fname)!;
-      const initC = this.emitWithExpected(init, fty);
+      // Phase 1.5-6e-2: field initializer is a tsc expression; convert to Topaz
+      // at the boundary (ambient sf is already set by emitConstructorDefinition).
+      const sf = declSf ?? init.getSourceFile();
+      const initC = this.emitWithExpected(convertExpr(init, sf), fty);
       out.push(`  ${TOPAZ_THIS}->${fname} = ${initC};`);
     }
   }
@@ -2899,7 +2964,7 @@ class Emitter {
       for (const p of method.params) {
         this.scope.declare(p.name, p.type, /* isConst */ false, method.decl);
       }
-      const body = this.emitBlock(method.decl.body!, 0);
+      const body = this.emitBlockBoundary(method.decl.body!);
       return `${this.methodSignature(info, method)} ${body}`;
     } finally {
       this.scope.pop();
@@ -3007,6 +3072,34 @@ class Emitter {
     return new CodegenError(`${sf.fileName}:${line + 1}:${character + 1}: ${message}`);
   }
 
+  // Phase 1.5-6e-2 seam: decl-land → emit/infer SCC boundary helpers. Each sets
+  // the ambient `g_currentSf` (so CodegenError can resolve Topaz-node positions)
+  // and `currentTypeSf` (so typeFromAnnotation reached from the SCC has a file
+  // for inline annotations), converts the tsc subtree to Topaz, runs the SCC,
+  // and restores. The boundary shrinks as upper layers migrate in 6e-3..6e-4.
+  private withSf<T>(sf: ts.SourceFile, fn: () => T): T {
+    const savedG = g_currentSf;
+    const savedT = this.currentTypeSf;
+    g_currentSf = sf;
+    this.currentTypeSf = sf;
+    try {
+      return fn();
+    } finally {
+      g_currentSf = savedG;
+      this.currentTypeSf = savedT;
+    }
+  }
+
+  private emitStatementBoundary(stmt: ts.Statement): string {
+    const sf = stmt.getSourceFile();
+    return this.withSf(sf, () => this.emitStatement(convertStmt(stmt, sf), 1));
+  }
+
+  private emitBlockBoundary(block: ts.Block): string {
+    const sf = block.getSourceFile();
+    return this.withSf(sf, () => this.emitBlock(convertBlock(block, sf), 0));
+  }
+
   // Phase 1.5-6e-1 seam: tsc-land callers still hold a `ts.TypeNode`; convert it
   // to Topaz at the boundary and hand the type machine the Topaz tree plus the
   // SourceFile it belongs to. `anchor` (a tsc node) positions the
@@ -3016,20 +3109,6 @@ class Emitter {
     const sf = anchor.getSourceFile();
     const node = tscType ? convertType(tscType, sf) : undefined;
     return this.typeFromAnnotation(node, anchor, sf);
-  }
-
-  // Phase 1.5-6e-1 seam: generic-class instantiation reached from tsc-land
-  // expression sites (`new Box<number>()` / a `Box<number>` value position).
-  // Converts the tsc type arguments before delegating to the Topaz-consuming
-  // core.
-  private instantiateGenericClassTs(
-    refName: string,
-    typeArgNodes: readonly ts.TypeNode[] | undefined,
-    anchor: ts.Node,
-  ): TopazType {
-    const sf = anchor.getSourceFile();
-    const targs = typeArgNodes ? typeArgNodes.map((t) => convertType(t, sf)) : undefined;
-    return this.instantiateGenericClass(refName, targs, anchor, sf);
   }
 
   // Phase 1.5-6e-1: the type machine consumes Topaz `TypeNode` (ast.ts). `sf` is
@@ -3334,7 +3413,7 @@ class Emitter {
       for (const p of sig.params) {
         this.scope.declare(p.name, p.type, /* isConst */ false, fn);
       }
-      const body = this.emitBlock(fn.body, 0);
+      const body = this.emitBlockBoundary(fn.body);
       return `${this.formatSignature(fn)} ${body}`;
     } finally {
       this.scope.pop();
@@ -3367,7 +3446,7 @@ class Emitter {
       for (const p of mono.sig.params) {
         this.scope.declare(p.name, p.type, /* isConst */ false, mono.decl);
       }
-      const body = this.emitBlock(mono.decl.body, 0);
+      const body = this.emitBlockBoundary(mono.decl.body);
       return `${this.formatMonomorphSignature(mono.mangled, mono.sig)} ${body}`;
     } finally {
       this.scope.pop();
@@ -3382,33 +3461,30 @@ class Emitter {
   // that needs only its type (e.g. as the RHS of a `let f = ...` whose
   // initializer is being typed before the matching declareVar runs the
   // emit path).
-  private inferArrowType(arrow: ts.ArrowFunction, expectedType: TopazType | undefined): TopazType {
+  private inferArrowType(arrow: ArrowExpr, expectedType: TopazType | undefined): TopazType {
     const expectedFn = expectedType && expectedType.kind === "fn" ? expectedType : undefined;
-    if (expectedFn && expectedFn.params.length !== arrow.parameters.length) {
+    if (expectedFn && expectedFn.params.length !== arrow.params.length) {
       throw new CodegenError(
         arrow,
-        `arrow function arity ${arrow.parameters.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
+        `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
     const params: ParamInfo[] = [];
-    for (let i = 0; i < arrow.parameters.length; i++) {
-      const p = arrow.parameters[i]!;
-      if (!ts.isIdentifier(p.name)) {
-        throw new CodegenError(p, "arrow function parameter must be a simple identifier");
-      }
+    for (let i = 0; i < arrow.params.length; i++) {
+      const p = arrow.params[i]!;
       let pt: TopazType;
       if (p.type) {
-        pt = this.typeAnno(p.type, p);
+        pt = this.typeFromAnnotation(p.type, p, g_currentSf!);
       } else if (expectedFn) {
         pt = expectedFn.params[i]!.type;
       } else {
         throw new CodegenError(p, "arrow function parameter requires a type annotation (no contextual type available)");
       }
-      params.push({ name: p.name.text, type: pt, isOptional: false });
+      params.push({ name: p.name, type: pt, isOptional: false });
     }
     let returnType: TopazType;
-    if (arrow.type) {
-      returnType = this.typeAnno(arrow.type, arrow);
+    if (arrow.returnType) {
+      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentSf!);
     } else if (expectedFn) {
       returnType = expectedFn.returnType;
     } else {
@@ -3432,30 +3508,24 @@ class Emitter {
   // arity must match exactly (no implicit coercion, mirroring how function
   // call argument types are checked).
   private inferCallbackFn(
-    cb: ts.Expression,
+    cb: Expr,
     paramTypes: readonly TopazType[],
     label: string,
   ): Extract<TopazType, { kind: "fn" }> {
-    if (ts.isArrowFunction(cb)) {
-      if (cb.parameters.length !== paramTypes.length) {
+    if (cb.kind === "arrow_expr") {
+      if (cb.params.length !== paramTypes.length) {
         throw new CodegenError(
           cb,
-          `${label} callback arity ${cb.parameters.length} does not match expected ${paramTypes.length}`,
+          `${label} callback arity ${cb.params.length} does not match expected ${paramTypes.length}`,
         );
       }
       const params: ParamInfo[] = [];
       const seenNames = new Set<string>();
-      for (let i = 0; i < cb.parameters.length; i++) {
-        const p = cb.parameters[i]!;
-        if (!ts.isIdentifier(p.name)) {
-          throw new CodegenError(p, "arrow function parameter must be a simple identifier (destructuring is unsupported)");
-        }
-        if (p.questionToken || p.initializer || p.dotDotDotToken) {
-          throw new CodegenError(p, "optional/default/rest arrow parameters are unsupported");
-        }
+      for (let i = 0; i < cb.params.length; i++) {
+        const p = cb.params[i]!;
         const pt = paramTypes[i]!;
         if (p.type) {
-          const annot = this.typeAnno(p.type, p);
+          const annot = this.typeFromAnnotation(p.type, p, g_currentSf!);
           if (!typeEq(annot, pt)) {
             throw new CodegenError(
               p,
@@ -3463,16 +3533,16 @@ class Emitter {
             );
           }
         }
-        if (seenNames.has(p.name.text)) {
-          throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
+        if (seenNames.has(p.name)) {
+          throw new CodegenError(p, `duplicate parameter name '${p.name}'`);
         }
-        seenNames.add(p.name.text);
-        params.push({ name: p.name.text, type: pt, isOptional: false });
+        seenNames.add(p.name);
+        params.push({ name: p.name, type: pt, isOptional: false });
       }
       let returnType: TopazType;
-      if (cb.type) {
-        returnType = this.typeAnno(cb.type, cb);
-      } else if (!ts.isBlock(cb.body)) {
+      if (cb.returnType) {
+        returnType = this.typeFromAnnotation(cb.returnType, cb, g_currentSf!);
+      } else if (cb.body.kind === "arrow_expr_body") {
         // Expression body: push the params into a fresh scope so inferType
         // can resolve identifier references to them, then pop. We don't
         // install a closure barrier here — type inference is read-only and
@@ -3483,7 +3553,7 @@ class Emitter {
           for (const p of params) {
             this.scope.declare(p.name, p.type, /* isConst */ false, cb);
           }
-          returnType = this.inferType(cb.body as ts.Expression);
+          returnType = this.inferType(cb.body.expr);
         } finally {
           this.scope.pop();
         }
@@ -3552,41 +3622,25 @@ class Emitter {
   // closures. Mutating an outer `let` after capture does not affect the
   // closure's view, and mutating the captured field inside the arrow does not
   // propagate back. Documented as a divergence in CLAUDE.md.
-  private emitArrowFunction(arrow: ts.ArrowFunction, expectedType?: TopazType): string {
-    // Reject unsupported syntax up front. Generic / async / default / rest /
-    // destructuring all force special-case lowering that we don't yet plan to
-    // support, so calling them out explicitly beats a confusing downstream
-    // error.
-    if (arrow.typeParameters && arrow.typeParameters.length > 0) {
-      throw new CodegenError(arrow, "generic arrow functions are unsupported (Phase 1.5-3.5e)");
-    }
-    if (arrow.modifiers && arrow.modifiers.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) {
-      throw new CodegenError(arrow, "async arrow functions are unsupported");
-    }
-
-    // Param types: annotation is mandatory unless the expected fn type can
-    // contextually supply them. Default / optional / rest / destructuring are
-    // all rejected. Names must be unique.
+  private emitArrowFunction(arrow: ArrowExpr, expectedType?: TopazType): string {
+    // Phase 1.5-6e-2: generic / async arrows are rejected in convert. Param
+    // types: annotation is mandatory unless the expected fn type can
+    // contextually supply them (default / optional / rest / destructuring
+    // params are rejected in convert). Names must be unique.
     const expectedFn = expectedType && expectedType.kind === "fn" ? expectedType : undefined;
-    if (expectedFn && expectedFn.params.length !== arrow.parameters.length) {
+    if (expectedFn && expectedFn.params.length !== arrow.params.length) {
       throw new CodegenError(
         arrow,
-        `arrow function arity ${arrow.parameters.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
+        `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
     const params: ParamInfo[] = [];
     const seenNames = new Set<string>();
-    for (let i = 0; i < arrow.parameters.length; i++) {
-      const p = arrow.parameters[i]!;
-      if (!ts.isIdentifier(p.name)) {
-        throw new CodegenError(p, "arrow function parameter must be a simple identifier (destructuring is unsupported)");
-      }
-      if (p.questionToken || p.initializer || p.dotDotDotToken) {
-        throw new CodegenError(p, "optional/default/rest arrow parameters are unsupported");
-      }
+    for (let i = 0; i < arrow.params.length; i++) {
+      const p = arrow.params[i]!;
       let pt: TopazType;
       if (p.type) {
-        pt = this.typeAnno(p.type, p);
+        pt = this.typeFromAnnotation(p.type, p, g_currentSf!);
       } else if (expectedFn) {
         pt = expectedFn.params[i]!.type;
       } else {
@@ -3596,18 +3650,18 @@ class Emitter {
       if (pt.kind === "fn") {
         throw new CodegenError(p, "nested fn types in arrow parameters are unsupported (Phase 1.5-3.5e)");
       }
-      if (seenNames.has(p.name.text)) {
-        throw new CodegenError(p, `duplicate parameter name '${p.name.text}'`);
+      if (seenNames.has(p.name)) {
+        throw new CodegenError(p, `duplicate parameter name '${p.name}'`);
       }
-      seenNames.add(p.name.text);
-      params.push({ name: p.name.text, type: pt, isOptional: false });
+      seenNames.add(p.name);
+      params.push({ name: p.name, type: pt, isOptional: false });
     }
 
     // Return type: annotation required (we don't infer from body yet) unless
     // an expected fn type supplies it.
     let returnType: TopazType;
-    if (arrow.type) {
-      returnType = this.typeAnno(arrow.type, arrow);
+    if (arrow.returnType) {
+      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentSf!);
     } else if (expectedFn) {
       returnType = expectedFn.returnType;
     } else {
@@ -3650,9 +3704,13 @@ class Emitter {
     const prevCaptureContext = this.captureContext;
     const prevRet = this.currentReturnType;
     const prevLive = this.liveTryFrames;
+    // Phase 1.5-6e-2: an arrow is a function boundary — `continue` inside the
+    // body must not see the outer loop context. Save / clear / restore.
+    const prevLoopCtx = this.loopCtx;
     this.captureContext = { envType: envName, envIsEmpty, captures };
     this.currentReturnType = returnType;
     this.liveTryFrames = 0;
+    this.loopCtx = [];
     // Barrier must come BEFORE the scope.push so that the new (inner) frame
     // sits at the barrier floor and lookups within the body can still see
     // it. Outer frames remain hidden behind the barrier.
@@ -3663,13 +3721,14 @@ class Emitter {
         this.scope.declare(p.name, p.type, /* isConst */ false, arrow);
       }
       let bodyText: string;
-      if (ts.isBlock(arrow.body)) {
-        bodyText = this.emitBlock(arrow.body, 0);
+      if (arrow.body.kind === "arrow_block_body") {
+        const blk: BlockStmt = { kind: "block_stmt", stmts: arrow.body.stmts, pos: arrow.pos, end: arrow.end };
+        bodyText = this.emitBlock(blk, 0);
       } else {
         // Expression body: wrap in `{ return <expr>; }`. emitWithExpected
         // applies the return-type coercion (class -> iface, scalar -> opt
         // wrap, etc.) the same way an explicit `return` statement would.
-        const exprStr = this.emitWithExpected(arrow.body as ts.Expression, returnType);
+        const exprStr = this.emitWithExpected(arrow.body.expr, returnType);
         bodyText = `{\n  return ${exprStr};\n}`;
       }
 
@@ -3694,6 +3753,7 @@ class Emitter {
       this.captureContext = prevCaptureContext;
       this.currentReturnType = prevRet;
       this.liveTryFrames = prevLive;
+      this.loopCtx = prevLoopCtx;
     }
 
     // Build the call-site compound literal. Allocate the env on the arena
@@ -3719,7 +3779,7 @@ class Emitter {
   // Phase 1.5-3.5e: emit an identifier as the outer scope sees it (for
   // capture initialization). Handles narrowed scalar opt unions and narrowed
   // dunion / unknown the same way emitExpression's identifier branch does.
-  private emitCapturedIdentifier(name: string, _capturedType: TopazType, anchor: ts.Node): string {
+  private emitCapturedIdentifier(name: string, _capturedType: TopazType, anchor: ts.Node | { pos: number }): string {
     const b = this.scope.lookup(name);
     if (!b) throw new CodegenError(anchor, `capture '${name}' is not visible at the arrow construction site`);
     const base = this.scope.lookupBase(name)!;
@@ -3750,82 +3810,180 @@ class Emitter {
   // because the inner emit calls emitCapturedIdentifier against the outer
   // scope before we leave outer's emit.
   private collectCaptures(
-    arrow: ts.ArrowFunction,
+    arrow: ArrowExpr,
     paramNames: ReadonlySet<string>,
     captures: Map<string, TopazType>,
   ): void {
     const locals = new Set<string>(paramNames);
-    const visit = (node: ts.Node): void => {
-      // Track new local bindings before descending.
-      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-        locals.add(node.name.text);
-      }
-      if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
-        locals.add(node.name.text);
-      }
-      // ForOf: binding declared in initializer becomes local.
-      if (ts.isForOfStatement(node) && ts.isVariableDeclarationList(node.initializer)) {
-        for (const d of node.initializer.declarations) {
-          if (ts.isIdentifier(d.name)) locals.add(d.name.text);
-        }
-      }
-      // Catch clause: binding name becomes local.
-      if (ts.isCatchClause(node) && node.variableDeclaration && ts.isIdentifier(node.variableDeclaration.name)) {
-        locals.add(node.variableDeclaration.name.text);
-      }
-      // Nested arrow: stop descending into its body — but we DO need to
-      // collect its free identifiers w.r.t. *our* scope (since transitively
-      // they become our captures too). Run a recursive walk that treats the
-      // inner arrow's params + its own locals as off-limits.
-      if (ts.isArrowFunction(node) && node !== arrow) {
-        const innerParams = new Set<string>();
-        for (const p of node.parameters) {
-          if (ts.isIdentifier(p.name)) innerParams.add(p.name.text);
-        }
-        const innerCaps = new Map<string, TopazType>();
-        // Recurse but accumulate into a separate set; then merge into our
-        // captures (filtered by what's still resolved outside *our* params /
-        // locals).
-        const innerLocals = new Set<string>(innerParams);
-        const innerVisit = (n: ts.Node): void => {
-          if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) innerLocals.add(n.name.text);
-          if (ts.isForOfStatement(n) && ts.isVariableDeclarationList(n.initializer)) {
-            for (const d of n.initializer.declarations) if (ts.isIdentifier(d.name)) innerLocals.add(d.name.text);
+    // Walk an arrow body's statements / expressions, tracking new local
+    // bindings in `localSet` (flat, mirroring the pre-migration tsc walk which
+    // added every declaration name to one set as it descended) and reporting
+    // free identifier references via `onIdent`. Nested arrows do not descend;
+    // they are handed to `onArrow` instead.
+    const walkStmt = (
+      s: Stmt,
+      localSet: Set<string>,
+      onIdent: (name: string) => void,
+      onArrow: (a: ArrowExpr) => void,
+    ): void => {
+      const we = (e: Expr) => walkExpr(e, localSet, onIdent, onArrow);
+      const ws = (st: Stmt) => walkStmt(st, localSet, onIdent, onArrow);
+      switch (s.kind) {
+        case "expr_stmt": we(s.expr); return;
+        case "var_decl":
+          localSet.add(s.name);
+          if (s.init) we(s.init);
+          return;
+        case "var_destr_decl":
+          for (const b of s.bindings) localSet.add(b.name);
+          we(s.init);
+          return;
+        case "block_stmt": for (const st of s.stmts) ws(st); return;
+        case "if_stmt":
+          we(s.cond); ws(s.thenBranch);
+          if (s.elseBranch) ws(s.elseBranch);
+          return;
+        case "while_stmt": we(s.cond); ws(s.body); return;
+        case "do_while_stmt": ws(s.body); we(s.cond); return;
+        case "for_stmt":
+          if (s.init) {
+            if (s.init.kind === "for_init_decl") ws(s.init.decl);
+            else we(s.init.expr);
           }
-          if (ts.isCatchClause(n) && n.variableDeclaration && ts.isIdentifier(n.variableDeclaration.name)) {
-            innerLocals.add(n.variableDeclaration.name.text);
+          if (s.cond) we(s.cond);
+          if (s.update) we(s.update);
+          ws(s.body);
+          return;
+        case "for_of_stmt":
+          if (s.binding.kind === "for_of_single") localSet.add(s.binding.name);
+          else { localSet.add(s.binding.first); localSet.add(s.binding.second); }
+          we(s.source);
+          ws(s.body);
+          return;
+        case "switch_stmt":
+          we(s.discriminant);
+          for (const c of s.cases) {
+            if (c.test) we(c.test);
+            for (const st of c.stmts) ws(st);
           }
-          if (ts.isIdentifier(n) && !innerLocals.has(n.text) && !isBuiltinName(n.text)) {
-            if (!isReferencePosition(n)) return;
-            const b = this.scope.lookupAcrossBarrier(n.text);
-            if (b) innerCaps.set(n.text, b.type);
+          return;
+        case "try_stmt":
+          for (const st of s.tryBlock.stmts) ws(st);
+          if (s.catchClause) {
+            if (s.catchClause.bindingName) localSet.add(s.catchClause.bindingName);
+            for (const st of s.catchClause.body.stmts) ws(st);
           }
-          ts.forEachChild(n, innerVisit);
-        };
-        ts.forEachChild(node, innerVisit);
-        // Promote inner captures into our captures if they're not our locals.
-        for (const n of innerCaps.keys()) {
-          if (locals.has(n)) continue;
-          if (captures.has(n)) continue;
-          const b = this.scope.lookupAcrossBarrier(n);
-          if (b) captures.set(n, b.type);
-        }
-        return;
+          if (s.finallyBlock) for (const st of s.finallyBlock.stmts) ws(st);
+          return;
+        case "return_stmt": if (s.value) we(s.value); return;
+        case "throw_stmt": we(s.value); return;
+        case "break_stmt":
+        case "continue_stmt":
+        case "empty_stmt":
+          return;
       }
-      if (ts.isIdentifier(node) && !locals.has(node.text) && !isBuiltinName(node.text)) {
-        if (isReferencePosition(node)) {
-          const b = this.scope.lookupAcrossBarrier(node.text);
-          if (b && !captures.has(node.text)) {
-            captures.set(node.text, b.type);
-          }
-        }
-      }
-      ts.forEachChild(node, visit);
     };
-    if (ts.isBlock(arrow.body)) {
-      for (const s of arrow.body.statements) visit(s);
+    const walkExpr = (
+      e: Expr,
+      localSet: Set<string>,
+      onIdent: (name: string) => void,
+      onArrow: (a: ArrowExpr) => void,
+    ): void => {
+      const we = (x: Expr) => walkExpr(x, localSet, onIdent, onArrow);
+      switch (e.kind) {
+        case "ident":
+          if (!localSet.has(e.name) && !isBuiltinName(e.name)) onIdent(e.name);
+          return;
+        case "num_lit":
+        case "str_lit":
+        case "bool_lit":
+        case "null_lit":
+        case "undefined_lit":
+        case "this_expr":
+        case "import_meta_url":
+          return;
+        case "template_lit":
+          for (const sub of e.subs) we(sub.expr);
+          return;
+        case "array_lit":
+          for (const el of e.elems) we(el.expr);
+          return;
+        case "object_lit":
+          for (const m of e.props) {
+            if (m.kind === "prop_kv") we(m.value);
+            else if (m.kind === "prop_spread") we(m.expr);
+            else { // prop_shorthand `{ x }` reads the variable `x`
+              if (!localSet.has(m.name) && !isBuiltinName(m.name)) onIdent(m.name);
+            }
+          }
+          return;
+        case "paren_expr": we(e.inner); return;
+        case "call_expr":
+          we(e.callee);
+          for (const a of e.args) we(a);
+          return;
+        case "new_expr":
+          we(e.callee);
+          for (const a of e.args) we(a);
+          return;
+        case "prop_access": we(e.receiver); return;
+        case "elem_access": we(e.receiver); we(e.index); return;
+        case "prefix_op":
+        case "postfix_op": we(e.operand); return;
+        case "bin_op": we(e.lhs); we(e.rhs); return;
+        case "instanceof_expr": we(e.lhs); we(e.rhs); return;
+        case "typeof_expr": we(e.operand); return;
+        case "ternary_expr": we(e.cond); we(e.thenBranch); we(e.elseBranch); return;
+        case "assign_expr": we(e.target); we(e.value); return;
+        case "non_null": we(e.operand); return;
+        case "spread_expr": we(e.operand); return;
+        case "arrow_expr": onArrow(e); return;
+      }
+    };
+
+    const outerOnIdent = (name: string) => {
+      if (captures.has(name)) return;
+      const b = this.scope.lookupAcrossBarrier(name);
+      if (b) captures.set(name, b.type);
+    };
+    const outerOnArrow = (inner: ArrowExpr) => {
+      // Nested arrow: collect its free identifiers against *our* scope and
+      // promote them to our captures if they're not our locals. We do NOT
+      // descend into its body for our own locals.
+      const innerLocals = new Set<string>();
+      for (const p of inner.params) innerLocals.add(p.name);
+      const innerCaps = new Map<string, TopazType>();
+      const innerOnIdent = (name: string) => {
+        const b = this.scope.lookupAcrossBarrier(name);
+        if (b) innerCaps.set(name, b.type);
+      };
+      const innerOnArrow = (a: ArrowExpr) => {
+        // Recurse into deeper arrows too (their free vars also bubble up).
+        const deeperLocals = new Set<string>(innerLocals);
+        for (const p of a.params) deeperLocals.add(p.name);
+        if (a.body.kind === "arrow_block_body") {
+          for (const st of a.body.stmts) walkStmt(st, deeperLocals, innerOnIdent, innerOnArrow);
+        } else {
+          walkExpr(a.body.expr, deeperLocals, innerOnIdent, innerOnArrow);
+        }
+      };
+      if (inner.body.kind === "arrow_block_body") {
+        for (const st of inner.body.stmts) walkStmt(st, innerLocals, innerOnIdent, innerOnArrow);
+      } else {
+        walkExpr(inner.body.expr, innerLocals, innerOnIdent, innerOnArrow);
+      }
+      for (const name of innerCaps.keys()) {
+        if (locals.has(name)) continue;
+        if (captures.has(name)) continue;
+        const b = this.scope.lookupAcrossBarrier(name);
+        if (b) captures.set(name, b.type);
+      }
+    };
+
+    if (arrow.body.kind === "arrow_block_body") {
+      for (const s of arrow.body.stmts) walkStmt(s, locals, outerOnIdent, outerOnArrow);
     } else {
-      visit(arrow.body);
+      walkExpr(arrow.body.expr, locals, outerOnIdent, outerOnArrow);
     }
   }
 
@@ -3834,19 +3992,19 @@ class Emitter {
   // it to the worklist) on first observation. Returns undefined if `callee`
   // doesn't name a generic function — caller falls back to concrete dispatch.
   private resolveGenericCall(
-    callee: ts.Identifier,
-    expr: ts.CallExpression,
+    callee: IdentExpr,
+    expr: CallExpr,
   ): { mangled: string; sig: FunctionSig } | undefined {
-    const generic = this.genericFunctions.get(callee.text);
+    const generic = this.genericFunctions.get(callee.name);
     if (!generic) return undefined;
 
     const subs = new Map<string, TopazType>();
 
-    if (expr.typeArguments && expr.typeArguments.length > 0) {
-      if (expr.typeArguments.length !== generic.typeParams.length) {
+    if (expr.typeArgs.length > 0) {
+      if (expr.typeArgs.length !== generic.typeParams.length) {
         throw new CodegenError(
           expr,
-          `${callee.text} expects ${generic.typeParams.length} type argument(s), got ${expr.typeArguments.length}`,
+          `${callee.name} expects ${generic.typeParams.length} type argument(s), got ${expr.typeArgs.length}`,
         );
       }
       for (let i = 0; i < generic.typeParams.length; i++) {
@@ -3854,18 +4012,20 @@ class Emitter {
         // type parameters (when a generic body calls another generic), so
         // typeFromAnnotation must run with the outer typeParamScope still
         // active. We don't swap it here.
-        const t = this.typeAnno(expr.typeArguments[i]!, expr);
+        const t = this.typeFromAnnotation(expr.typeArgs[i]!, expr, g_currentSf!);
         subs.set(generic.typeParams[i]!, t);
       }
     } else {
       // Best-effort inference: walk each parameter type node against the
       // corresponding argument's inferred type, binding type parameters as
       // we go. Concrete portions don't contribute. After the walk, every
-      // declared type parameter must be bound.
-      if (expr.arguments.length !== generic.decl.parameters.length) {
+      // declared type parameter must be bound. `generic.decl` is still a tsc
+      // FunctionDeclaration (decl-land stays tsc until 6e-3), so the parameter
+      // type annotations consumed by `unifyTypeParam` remain tsc TypeNodes.
+      if (expr.args.length !== generic.decl.parameters.length) {
         throw new CodegenError(
           expr,
-          `${callee.text}() expects ${generic.decl.parameters.length} argument(s), got ${expr.arguments.length}`,
+          `${callee.name}() expects ${generic.decl.parameters.length} argument(s), got ${expr.args.length}`,
         );
       }
       for (let i = 0; i < generic.decl.parameters.length; i++) {
@@ -3873,14 +4033,14 @@ class Emitter {
         if (!param.type) {
           throw new CodegenError(param, "generic function parameter requires a type annotation");
         }
-        const argType = this.inferType(expr.arguments[i]!);
+        const argType = this.inferType(expr.args[i]!);
         this.unifyTypeParam(param.type, argType, generic.typeParams, subs, expr);
       }
       for (const tp of generic.typeParams) {
         if (!subs.has(tp)) {
           throw new CodegenError(
             expr,
-            `cannot infer type parameter '${tp}' for ${callee.text}; provide explicit type arguments`,
+            `cannot infer type parameter '${tp}' for ${callee.name}; provide explicit type arguments`,
           );
         }
       }
@@ -3992,7 +4152,7 @@ class Emitter {
     argType: TopazType,
     params: string[],
     subs: Map<string, TopazType>,
-    anchor: ts.Node,
+    anchor: ts.Node | { pos: number },
   ): void {
     if (ts.isParenthesizedTypeNode(paramTypeNode)) {
       this.unifyTypeParam(paramTypeNode.type, argType, params, subs, anchor);
@@ -4088,10 +4248,10 @@ class Emitter {
     }
   }
 
-  private emitBlock(block: ts.Block, indent: number): string {
+  private emitBlock(block: BlockStmt, indent: number): string {
     const pad = "  ".repeat(indent);
     const lines: string[] = [];
-    for (const s of block.statements) {
+    for (const s of block.stmts) {
       lines.push(this.emitStatement(s, indent + 1));
       // Phase 1.5-3d: early-exit narrowing. If `s` is `if (cond) { exits }`
       // (and optionally an else that does not exit), the rest of this block
@@ -4104,33 +4264,33 @@ class Emitter {
   // Phase 1.5-3d: when an `if` (without continuation) always exits one branch,
   // any narrowing implied by the opposite polarity carries forward in the
   // enclosing block.
-  private applyCarryNarrowing(stmt: ts.Statement): void {
-    if (!ts.isIfStatement(stmt)) return;
-    const thenExits = this.alwaysExits(stmt.thenStatement);
-    const elseExits = stmt.elseStatement ? this.alwaysExits(stmt.elseStatement) : false;
+  private applyCarryNarrowing(stmt: Stmt): void {
+    if (stmt.kind !== "if_stmt") return;
+    const thenExits = this.alwaysExits(stmt.thenBranch);
+    const elseExits = stmt.elseBranch ? this.alwaysExits(stmt.elseBranch) : false;
     let carryPolarity: boolean | undefined;
-    if (thenExits && !stmt.elseStatement) carryPolarity = false;
+    if (thenExits && !stmt.elseBranch) carryPolarity = false;
     else if (thenExits && !elseExits) carryPolarity = false;
     else if (!thenExits && elseExits) carryPolarity = true;
     else return;
-    const n = this.extractNarrowing(stmt.expression, carryPolarity);
+    const n = this.extractNarrowing(stmt.cond, carryPolarity);
     if (n) this.scope.narrow(n.name, n.type);
   }
 
   // Phase 1.5-3d: conservative "this statement always exits the enclosing
   // function/loop" predicate. Used for early-return narrowing only — false
   // negatives just disable narrowing, never produce wrong code.
-  private alwaysExits(stmt: ts.Statement): boolean {
-    if (ts.isReturnStatement(stmt)) return true;
-    if (ts.isThrowStatement(stmt)) return true;
-    if (ts.isBreakStatement(stmt)) return true;
-    if (ts.isContinueStatement(stmt)) return true;
-    if (ts.isBlock(stmt)) {
-      if (stmt.statements.length === 0) return false;
-      return this.alwaysExits(stmt.statements[stmt.statements.length - 1]!);
+  private alwaysExits(stmt: Stmt): boolean {
+    if (stmt.kind === "return_stmt") return true;
+    if (stmt.kind === "throw_stmt") return true;
+    if (stmt.kind === "break_stmt") return true;
+    if (stmt.kind === "continue_stmt") return true;
+    if (stmt.kind === "block_stmt") {
+      if (stmt.stmts.length === 0) return false;
+      return this.alwaysExits(stmt.stmts[stmt.stmts.length - 1]!);
     }
-    if (ts.isIfStatement(stmt) && stmt.elseStatement) {
-      return this.alwaysExits(stmt.thenStatement) && this.alwaysExits(stmt.elseStatement);
+    if (stmt.kind === "if_stmt" && stmt.elseBranch) {
+      return this.alwaysExits(stmt.thenBranch) && this.alwaysExits(stmt.elseBranch);
     }
     return false;
   }
@@ -4140,11 +4300,24 @@ class Emitter {
   // expression is true (then-branch); `false` is else-branch / inverted carry.
   // Returns undefined when no narrowing can be inferred.
   private extractNarrowing(
-    cond: ts.Expression,
+    cond: Expr,
     polarity: boolean,
   ): { name: string; type: TopazType } | undefined {
-    if (!ts.isBinaryExpression(cond)) return undefined;
-    const tok = cond.operatorToken.kind;
+    // Phase 1.5-3f: `<id> instanceof ClassName` narrows id from `unknown` to
+    // the concrete class on the positive branch. The negative branch can't
+    // narrow (id could still be any other class), so we only return for
+    // polarity === true. `instanceof` is its own Topaz node kind.
+    if (cond.kind === "instanceof_expr") {
+      if (!polarity) return undefined;
+      if (cond.lhs.kind !== "ident") return undefined;
+      if (cond.rhs.kind !== "ident") return undefined;
+      const b = this.scope.lookup(cond.lhs.name);
+      if (!b || b.type.kind !== "unknown") return undefined;
+      if (!this.classes.has(cond.rhs.name)) return undefined;
+      return { name: cond.lhs.name, type: classOf(cond.rhs.name) };
+    }
+    if (cond.kind !== "bin_op") return undefined;
+    const op = cond.op;
     // Phase 1.5-6 prep #20: De Morgan carry for compound conditions. `A && B`
     // is true only when both A and B hold, so a polarity-true narrowing can be
     // read off either operand (positive); `A || B` is false only when both
@@ -4154,56 +4327,39 @@ class Emitter {
     // This lets an early-exit guard like
     // `if (t.kind !== "punct" || t.op !== op) throw ...` carry `t`'s
     // discriminator narrowing onto the statements that follow the `if`.
-    if (tok === ts.SyntaxKind.AmpersandAmpersandToken) {
+    if (op === "&&") {
       if (!polarity) return undefined;
-      return this.extractNarrowing(cond.left, true) ?? this.extractNarrowing(cond.right, true);
+      return this.extractNarrowing(cond.lhs, true) ?? this.extractNarrowing(cond.rhs, true);
     }
-    if (tok === ts.SyntaxKind.BarBarToken) {
+    if (op === "||") {
       if (polarity) return undefined;
-      return this.extractNarrowing(cond.left, false) ?? this.extractNarrowing(cond.right, false);
+      return this.extractNarrowing(cond.lhs, false) ?? this.extractNarrowing(cond.rhs, false);
     }
-    // Phase 1.5-3f: `<id> instanceof ClassName` narrows id from `unknown` to
-    // the concrete class on the positive branch. The negative branch can't
-    // narrow (id could still be any other class), so we only return for
-    // polarity === true.
-    if (tok === ts.SyntaxKind.InstanceOfKeyword) {
-      if (!polarity) return undefined;
-      if (!ts.isIdentifier(cond.left)) return undefined;
-      if (!ts.isIdentifier(cond.right)) return undefined;
-      const b = this.scope.lookup(cond.left.text);
-      if (!b || b.type.kind !== "unknown") return undefined;
-      if (!this.classes.has(cond.right.text)) return undefined;
-      return { name: cond.left.text, type: classOf(cond.right.text) };
-    }
-    if (
-      tok !== ts.SyntaxKind.EqualsEqualsEqualsToken &&
-      tok !== ts.SyntaxKind.ExclamationEqualsEqualsToken
-    ) {
+    if (op !== "===" && op !== "!==") {
       return undefined;
     }
     // Phase 1.5-6 prep #19: `<id>.<disc> === "lit"` narrows a dunion-typed id
     // to the matching variant (the same scope.narrow path `switch` uses). The
     // undefined check below requires both sides to be identifiers, so this
     // property-access form never collides with it.
-    const dn = this.extractDiscriminatorNarrowing(cond, tok, polarity);
+    const dn = this.extractDiscriminatorNarrowing(cond, op, polarity);
     if (dn) return dn;
-    const leftIsUndef = ts.isIdentifier(cond.left) && cond.left.text === "undefined";
-    const rightIsUndef = ts.isIdentifier(cond.right) && cond.right.text === "undefined";
+    const leftIsUndef = cond.lhs.kind === "undefined_lit";
+    const rightIsUndef = cond.rhs.kind === "undefined_lit";
     if (leftIsUndef === rightIsUndef) return undefined;
-    const varNode = leftIsUndef ? cond.right : cond.left;
-    if (!ts.isIdentifier(varNode)) return undefined;
-    const b = this.scope.lookup(varNode.text);
+    const varNode = leftIsUndef ? cond.rhs : cond.lhs;
+    if (varNode.kind !== "ident") return undefined;
+    const b = this.scope.lookup(varNode.name);
     if (!b) return undefined;
     if (!containsUndefined(b.type)) return undefined;
     // Strip-undefined when `(x !== undefined)` is true, or `(x === undefined)` is false.
-    const stripUndef =
-      (tok === ts.SyntaxKind.ExclamationEqualsEqualsToken) === polarity;
+    const stripUndef = (op === "!==") === polarity;
     if (stripUndef) {
       const inner = withoutUndefined(b.type);
       if (!inner) return undefined;
-      return { name: varNode.text, type: inner };
+      return { name: varNode.name, type: inner };
     }
-    return { name: varNode.text, type: T_UNDEFINED };
+    return { name: varNode.name, type: T_UNDEFINED };
   }
 
   // Phase 1.5-6 prep #19: interpret `<id>.<disc> === "lit"` (either argument
@@ -4214,39 +4370,39 @@ class Emitter {
   // when exactly one other variant remains (2-variant dunion). Returns the
   // narrowing valid when `cond` evaluates to `polarity`, else undefined.
   private extractDiscriminatorNarrowing(
-    cond: ts.BinaryExpression,
-    tok: ts.SyntaxKind,
+    cond: BinOpExpr,
+    op: string,
     polarity: boolean,
   ): { name: string; type: TopazType } | undefined {
-    const isLit = (e: ts.Expression): e is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral =>
-      ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e);
-    const isIdPA = (e: ts.Expression): e is ts.PropertyAccessExpression =>
-      ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression);
-    let pa: ts.PropertyAccessExpression;
-    let lit: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral;
-    if (isIdPA(cond.left) && isLit(cond.right)) {
-      pa = cond.left;
-      lit = cond.right;
-    } else if (isIdPA(cond.right) && isLit(cond.left)) {
-      pa = cond.right;
-      lit = cond.left;
+    const isIdPA = (e: Expr): e is PropAccessExpr =>
+      e.kind === "prop_access" && !e.optional && e.receiver.kind === "ident";
+    let pa: PropAccessExpr;
+    let litText: string;
+    const leftLit = stringLitText(cond.lhs);
+    const rightLit = stringLitText(cond.rhs);
+    if (isIdPA(cond.lhs) && rightLit !== undefined) {
+      pa = cond.lhs;
+      litText = rightLit;
+    } else if (isIdPA(cond.rhs) && leftLit !== undefined) {
+      pa = cond.rhs;
+      litText = leftLit;
     } else {
       return undefined;
     }
-    const idName = (pa.expression as ts.Identifier).text;
+    const idName = (pa.receiver as IdentExpr).name;
     const b = this.scope.lookup(idName);
     if (!b || b.type.kind !== "dunion") return undefined;
     const dunion = b.type;
-    if (pa.name.text !== dunion.discriminator) return undefined;
+    if (pa.name !== dunion.discriminator) return undefined;
     let matchCls: string | undefined;
     for (const cname of dunion.variants) {
-      if (this.dunionLiteralFor(dunion, cname) === lit.text) {
+      if (this.dunionLiteralFor(dunion, cname) === litText) {
         matchCls = cname;
         break;
       }
     }
     if (!matchCls) return undefined;
-    const selectsMatch = (tok === ts.SyntaxKind.EqualsEqualsEqualsToken) === polarity;
+    const selectsMatch = (op === "===") === polarity;
     if (selectsMatch) return { name: idName, type: classOf(matchCls) };
     if (dunion.variants.length === 2) {
       const other = dunion.variants.find((v) => v !== matchCls)!;
@@ -4255,14 +4411,14 @@ class Emitter {
     return undefined;
   }
 
-  private emitStatement(stmt: ts.Statement, indent: number): string {
+  private emitStatement(stmt: Stmt, indent: number): string {
     const pad = "  ".repeat(indent);
 
-    if (ts.isReturnStatement(stmt)) {
+    if (stmt.kind === "return_stmt") {
       if (!this.currentReturnType) {
         throw new CodegenError(stmt, "`return` outside of a function or method");
       }
-      if (!stmt.expression) {
+      if (!stmt.value) {
         if (this.currentReturnType.kind !== "void") {
           throw new CodegenError(
             stmt,
@@ -4280,7 +4436,7 @@ class Emitter {
           "`return <expr>;` is not allowed in a void-returning function (use a bare `return;` or remove it)",
         );
       }
-      const retExpr = this.emitWithExpected(stmt.expression, this.currentReturnType);
+      const retExpr = this.emitWithExpected(stmt.value, this.currentReturnType);
       if (this.liveTryFrames > 0) {
         // Phase 1.5-X: evaluate the value into a temp while the frame is still
         // live (so a throw inside the expression is still caught here), then
@@ -4293,86 +4449,94 @@ class Emitter {
       return `${pad}return ${retExpr};`;
     }
 
-    if (ts.isExpressionStatement(stmt)) {
-      return `${pad}${this.emitExpression(stmt.expression)};`;
+    if (stmt.kind === "expr_stmt") {
+      return `${pad}${this.emitExpression(stmt.expr)};`;
     }
 
-    if (ts.isVariableStatement(stmt)) {
-      return this.emitVarDecls(stmt.declarationList, indent);
+    if (stmt.kind === "var_decl") {
+      const { type, cName, initStr } = this.declareVar(stmt, stmt.declKind === "const");
+      return `${pad}${cTypeName(type)} ${cName}${initStr};`;
     }
 
-    if (ts.isIfStatement(stmt)) {
-      this.expectType(stmt.expression, T_BOOLEAN);
-      const cond = this.emitExpression(stmt.expression);
+    if (stmt.kind === "var_destr_decl") {
+      return this.emitObjectDestructuringDecl(stmt, stmt.declKind === "const", indent);
+    }
+
+    if (stmt.kind === "if_stmt") {
+      this.expectType(stmt.cond, T_BOOLEAN);
+      const cond = this.emitExpression(stmt.cond);
       // Phase 1.5-3d: extract narrowings BEFORE emitting branches so each
       // side sees the right narrowed view of the variable.
-      const thenN = this.extractNarrowing(stmt.expression, true);
-      const elseN = this.extractNarrowing(stmt.expression, false);
-      const thenStr = this.emitStatementAsBlock(stmt.thenStatement, indent, thenN);
+      const thenN = this.extractNarrowing(stmt.cond, true);
+      const elseN = this.extractNarrowing(stmt.cond, false);
+      const thenStr = this.emitStatementAsBlock(stmt.thenBranch, indent, thenN);
       let out = `${pad}if (${cond}) ${thenStr.trimStart()}`;
-      if (stmt.elseStatement) {
-        const elseStr = this.emitStatementAsBlock(stmt.elseStatement, indent, elseN);
+      if (stmt.elseBranch) {
+        const elseStr = this.emitStatementAsBlock(stmt.elseBranch, indent, elseN);
         out += ` else ${elseStr.trimStart()}`;
       }
       return out;
     }
 
-    if (ts.isWhileStatement(stmt)) {
-      this.expectType(stmt.expression, T_BOOLEAN);
-      const cond = this.emitExpression(stmt.expression);
-      const body = this.emitStatementAsBlock(stmt.statement, indent);
+    if (stmt.kind === "while_stmt") {
+      this.expectType(stmt.cond, T_BOOLEAN);
+      const cond = this.emitExpression(stmt.cond);
+      this.loopCtx.push("loop");
+      let body: string;
+      try {
+        body = this.emitStatementAsBlock(stmt.body, indent);
+      } finally {
+        this.loopCtx.pop();
+      }
       return `${pad}while (${cond}) ${body.trimStart()}`;
     }
 
-    if (ts.isDoStatement(stmt)) {
-      this.expectType(stmt.expression, T_BOOLEAN);
-      const cond = this.emitExpression(stmt.expression);
-      const body = this.emitStatementAsBlock(stmt.statement, indent);
+    if (stmt.kind === "do_while_stmt") {
+      this.expectType(stmt.cond, T_BOOLEAN);
+      const cond = this.emitExpression(stmt.cond);
+      this.loopCtx.push("loop");
+      let body: string;
+      try {
+        body = this.emitStatementAsBlock(stmt.body, indent);
+      } finally {
+        this.loopCtx.pop();
+      }
       return `${pad}do ${body.trimStart()} while (${cond});`;
     }
 
-    if (ts.isForStatement(stmt)) {
+    if (stmt.kind === "for_stmt") {
       return this.emitForStatement(stmt, indent);
     }
 
-    if (ts.isForOfStatement(stmt)) {
+    if (stmt.kind === "for_of_stmt") {
       return this.emitForOfStatement(stmt, indent);
     }
 
-    if (ts.isForInStatement(stmt)) {
-      throw new CodegenError(
-        stmt,
-        "`for-in` is unsupported; use `for-of` over an Array or an index-based for-loop",
-      );
-    }
-
-    if (ts.isSwitchStatement(stmt)) {
+    if (stmt.kind === "switch_stmt") {
       return this.emitSwitchStatement(stmt, indent);
     }
 
-    if (ts.isBreakStatement(stmt)) {
-      if (stmt.label) unsupported(stmt, "labeled break");
+    if (stmt.kind === "break_stmt") {
       return `${pad}break;`;
     }
 
-    if (ts.isContinueStatement(stmt)) {
-      if (stmt.label) unsupported(stmt, "labeled continue");
+    if (stmt.kind === "continue_stmt") {
       this.checkContinueAllowed(stmt);
       return `${pad}continue;`;
     }
 
-    if (ts.isBlock(stmt)) {
+    if (stmt.kind === "block_stmt") {
       this.scope.push();
       const out = this.emitBlock(stmt, indent);
       this.scope.pop();
       return out;
     }
 
-    if (ts.isThrowStatement(stmt)) {
+    if (stmt.kind === "throw_stmt") {
       return this.emitThrowStatement(stmt, indent);
     }
 
-    if (ts.isTryStatement(stmt)) {
+    if (stmt.kind === "try_stmt") {
       return this.emitTryStatement(stmt, indent);
     }
 
@@ -4383,19 +4547,16 @@ class Emitter {
   // (implicit conversion from any object pointer), so no explicit cast on the
   // emitting side. We require the thrown value to be a class type so the
   // catch site has a single C type to cast back to.
-  private emitThrowStatement(stmt: ts.ThrowStatement, indent: number): string {
+  private emitThrowStatement(stmt: ThrowStmt, indent: number): string {
     const pad = "  ".repeat(indent);
-    if (!stmt.expression) {
-      throw new CodegenError(stmt, "bare `throw;` is unsupported; throw an explicit value");
-    }
-    const t = this.inferType(stmt.expression);
+    const t = this.inferType(stmt.value);
     if (!isClassType(t)) {
       throw new CodegenError(
-        stmt.expression,
+        stmt.value,
         `throw value must be a class instance (got ${typeIdent(t)})`,
       );
     }
-    return `${pad}topaz_throw(${this.emitExpression(stmt.expression)});`;
+    return `${pad}topaz_throw(${this.emitExpression(stmt.value)});`;
   }
 
   // Phase 1.5-1: try/catch. setjmp returns 0 on the initial call (run body
@@ -4410,7 +4571,7 @@ class Emitter {
     return "topaz_try_pop(); ".repeat(this.liveTryFrames);
   }
 
-  private emitTryStatement(stmt: ts.TryStatement, indent: number): string {
+  private emitTryStatement(stmt: TryStmt, indent: number): string {
     const pad = "  ".repeat(indent);
     if (stmt.finallyBlock) {
       throw new CodegenError(stmt.finallyBlock, "`finally` is unsupported (Phase 1.5-1)");
@@ -4419,28 +4580,24 @@ class Emitter {
       throw new CodegenError(stmt, "`try` without a `catch` clause is unsupported");
     }
     const catchClause = stmt.catchClause;
-    if (!catchClause.variableDeclaration) {
+    if (!catchClause.bindingName) {
       throw new CodegenError(
         catchClause,
         "`catch` clause requires a binding (e.g. `catch (e: ClassName)`)",
       );
-    }
-    const vd = catchClause.variableDeclaration;
-    if (!ts.isIdentifier(vd.name)) {
-      throw new CodegenError(vd, "catch binding name must be a simple identifier");
     }
     // Phase 1.5-3f: missing annotation defaults to `unknown`, matching TS's
     // strict-mode `catch (e)` type. `: unknown` is also accepted explicitly.
     // The user must then narrow with `if (e instanceof ClassName)` before
     // touching fields/methods.
     let errType: TopazType;
-    if (!vd.type) {
+    if (!catchClause.bindingType) {
       errType = T_UNKNOWN;
     } else {
-      errType = this.typeAnno(vd.type, vd);
+      errType = this.typeFromAnnotation(catchClause.bindingType, catchClause, g_currentSf!);
       if (errType.kind !== "unknown" && !isClassType(errType)) {
         throw new CodegenError(
-          vd.type,
+          catchClause.bindingType,
           `\`catch\` binding type must be a class or \`unknown\` (got ${typeIdent(errType)})`,
         );
       }
@@ -4449,7 +4606,7 @@ class Emitter {
 
     const id = this.tmpCounter++;
     const frame = `__topaz_try_${id}`;
-    const eName = vd.name.text;
+    const eName = catchClause.bindingName;
 
     this.scope.push();
     let tryBodyLines: string[];
@@ -4457,7 +4614,7 @@ class Emitter {
     // `return` emitted within sees liveTryFrames bumped by one (and pops it).
     this.liveTryFrames++;
     try {
-      tryBodyLines = stmt.tryBlock.statements.map((s) => this.emitStatement(s, indent + 2));
+      tryBodyLines = stmt.tryBlock.stmts.map((s) => this.emitStatement(s, indent + 2));
     } finally {
       this.liveTryFrames--;
       this.scope.pop();
@@ -4466,8 +4623,8 @@ class Emitter {
     this.scope.push();
     let catchBodyStr: string;
     try {
-      this.scope.declare(eName, errType, /* isConst */ false, vd);
-      const catchBodyLines = catchClause.block.statements.map((s) =>
+      this.scope.declare(eName, errType, /* isConst */ false, catchClause);
+      const catchBodyLines = catchClause.body.stmts.map((s) =>
         this.emitStatement(s, indent + 2),
       );
       catchBodyStr = catchBodyLines.join("\n");
@@ -4506,45 +4663,106 @@ class Emitter {
   // doesn't try to distinguish break/continue confined to a loop *inside* the
   // try body — those are technically safe, but we forbid them uniformly to keep
   // the rule one sentence long.
-  private checkTryBodyNoEscape(block: ts.Block): void {
-    const walk = (node: ts.Node): void => {
-      if (ts.isBreakStatement(node)) {
-        throw new CodegenError(
-          node,
-          "`break` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
-        );
+  private checkTryBodyNoEscape(block: BlockStmt): void {
+    // Recursive visitor over the Topaz statement / expression tree. Descent
+    // stops at function boundaries (`arrow_expr`); the subset forbids nested
+    // function / class declarations inside blocks (convert rejects them), so
+    // arrows are the only barrier to honor.
+    const walkExpr = (e: Expr): void => {
+      switch (e.kind) {
+        case "ident":
+        case "num_lit":
+        case "str_lit":
+        case "bool_lit":
+        case "null_lit":
+        case "undefined_lit":
+        case "this_expr":
+        case "import_meta_url":
+          return;
+        case "template_lit": for (const sub of e.subs) walkExpr(sub.expr); return;
+        case "array_lit": for (const el of e.elems) walkExpr(el.expr); return;
+        case "object_lit":
+          for (const m of e.props) {
+            if (m.kind === "prop_kv") walkExpr(m.value);
+            else if (m.kind === "prop_spread") walkExpr(m.expr);
+          }
+          return;
+        case "paren_expr": walkExpr(e.inner); return;
+        case "call_expr": walkExpr(e.callee); for (const a of e.args) walkExpr(a); return;
+        case "new_expr": walkExpr(e.callee); for (const a of e.args) walkExpr(a); return;
+        case "prop_access": walkExpr(e.receiver); return;
+        case "elem_access": walkExpr(e.receiver); walkExpr(e.index); return;
+        case "prefix_op":
+        case "postfix_op": walkExpr(e.operand); return;
+        case "bin_op": walkExpr(e.lhs); walkExpr(e.rhs); return;
+        case "instanceof_expr": walkExpr(e.lhs); walkExpr(e.rhs); return;
+        case "typeof_expr": walkExpr(e.operand); return;
+        case "ternary_expr": walkExpr(e.cond); walkExpr(e.thenBranch); walkExpr(e.elseBranch); return;
+        case "assign_expr": walkExpr(e.target); walkExpr(e.value); return;
+        case "non_null": walkExpr(e.operand); return;
+        case "spread_expr": walkExpr(e.operand); return;
+        case "arrow_expr": return; // function boundary
       }
-      if (ts.isContinueStatement(node)) {
-        throw new CodegenError(
-          node,
-          "`continue` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
-        );
-      }
-      if (
-        ts.isFunctionDeclaration(node) ||
-        ts.isFunctionExpression(node) ||
-        ts.isArrowFunction(node) ||
-        ts.isClassDeclaration(node) ||
-        ts.isClassExpression(node) ||
-        ts.isMethodDeclaration(node) ||
-        ts.isConstructorDeclaration(node) ||
-        ts.isGetAccessorDeclaration(node) ||
-        ts.isSetAccessorDeclaration(node)
-      ) {
-        return;
-      }
-      ts.forEachChild(node, walk);
     };
-    for (const s of block.statements) walk(s);
+    const walk = (s: Stmt): void => {
+      switch (s.kind) {
+        case "break_stmt":
+          throw new CodegenError(
+            s,
+            "`break` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
+          );
+        case "continue_stmt":
+          throw new CodegenError(
+            s,
+            "`continue` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
+          );
+        case "expr_stmt": walkExpr(s.expr); return;
+        case "var_decl": if (s.init) walkExpr(s.init); return;
+        case "var_destr_decl": walkExpr(s.init); return;
+        case "block_stmt": for (const st of s.stmts) walk(st); return;
+        case "if_stmt":
+          walkExpr(s.cond); walk(s.thenBranch);
+          if (s.elseBranch) walk(s.elseBranch);
+          return;
+        case "while_stmt": walkExpr(s.cond); walk(s.body); return;
+        case "do_while_stmt": walk(s.body); walkExpr(s.cond); return;
+        case "for_stmt":
+          if (s.init) {
+            if (s.init.kind === "for_init_decl") walk(s.init.decl);
+            else walkExpr(s.init.expr);
+          }
+          if (s.cond) walkExpr(s.cond);
+          if (s.update) walkExpr(s.update);
+          walk(s.body);
+          return;
+        case "for_of_stmt": walkExpr(s.source); walk(s.body); return;
+        case "switch_stmt":
+          walkExpr(s.discriminant);
+          for (const c of s.cases) {
+            if (c.test) walkExpr(c.test);
+            for (const st of c.stmts) walk(st);
+          }
+          return;
+        case "try_stmt":
+          for (const st of s.tryBlock.stmts) walk(st);
+          if (s.catchClause) for (const st of s.catchClause.body.stmts) walk(st);
+          if (s.finallyBlock) for (const st of s.finallyBlock.stmts) walk(st);
+          return;
+        case "return_stmt": if (s.value) walkExpr(s.value); return;
+        case "throw_stmt": walkExpr(s.value); return;
+        case "empty_stmt": return;
+      }
+    };
+    for (const s of block.stmts) walk(s);
   }
 
   private emitStatementAsBlock(
-    stmt: ts.Statement,
+    stmt: Stmt,
     indent: number,
     narrow?: { name: string; type: TopazType },
   ): string {
     const pad = "  ".repeat(indent);
-    if (ts.isBlock(stmt)) {
+    if (stmt.kind === "block_stmt") {
       this.scope.push();
       if (narrow) this.scope.narrow(narrow.name, narrow.type);
       const out = this.emitBlock(stmt, indent);
@@ -4634,34 +4852,6 @@ class Emitter {
     return undefined;
   }
 
-  private emitVarDecls(list: ts.VariableDeclarationList, indent: number): string {
-    const pad = "  ".repeat(indent);
-    const isConst = (list.flags & ts.NodeFlags.Const) !== 0;
-    const isLet = (list.flags & ts.NodeFlags.Let) !== 0;
-    if (!isConst && !isLet) {
-      throw new CodegenError(list, "var is unsupported; use let or const");
-    }
-    const lines: string[] = [];
-    for (const d of list.declarations) {
-      // Phase 1.5-6 prep-destructuring: `const { a, b } = expr;` is lowered
-      // to a snapshot tmp + per-binding field reads. Lives only at statement
-      // level (for-init still requires a single identifier — see emitForStatement).
-      if (ts.isObjectBindingPattern(d.name)) {
-        lines.push(this.emitObjectDestructuringDecl(d, isConst, indent));
-        continue;
-      }
-      if (ts.isArrayBindingPattern(d.name)) {
-        throw new CodegenError(
-          d,
-          "array destructuring `const [a, b] = ...` is unsupported (use index access or, for Map/Set, `for (const [k, v] of ...entries())`)",
-        );
-      }
-      const { type, cName, initStr } = this.declareVar(d, isConst);
-      lines.push(`${pad}${cTypeName(type)} ${cName}${initStr};`);
-    }
-    return lines.join("\n");
-  }
-
   // Phase 1.5-6 prep-destructuring: lower `const { a, b } = expr;` to
   //   <recv-ty> __topaz_destr_<N> = <init>;
   //   <T_a> a = __topaz_destr_<N>-><a>;        // for class receiver
@@ -4675,46 +4865,20 @@ class Emitter {
   // needs the bare form). Empty pattern `const {} = ...` is also rejected as
   // likely a typo.
   private emitObjectDestructuringDecl(
-    decl: ts.VariableDeclaration,
+    decl: VarDestrDeclStmt,
     isConst: boolean,
     indent: number,
   ): string {
     const pad = "  ".repeat(indent);
-    const pattern = decl.name as ts.ObjectBindingPattern;
-    if (decl.type) {
-      throw new CodegenError(
-        decl,
-        "type annotation on object destructuring pattern is unsupported (annotate the receiver expression, e.g. `const x: T = ...; const { a } = x;`)",
-      );
-    }
-    if (!decl.initializer) {
-      throw new CodegenError(decl, "destructuring declaration must have an initializer");
-    }
-    if (pattern.elements.length === 0) {
-      throw new CodegenError(pattern, "empty object destructuring pattern is unsupported");
-    }
-    for (const el of pattern.elements) {
-      if (el.dotDotDotToken) {
-        throw new CodegenError(el, "rest element `...r` in object destructuring is unsupported");
-      }
-      if (el.initializer) {
-        throw new CodegenError(el, "default value `{ a = ... }` in object destructuring is unsupported");
-      }
-      if (el.propertyName) {
-        throw new CodegenError(
-          el,
-          "property rename / nested pattern `{ a: x }` in object destructuring is unsupported",
-        );
-      }
-      if (!ts.isIdentifier(el.name)) {
-        throw new CodegenError(
-          el,
-          "nested destructuring is unsupported (each element must be a simple identifier)",
-        );
-      }
+    // Phase 1.5-6e-2: the syntactic rejects (pattern-level type annotation,
+    // missing initializer, rest / default / property rename / nested pattern)
+    // now live in convert (`convertVarDeclList`). The empty-pattern check and
+    // the receiver-shape / field-existence semantic checks stay here.
+    if (decl.bindings.length === 0) {
+      throw new CodegenError(decl, "empty object destructuring pattern is unsupported");
     }
 
-    const recvType = this.inferType(decl.initializer);
+    const recvType = this.inferType(decl.init);
     this.assertNotVoid(
       recvType,
       decl,
@@ -4763,17 +4927,17 @@ class Emitter {
       );
     }
 
-    for (const el of pattern.elements) {
-      const fname = (el.name as ts.Identifier).text;
+    for (const b of decl.bindings) {
+      const fname = b.name;
       if (!fields.has(fname)) {
         if (methods.has(fname)) {
           throw new CodegenError(
-            el,
+            b,
             `'${fname}' is a method of '${receiverName}', not a field — methods cannot be destructured (method-as-value is unsupported)`,
           );
         }
         throw new CodegenError(
-          el,
+          b,
           `${receiverKind} '${receiverName}' has no field '${fname}'`,
         );
       }
@@ -4784,42 +4948,43 @@ class Emitter {
     // fat-pointer struct passed by value (cTypeName handles both spellings).
     const tmpId = this.tmpCounter++;
     const tmp = `__topaz_destr_${tmpId}`;
-    const initExpr = this.emitExpression(decl.initializer);
+    const initExpr = this.emitExpression(decl.init);
 
     const lines: string[] = [];
     lines.push(`${pad}${cTypeName(recvType)} ${tmp} = ${initExpr};`);
-    for (const el of pattern.elements) {
-      const fname = (el.name as ts.Identifier).text;
+    for (const b of decl.bindings) {
+      const fname = b.name;
       const fty = fields.get(fname)!;
       const accessor = receiverKind === "class"
         ? `${tmp}->${fname}`
         : `${tmp}.vt->get_${fname}(${tmp}.data)`;
       lines.push(`${pad}${cTypeName(fty)} ${fname} = ${accessor};`);
-      this.scope.declare(fname, fty, isConst, el);
+      this.scope.declare(fname, fty, isConst, b);
     }
     return lines.join("\n");
   }
 
   private declareVar(
-    decl: ts.VariableDeclaration,
+    decl: VarDeclStmt,
     isConst: boolean,
   ): { type: TopazType; cName: string; initStr: string } {
-    if (!ts.isIdentifier(decl.name)) {
-      throw new CodegenError(decl, "variable name must be a simple identifier");
-    }
-    if (!decl.initializer) {
+    // Phase 1.5-6e-2: convert guarantees a simple-identifier name. A `var_decl`
+    // with no initializer is rejected here (let / const require an initializer
+    // in this subset).
+    if (!decl.init) {
       throw new CodegenError(decl, "variable declaration must have an initializer");
     }
-    const name = decl.name.text;
+    const name = decl.name;
+    const init = decl.init;
 
     let type: TopazType;
     let initExpr: string;
     if (decl.type) {
-      type = this.typeAnno(decl.type, decl);
+      type = this.typeFromAnnotation(decl.type, decl, g_currentSf!);
       this.assertNotVoid(type, decl, "variable type");
       // emitWithExpected threads `type` through ArrayLiteral / NewExpression
       // context typing and applies class -> interface coercion when needed.
-      initExpr = this.emitWithExpected(decl.initializer, type);
+      initExpr = this.emitWithExpected(init, type);
       // Phase 1.5-6 prep: initializer narrowing. `const x: U = init` where U is
       // a discriminated union and init's static type is a concrete variant
       // keeps the narrowed variant for subsequent reads (tsc CFA narrows the
@@ -4835,11 +5000,11 @@ class Emitter {
       // depends on it). Only initializers that type on their own (calls, `new`,
       // identifiers, member reads) feed the narrowing.
       const initBareTypeable =
-        !ts.isObjectLiteralExpression(decl.initializer) &&
-        !ts.isArrayLiteralExpression(decl.initializer) &&
-        !ts.isArrowFunction(decl.initializer);
+        init.kind !== "object_lit" &&
+        init.kind !== "array_lit" &&
+        init.kind !== "arrow_expr";
       if (isConst && type.kind === "dunion" && initBareTypeable) {
-        const initType = this.inferType(decl.initializer);
+        const initType = this.inferType(init);
         if (isClassType(initType) && type.variants.includes(classNameOf(initType)!)) {
           this.scope.declare(name, type, isConst, decl);
           this.scope.narrow(name, initType);
@@ -4848,51 +5013,44 @@ class Emitter {
       }
     } else {
       const initIsBareNew =
-        ts.isNewExpression(decl.initializer) &&
-        ts.isIdentifier(decl.initializer.expression) &&
-        (decl.initializer.expression.text === "Map" ||
-          decl.initializer.expression.text === "Set") &&
-        (!decl.initializer.typeArguments || decl.initializer.typeArguments.length === 0);
+        init.kind === "new_expr" &&
+        init.callee.kind === "ident" &&
+        (init.callee.name === "Map" || init.callee.name === "Set") &&
+        init.typeArgs.length === 0;
       if (initIsBareNew) {
         throw new CodegenError(
-          decl.initializer,
+          init,
           "cannot infer constructor type arguments; write `new Map<K, V>()` / `new Set<T>()` or annotate the binding",
         );
       }
-      type = this.inferType(decl.initializer);
+      type = this.inferType(init);
       this.assertNotVoid(type, decl, "variable initializer (void-returning call cannot be stored)");
-      if (ts.isArrayLiteralExpression(decl.initializer)) {
-        initExpr = this.emitArrayLiteral(decl.initializer, type);
-      } else if (ts.isNewExpression(decl.initializer)) {
-        initExpr = this.emitNewExpression(decl.initializer, type);
+      if (init.kind === "array_lit") {
+        initExpr = this.emitArrayLiteral(init, type);
+      } else if (init.kind === "new_expr") {
+        initExpr = this.emitNewExpression(init, type);
       } else {
-        initExpr = this.emitExpression(decl.initializer);
+        initExpr = this.emitExpression(init);
       }
     }
     this.scope.declare(name, type, isConst, decl);
     return { type, cName: name, initStr: ` = ${initExpr}` };
   }
 
-  private emitForStatement(stmt: ts.ForStatement, indent: number): string {
+  private emitForStatement(stmt: ForStmt, indent: number): string {
     const pad = "  ".repeat(indent);
     this.scope.push();
     try {
       let initStr = "";
-      if (stmt.initializer) {
-        if (ts.isVariableDeclarationList(stmt.initializer)) {
-          const init = stmt.initializer;
-          if (init.declarations.length !== 1) {
-            throw new CodegenError(init, "for-init with multiple declarations is unsupported");
-          }
-          const isConst = (init.flags & ts.NodeFlags.Const) !== 0;
-          const isLet = (init.flags & ts.NodeFlags.Let) !== 0;
-          if (!isConst && !isLet) {
-            throw new CodegenError(init, "var is unsupported; use let or const");
-          }
-          const { type, cName, initStr: vInit } = this.declareVar(init.declarations[0]!, isConst);
+      if (stmt.init) {
+        if (stmt.init.kind === "for_init_decl") {
+          // `for_init_decl.decl` is a single `var_decl`; convert already split
+          // out / rejected destructuring and multi-decl for-init.
+          const d = stmt.init.decl;
+          const { type, cName, initStr: vInit } = this.declareVar(d, d.declKind === "const");
           initStr = `${cTypeName(type)} ${cName}${vInit}`;
         } else {
-          initStr = this.emitExpression(stmt.initializer as ts.Expression);
+          initStr = this.emitExpression(stmt.init.expr);
         }
       }
       // A missing condition (`for (;;)`) is an infinite loop — C accepts an
@@ -4900,22 +5058,27 @@ class Emitter {
       // to `break` / `return` / `throw` out). init / incrementor are already
       // optional above (initStr / incrStr stay empty when omitted).
       let condStr = "";
-      if (stmt.condition) {
-        this.expectType(stmt.condition, T_BOOLEAN);
-        condStr = this.emitExpression(stmt.condition);
+      if (stmt.cond) {
+        this.expectType(stmt.cond, T_BOOLEAN);
+        condStr = this.emitExpression(stmt.cond);
       }
-      const incrStr = stmt.incrementor ? this.emitExpression(stmt.incrementor) : "";
+      const incrStr = stmt.update ? this.emitExpression(stmt.update) : "";
 
+      this.loopCtx.push("loop");
       let bodyStr: string;
-      if (ts.isBlock(stmt.statement)) {
-        this.scope.push();
-        bodyStr = this.emitBlock(stmt.statement, indent);
-        this.scope.pop();
-      } else {
-        this.scope.push();
-        const inner = this.emitStatement(stmt.statement, indent + 1);
-        this.scope.pop();
-        bodyStr = `${pad}{\n${inner}\n${pad}}`;
+      try {
+        if (stmt.body.kind === "block_stmt") {
+          this.scope.push();
+          bodyStr = this.emitBlock(stmt.body, indent);
+          this.scope.pop();
+        } else {
+          this.scope.push();
+          const inner = this.emitStatement(stmt.body, indent + 1);
+          this.scope.pop();
+          bodyStr = `${pad}{\n${inner}\n${pad}}`;
+        }
+      } finally {
+        this.loopCtx.pop();
       }
       return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}`;
     } finally {
@@ -4947,30 +5110,14 @@ class Emitter {
   // or the same reference (class / iface). Arrow closures sidestep that by
   // arena-allocating a fresh env per iteration — by-value capture snapshots
   // the loop var at env construction time.
-  private emitForOfStatement(stmt: ts.ForOfStatement, indent: number): string {
-    if (stmt.awaitModifier) {
-      throw new CodegenError(stmt, "`for await` is unsupported (no async support yet)");
-    }
-    if (!ts.isVariableDeclarationList(stmt.initializer)) {
-      throw new CodegenError(
-        stmt.initializer,
-        "for-of binding must be a `const` or `let` declaration (assigning to an existing variable is unsupported)",
-      );
-    }
-    const init = stmt.initializer;
-    if (init.declarations.length !== 1) {
-      throw new CodegenError(init, "for-of binding must be a single declaration");
-    }
-    const isConst = (init.flags & ts.NodeFlags.Const) !== 0;
-    const isLet = (init.flags & ts.NodeFlags.Let) !== 0;
-    if (!isConst && !isLet) {
-      throw new CodegenError(init, "var is unsupported; use let or const");
-    }
-    const decl = init.declarations[0]!;
-    if (decl.initializer) {
-      throw new CodegenError(decl, "for-of binding cannot have an initializer");
-    }
-    const binding = this.parseForOfBinding(decl);
+  private emitForOfStatement(stmt: ForOfStmt, indent: number): string {
+    // Phase 1.5-6e-2: `for await`, non-decl bindings, multi-decl, `var`, and an
+    // initializer on the binding are all rejected in convert. The binding is
+    // already parsed into `for_of_single` / `for_of_pair`.
+    const binding = stmt.binding;
+    const isConst = binding.declKind === "const";
+    const bindingType =
+      binding.kind === "for_of_single" ? binding.type : undefined;
 
     // Phase 1.5-3.5g: detect Map.values() / Map.keys() / Set.values() /
     // Set.keys() as a syntactic special form *before* the regular inferType
@@ -4979,25 +5126,26 @@ class Emitter {
     //
     // Phase 1.5-3.5h-entries: `.entries()` also goes through this special form
     // path; pair binding lowers to two declarations off the same slot.
+    const source = stmt.source;
     if (
-      ts.isCallExpression(stmt.expression) &&
-      !stmt.expression.questionDotToken &&
-      ts.isPropertyAccessExpression(stmt.expression.expression) &&
-      !stmt.expression.expression.questionDotToken
+      source.kind === "call_expr" &&
+      !source.optional &&
+      source.callee.kind === "prop_access" &&
+      !source.callee.optional
     ) {
-      const callExpr = stmt.expression;
-      const callee = callExpr.expression as ts.PropertyAccessExpression;
-      const methodName = callee.name.text;
+      const callExpr = source;
+      const callee = source.callee;
+      const methodName = callee.name;
       if (methodName === "values" || methodName === "keys" || methodName === "entries") {
-        const baseType = this.inferType(callee.expression);
+        const baseType = this.inferType(callee.receiver);
         if (isMapType(baseType) || isSetType(baseType)) {
-          if (callExpr.arguments.length !== 0) {
+          if (callExpr.args.length !== 0) {
             throw new CodegenError(callExpr, `.${methodName}() takes no arguments`);
           }
           if (methodName === "entries") {
-            if (binding.kind !== "pair") {
+            if (binding.kind !== "for_of_pair") {
               throw new CodegenError(
-                decl.name,
+                stmt,
                 "for-of over .entries() requires destructuring binding `for (const [k, v] of ...)`",
               );
             }
@@ -5014,18 +5162,18 @@ class Emitter {
               valueType = setElem(baseType)!;
             }
             return this.emitForOfHashLowering(
-              stmt, indent, baseType, callee.expression,
+              stmt, indent, baseType, callee.receiver,
               { kind: "pair",
-                firstName: binding.firstName, firstField: "key", firstType: keyType,
-                secondName: binding.secondName, secondField: isMapType(baseType) ? "value" : "key", secondType: valueType,
+                firstName: binding.first, firstField: "key", firstType: keyType,
+                secondName: binding.second, secondField: isMapType(baseType) ? "value" : "key", secondType: valueType,
               },
-              decl, isConst,
+              undefined, isConst,
             );
           }
           // .values() / .keys() — single binding required.
-          if (binding.kind !== "single") {
+          if (binding.kind !== "for_of_single") {
             throw new CodegenError(
-              decl.name,
+              stmt,
               `for-of over .${methodName}() takes a single binding, not destructuring`,
             );
           }
@@ -5047,9 +5195,9 @@ class Emitter {
             field = "key";
           }
           return this.emitForOfHashLowering(
-            stmt, indent, baseType, callee.expression,
+            stmt, indent, baseType, callee.receiver,
             { kind: "single", name: binding.name, field, type: bindType },
-            decl, isConst,
+            bindingType, isConst,
           );
         }
       }
@@ -5059,15 +5207,15 @@ class Emitter {
     // for plain Array / Set / Iterator iteration — we have no tuple type
     // and `[a, b] = arr` on an Array<T> would require T|undefined semantics
     // for missing elements which we don't want to leak in for-of binding).
-    if (binding.kind === "pair") {
+    if (binding.kind === "for_of_pair") {
       throw new CodegenError(
-        decl.name,
+        stmt,
         "destructuring binding in for-of is only supported for .entries() on Map / Set",
       );
     }
     const bindName = binding.name;
 
-    const rhsType = this.inferType(stmt.expression);
+    const rhsType = this.inferType(stmt.source);
 
     // Phase 1.5-3.5g: plain Set RHS iterates over elements (JS treats Set as
     // its own iterable; `[...set]` and `for (const x of set)` both yield
@@ -5076,9 +5224,9 @@ class Emitter {
       this.recordSetMonomorph(rhsType);
       const elemType = setElem(rhsType)!;
       return this.emitForOfHashLowering(
-        stmt, indent, rhsType, stmt.expression,
+        stmt, indent, rhsType, stmt.source,
         { kind: "single", name: bindName, field: "key", type: elemType },
-        decl, isConst,
+        bindingType, isConst,
       );
     }
 
@@ -5089,8 +5237,8 @@ class Emitter {
     // .values() / .keys() / Set RHS — both forms are observationally equal.
     if (rhsType.kind === "iter") {
       return this.emitForOfIteratorLowering(
-        stmt, indent, rhsType, stmt.expression,
-        bindName, decl, isConst,
+        stmt, indent, rhsType, stmt.source,
+        bindName, bindingType, isConst,
       );
     }
 
@@ -5102,18 +5250,18 @@ class Emitter {
         hint = " (string iteration is unsupported; index with `[i]` instead)";
       }
       throw new CodegenError(
-        stmt.expression,
+        stmt.source,
         `for-of requires an Array<T>, Set<T>, Iterator<T>, Map.values(), Map.keys(), or Map.entries() (got ${typeIdent(rhsType)})${hint}`,
       );
     }
     this.recordArrayMonomorph(rhsType);
     const elemType = arrayElem(rhsType)!;
 
-    if (decl.type) {
-      const declared = this.typeAnno(decl.type, decl);
+    if (bindingType) {
+      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentSf!);
       if (!typeEq(declared, elemType)) {
         throw new CodegenError(
-          decl.type,
+          bindingType,
           `for-of binding type ${typeIdent(declared)} does not match array element type ${typeIdent(elemType)}`,
         );
       }
@@ -5125,7 +5273,7 @@ class Emitter {
     const idxTmp = `__topaz_for_idx_${id}`;
     const arrCType = cTypeName(rhsType);
     const elemCType = cTypeName(elemType);
-    const rhsExpr = this.emitExpression(stmt.expression);
+    const rhsExpr = this.emitExpression(stmt.source);
     const innerPad = "  ".repeat(indent + 2);
 
     // Outer Topaz scope holds the binding so the body's inferType / scope
@@ -5133,12 +5281,13 @@ class Emitter {
     // the body itself so any narrowing inside the loop pops cleanly.
     this.scope.push();
     try {
-      this.scope.declare(bindName, elemType, isConst, decl);
+      this.scope.declare(bindName, elemType, isConst, stmt);
       this.scope.push();
+      this.loopCtx.push("loop");
       try {
-        const stmtList: ts.Statement[] = ts.isBlock(stmt.statement)
-          ? Array.from(stmt.statement.statements)
-          : [stmt.statement];
+        const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
+          ? stmt.body.stmts
+          : [stmt.body];
         const stmtLines: string[] = [];
         for (const s of stmtList) {
           stmtLines.push(this.emitStatement(s, indent + 2));
@@ -5157,6 +5306,7 @@ class Emitter {
         lines.push(`${pad}}`);
         return lines.join("\n");
       } finally {
+        this.loopCtx.pop();
         this.scope.pop();
       }
     } finally {
@@ -5164,69 +5314,6 @@ class Emitter {
     }
   }
 
-  // Phase 1.5-3.5h-entries: parse a for-of binding decl into either a single
-  // identifier or a 2-element array destructuring `[k, v]`. Object
-  // destructuring, rest, default, property rename, nested patterns, omitted
-  // (sparse) elements, and pair binding with anything other than 2 elements
-  // are all rejected explicitly with hint text.
-  private parseForOfBinding(
-    decl: ts.VariableDeclaration,
-  ):
-    | { kind: "single"; name: string }
-    | { kind: "pair"; firstName: string; secondName: string }
-  {
-    if (ts.isIdentifier(decl.name)) {
-      return { kind: "single", name: decl.name.text };
-    }
-    if (ts.isObjectBindingPattern(decl.name)) {
-      throw new CodegenError(
-        decl.name,
-        "object destructuring is unsupported in for-of binding (use a class field accessor in the body)",
-      );
-    }
-    if (ts.isArrayBindingPattern(decl.name)) {
-      if (decl.type) {
-        throw new CodegenError(
-          decl.type,
-          "type annotation on destructuring binding is unsupported (omit the annotation; element types are inferred from the iterable)",
-        );
-      }
-      const elements = decl.name.elements;
-      if (elements.length !== 2) {
-        throw new CodegenError(
-          decl.name,
-          `destructuring binding in for-of must have exactly 2 elements [k, v] (got ${elements.length})`,
-        );
-      }
-      const names: string[] = [];
-      for (const el of elements) {
-        if (ts.isOmittedExpression(el)) {
-          throw new CodegenError(el, "omitted (sparse) destructuring element is unsupported");
-        }
-        if (el.dotDotDotToken) {
-          throw new CodegenError(el, "rest element in destructuring is unsupported");
-        }
-        if (el.initializer) {
-          throw new CodegenError(el, "default value in destructuring is unsupported");
-        }
-        if (el.propertyName) {
-          throw new CodegenError(el, "property rename in destructuring is unsupported");
-        }
-        if (!ts.isIdentifier(el.name)) {
-          throw new CodegenError(
-            el.name,
-            "nested destructuring is unsupported (each element must be a simple identifier)",
-          );
-        }
-        names.push(el.name.text);
-      }
-      return { kind: "pair", firstName: names[0]!, secondName: names[1]! };
-    }
-    throw new CodegenError(
-      decl.name,
-      "for-of binding must be an identifier or [k, v] destructuring",
-    );
-  }
 
   // Phase 1.5-3.5g: walk a Map / Set's open-addressing slot array, skipping
   // empty / tombstone slots. The user's `continue` / `break` refer to the
@@ -5239,10 +5326,10 @@ class Emitter {
   // For the pair case, both names bind off the same slot in a single C loop
   // iteration — no synthetic tuple type involved.
   private emitForOfHashLowering(
-    stmt: ts.ForOfStatement,
+    stmt: ForOfStmt,
     indent: number,
     containerType: TopazType,
-    recvExpr: ts.Expression,
+    recvExpr: Expr,
     bindSpec:
       | { kind: "single"; name: string; field: "key" | "value"; type: TopazType }
       | {
@@ -5250,18 +5337,18 @@ class Emitter {
           firstName: string; firstField: "key" | "value"; firstType: TopazType;
           secondName: string; secondField: "key" | "value"; secondType: TopazType;
         },
-    decl: ts.VariableDeclaration,
+    bindingType: TypeNode | undefined,
     isConst: boolean,
   ): string {
     const pad = "  ".repeat(indent);
 
-    if (bindSpec.kind === "single" && decl.type) {
-      const declared = this.typeAnno(decl.type, decl);
+    if (bindSpec.kind === "single" && bindingType) {
+      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentSf!);
       if (!typeEq(declared, bindSpec.type)) {
         const what =
           bindSpec.field === "value" ? "value" : (isMapType(containerType) ? "key" : "element");
         throw new CodegenError(
-          decl.type,
+          bindingType,
           `for-of binding type ${typeIdent(declared)} does not match ${what} type ${typeIdent(bindSpec.type)}`,
         );
       }
@@ -5277,16 +5364,17 @@ class Emitter {
     this.scope.push();
     try {
       if (bindSpec.kind === "single") {
-        this.scope.declare(bindSpec.name, bindSpec.type, isConst, decl);
+        this.scope.declare(bindSpec.name, bindSpec.type, isConst, stmt);
       } else {
-        this.scope.declare(bindSpec.firstName, bindSpec.firstType, isConst, decl);
-        this.scope.declare(bindSpec.secondName, bindSpec.secondType, isConst, decl);
+        this.scope.declare(bindSpec.firstName, bindSpec.firstType, isConst, stmt);
+        this.scope.declare(bindSpec.secondName, bindSpec.secondType, isConst, stmt);
       }
       this.scope.push();
+      this.loopCtx.push("loop");
       try {
-        const stmtList: ts.Statement[] = ts.isBlock(stmt.statement)
-          ? Array.from(stmt.statement.statements)
-          : [stmt.statement];
+        const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
+          ? stmt.body.stmts
+          : [stmt.body];
         const stmtLines: string[] = [];
         for (const s of stmtList) {
           stmtLines.push(this.emitStatement(s, indent + 2));
@@ -5319,6 +5407,7 @@ class Emitter {
         lines.push(`${pad}}`);
         return lines.join("\n");
       } finally {
+        this.loopCtx.pop();
         this.scope.pop();
       }
     } finally {
@@ -5331,22 +5420,22 @@ class Emitter {
   // evaluated once; each iteration calls `it.next(it.state, &done)` and stops
   // when done. The return value when done is undefined-ish but ignored.
   private emitForOfIteratorLowering(
-    stmt: ts.ForOfStatement,
+    stmt: ForOfStmt,
     indent: number,
     iterType: Extract<TopazType, { kind: "iter" }>,
-    recvExpr: ts.Expression,
+    recvExpr: Expr,
     bindName: string,
-    decl: ts.VariableDeclaration,
+    bindingType: TypeNode | undefined,
     isConst: boolean,
   ): string {
     const pad = "  ".repeat(indent);
     const bindType = iterType.elem;
 
-    if (decl.type) {
-      const declared = this.typeAnno(decl.type, decl);
+    if (bindingType) {
+      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentSf!);
       if (!typeEq(declared, bindType)) {
         throw new CodegenError(
-          decl.type,
+          bindingType,
           `for-of binding type ${typeIdent(declared)} does not match iterator element type ${typeIdent(bindType)}`,
         );
       }
@@ -5363,12 +5452,13 @@ class Emitter {
 
     this.scope.push();
     try {
-      this.scope.declare(bindName, bindType, isConst, decl);
+      this.scope.declare(bindName, bindType, isConst, stmt);
       this.scope.push();
+      this.loopCtx.push("loop");
       try {
-        const stmtList: ts.Statement[] = ts.isBlock(stmt.statement)
-          ? Array.from(stmt.statement.statements)
-          : [stmt.statement];
+        const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
+          ? stmt.body.stmts
+          : [stmt.body];
         const stmtLines: string[] = [];
         for (const s of stmtList) {
           stmtLines.push(this.emitStatement(s, indent + 2));
@@ -5390,6 +5480,7 @@ class Emitter {
         lines.push(`${pad}}`);
         return lines.join("\n");
       } finally {
+        this.loopCtx.pop();
         this.scope.pop();
       }
     } finally {
@@ -5397,31 +5488,29 @@ class Emitter {
     }
   }
 
-  private emitSwitchStatement(stmt: ts.SwitchStatement, indent: number): string {
+  private emitSwitchStatement(stmt: SwitchStmt, indent: number): string {
     const pad = "  ".repeat(indent);
-    const discType = this.inferType(stmt.expression);
-    const clauses = stmt.caseBlock.clauses;
+    const discType = this.inferType(stmt.discriminant);
+    const clauses = stmt.cases;
 
     // Phase 1.5-3e: detect `switch (<id>.<discriminator>)` on a dunion-typed
     // identifier. When matched, each case body sees `<id>` narrowed to the
     // class whose discriminator literal equals the case label. Reuses the
     // ordinary scope.narrow path so identifier emit casts via `.data`.
     let dunionTarget: { name: string; dunion: Extract<TopazType, { kind: "dunion" }> } | undefined;
-    if (
-      ts.isPropertyAccessExpression(stmt.expression) &&
-      ts.isIdentifier(stmt.expression.expression)
-    ) {
-      const idName = stmt.expression.expression.text;
+    const disc = stmt.discriminant;
+    if (disc.kind === "prop_access" && !disc.optional && disc.receiver.kind === "ident") {
+      const idName = disc.receiver.name;
       const b = this.scope.lookup(idName);
-      if (b && b.type.kind === "dunion" && stmt.expression.name.text === b.type.discriminator) {
+      if (b && b.type.kind === "dunion" && disc.name === b.type.discriminator) {
         dunionTarget = { name: idName, dunion: b.type };
       }
     }
 
-    let defaultClause: ts.DefaultClause | undefined;
+    let defaultClause: SwitchCase | undefined;
     for (let i = 0; i < clauses.length; i++) {
       const c = clauses[i]!;
-      if (ts.isDefaultClause(c)) {
+      if (c.test === undefined) {
         if (i !== clauses.length - 1) {
           throw new CodegenError(c, "`default` must be the last clause of `switch`");
         }
@@ -5429,15 +5518,15 @@ class Emitter {
       }
     }
 
-    type Group = { conds: ts.CaseClause[]; body: readonly ts.Statement[] };
+    type Group = { conds: Expr[]; body: readonly Stmt[] };
     const groups: Group[] = [];
-    let pending: ts.CaseClause[] = [];
+    let pending: Expr[] = [];
     for (const c of clauses) {
-      if (ts.isCaseClause(c)) {
-        this.expectType(c.expression, discType);
-        pending.push(c);
-        if (c.statements.length > 0) {
-          groups.push({ conds: pending, body: c.statements });
+      if (c.test !== undefined) {
+        this.expectType(c.test, discType);
+        pending.push(c.test);
+        if (c.stmts.length > 0) {
+          groups.push({ conds: pending, body: c.stmts });
           pending = [];
         }
       }
@@ -5446,11 +5535,11 @@ class Emitter {
       groups.push({ conds: pending, body: [] });
     }
 
-    const isTerminator = (s: ts.Statement): boolean =>
-      ts.isBreakStatement(s) ||
-      ts.isReturnStatement(s) ||
-      ts.isThrowStatement(s) ||
-      ts.isContinueStatement(s);
+    const isTerminator = (s: Stmt): boolean =>
+      s.kind === "break_stmt" ||
+      s.kind === "return_stmt" ||
+      s.kind === "throw_stmt" ||
+      s.kind === "continue_stmt";
     for (const g of groups) {
       if (g.body.length > 0 && !isTerminator(g.body[g.body.length - 1]!)) {
         throw new CodegenError(
@@ -5475,11 +5564,12 @@ class Emitter {
         let acc: string | undefined;
         let agree = true;
         for (const c of g.conds) {
-          if (!ts.isStringLiteral(c.expression) && !ts.isNoSubstitutionTemplateLiteral(c.expression)) {
+          const litText = stringLitText(c);
+          if (litText === undefined) {
             agree = false;
             break;
           }
-          const cls = literalToClass.get(c.expression.text);
+          const cls = literalToClass.get(litText);
           if (!cls) { agree = false; break; }
           if (acc === undefined) acc = cls;
           else if (acc !== cls) { agree = false; break; }
@@ -5490,7 +5580,7 @@ class Emitter {
 
     const id = this.switchCounter++;
     const tmp = `__topaz_sw_${id}`;
-    const discExpr = this.emitExpression(stmt.expression);
+    const discExpr = this.emitExpression(stmt.discriminant);
 
     const out: string[] = [];
     out.push(`${pad}{`);
@@ -5498,6 +5588,11 @@ class Emitter {
     out.push(`${pad}  do {`);
 
     this.scope.push();
+    // Phase 1.5-6e-2: a switch lowers to do/while(0); a `continue` inside a
+    // case body must be rejected (it would `continue` the synthetic loop). Push
+    // a "switch" context around the case-body emission so checkContinueAllowed
+    // sees it on top.
+    this.loopCtx.push("switch");
     try {
       const cmp = (rhs: string): string =>
         discType.kind === "string"
@@ -5506,7 +5601,7 @@ class Emitter {
       let first = true;
       for (let gi = 0; gi < groups.length; gi++) {
         const g = groups[gi]!;
-        const conds = g.conds.map((c) => cmp(this.emitExpression(c.expression))).join(" || ");
+        const conds = g.conds.map((c) => cmp(this.emitExpression(c))).join(" || ");
         const head = first ? "if" : "else if";
         if (g.body.length === 0) {
           out.push(`${pad}    ${head} (${conds}) { break; }`);
@@ -5530,17 +5625,18 @@ class Emitter {
       }
       if (defaultClause) {
         const head = first ? "if (1)" : "else";
-        if (defaultClause.statements.length === 0) {
+        if (defaultClause.stmts.length === 0) {
           out.push(`${pad}    ${head} { break; }`);
         } else {
           out.push(`${pad}    ${head} {`);
-          for (const s of defaultClause.statements) {
+          for (const s of defaultClause.stmts) {
             out.push(this.emitStatement(s, indent + 3));
           }
           out.push(`${pad}    }`);
         }
       }
     } finally {
+      this.loopCtx.pop();
       this.scope.pop();
     }
 
@@ -5549,70 +5645,69 @@ class Emitter {
     return out.join("\n");
   }
 
-  private checkContinueAllowed(stmt: ts.ContinueStatement): void {
-    let p: ts.Node | undefined = stmt.parent;
-    while (p) {
-      if (
-        ts.isWhileStatement(p) ||
-        ts.isDoStatement(p) ||
-        ts.isForStatement(p) ||
-        ts.isForInStatement(p) ||
-        ts.isForOfStatement(p)
-      ) {
-        return;
-      }
-      if (ts.isSwitchStatement(p)) {
-        throw new CodegenError(
-          stmt,
-          "`continue` inside `switch` is unsupported (switch lowers to do/while(0))",
-        );
-      }
-      if (ts.isFunctionLike(p) || ts.isSourceFile(p)) {
-        throw new CodegenError(stmt, "`continue` outside of a loop");
-      }
-      p = p.parent;
+  private checkContinueAllowed(stmt: ContinueStmt): void {
+    // Phase 1.5-6e-2: Topaz nodes have no `.parent`, so consult the instance
+    // `loopCtx` stack maintained while emitting. The top of the stack is the
+    // nearest enclosing loop / switch (matching the old parent walk's nearest-
+    // first semantics).
+    if (this.loopCtx.length === 0) {
+      throw new CodegenError(stmt, "`continue` outside of a loop");
+    }
+    const top = this.loopCtx[this.loopCtx.length - 1]!;
+    if (top === "switch") {
+      throw new CodegenError(
+        stmt,
+        "`continue` inside `switch` is unsupported (switch lowers to do/while(0))",
+      );
     }
   }
 
-  private emitExpression(expr: ts.Expression): string {
-    if (ts.isNumericLiteral(expr)) {
+  private emitExpression(expr: Expr): string {
+    if (expr.kind === "num_lit") {
       const t = expr.text;
       return /[.eE]/.test(t) ? t : `${t}.0`;
     }
-    if (expr.kind === ts.SyntaxKind.TrueKeyword) return "true";
-    if (expr.kind === ts.SyntaxKind.FalseKeyword) return "false";
-    if (expr.kind === ts.SyntaxKind.ThisKeyword) {
+    if (expr.kind === "bool_lit") return expr.value ? "true" : "false";
+    if (expr.kind === "null_lit") {
+      unsupported(expr, "expression");
+    }
+    if (expr.kind === "this_expr") {
       if (!this.currentClass) {
         throw new CodegenError(expr, "`this` is only valid inside class methods or constructors");
       }
       return TOPAZ_THIS;
     }
-    if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
-      return this.emitStringLiteral(expr);
+    if (expr.kind === "str_lit") {
+      return this.emitStringLiteralText(expr.value, expr);
     }
-    if (ts.isTemplateExpression(expr)) {
+    if (expr.kind === "template_lit") {
       return this.emitTemplateExpression(expr);
     }
-    if (ts.isIdentifier(expr)) {
+    if (expr.kind === "import_meta_url") {
+      // Phase 1.5-6e-2: `import.meta.url` lowers to the runtime helper that
+      // resolves the running executable path as a `file://` URL.
+      return `topaz_runtime_module_url()`;
+    }
+    if (expr.kind === "ident") {
       // Phase 1.5-3.5e: inside an arrow body, lookup is barriered. If the
       // identifier resolves only via captureContext, rewrite the read to go
       // through the env struct.
-      const local = this.scope.lookup(expr.text);
-      if (!local && this.captureContext && this.captureContext.captures.has(expr.text)) {
+      const local = this.scope.lookup(expr.name);
+      if (!local && this.captureContext && this.captureContext.captures.has(expr.name)) {
         const envType = this.captureContext.envType;
-        return `(((${envType} *)__topaz_env)->${expr.text})`;
+        return `(((${envType} *)__topaz_env)->${expr.name})`;
       }
       const b = local;
       if (!b) {
-        throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
+        throw new CodegenError(expr, `unknown identifier '${expr.name}'`);
       }
       // Phase 1.5-3c: when the binding's C representation is the scalar opt
       // struct (`topaz_opt_<scalar>`) but narrowing has stripped the
       // `undefined` variant, reads must reach through `.value`. Reference /
       // interface T | undefined share T's C type, so no accessor is needed.
-      const base = this.scope.lookupBase(expr.text)!;
+      const base = this.scope.lookupBase(expr.name)!;
       if (isScalarOptUnion(base.type) && !typeEq(base.type, b.type)) {
-        return `(${expr.text}).value`;
+        return `(${expr.name}).value`;
       }
       // Phase 1.5-3e: narrowed dunion -> class. The fat struct's `data` slot
       // holds the underlying class instance pointer; cast it back to the
@@ -5625,7 +5720,7 @@ class Emitter {
         const baseInner = base.type.kind === "union" ? withoutUndefined(base.type) : base.type;
         if (baseInner && baseInner.kind === "dunion") {
           const cname = classNameOf(b.type)!;
-          return `((topaz_class_${cname} *)(${expr.text}).data)`;
+          return `((topaz_class_${cname} *)(${expr.name}).data)`;
         }
       }
       // Phase 1.5-3f: narrowed unknown -> class. The base C type is `void *`
@@ -5633,104 +5728,90 @@ class Emitter {
       // method access type-checks at the C level.
       if (base.type.kind === "unknown" && isClassType(b.type)) {
         const cname = classNameOf(b.type)!;
-        return `((topaz_class_${cname} *)(${expr.text}))`;
+        return `((topaz_class_${cname} *)(${expr.name}))`;
       }
-      return expr.text;
+      return expr.name;
     }
-    if (ts.isParenthesizedExpression(expr)) {
-      return `(${this.emitExpression(expr.expression)})`;
+    if (expr.kind === "paren_expr") {
+      return `(${this.emitExpression(expr.inner)})`;
     }
     // Phase 1.5-3.5e: arrow expressions in non-contextual positions need
     // explicit param + return annotations (no expected type to source them
     // from). emitWithExpected provides the contextual path with an expected
     // fn type for the four assignment sites.
-    if (ts.isArrowFunction(expr)) {
+    if (expr.kind === "arrow_expr") {
       return this.emitArrowFunction(expr, undefined);
     }
-    // Function expressions (`function () {}`) are not supported — use arrows.
-    if (ts.isFunctionExpression(expr)) {
-      throw new CodegenError(expr, "function expressions are unsupported (use an arrow `(...) => ...` instead)");
-    }
-    if (ts.isPropertyAccessExpression(expr) && expr.questionDotToken) {
+    if (expr.kind === "prop_access" && expr.optional) {
       return this.emitOptionalPropertyAccess(expr);
     }
-    if (ts.isElementAccessExpression(expr) && expr.questionDotToken) {
+    if (expr.kind === "elem_access" && expr.optional) {
       return this.emitOptionalElementAccess(expr);
-    }
-    // Phase 1.5-6 prep #25: `import.meta.url` is the sole accepted MetaProperty
-    // form. Lower to a runtime helper that resolves the running executable
-    // path as a `file://` URL (matches Node's `import.meta.url` shape).
-    if (ts.isPropertyAccessExpression(expr) && ts.isMetaProperty(expr.expression)) {
-      this.checkImportMetaUrl(expr);
-      return `topaz_runtime_module_url()`;
-    }
-    if (ts.isMetaProperty(expr)) {
-      this.rejectBareMetaProperty(expr);
     }
     // Phase 1.5-6 prep #26: `process.argv` -> Array<string>. The `process`
     // identifier is synthetic (no real binding), so short-circuit before
-    // inferType(expr.expression) would trip on "unknown identifier". Other
+    // inferType(expr.receiver) would trip on "unknown identifier". Other
     // `process.<member>` value reads are rejected (exit / stdout / stderr are
     // call-only).
     if (
-      ts.isPropertyAccessExpression(expr) &&
-      ts.isIdentifier(expr.expression) &&
-      expr.expression.text === "process"
+      expr.kind === "prop_access" &&
+      expr.receiver.kind === "ident" &&
+      expr.receiver.name === "process"
     ) {
-      if (expr.name.text === "argv") {
+      if (expr.name === "argv") {
         return `topaz_process_argv()`;
       }
       throw new CodegenError(
         expr,
-        `unsupported \`process.${expr.name.text}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
+        `unsupported \`process.${expr.name}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
       );
     }
-    if (ts.isPropertyAccessExpression(expr)) {
-      const baseType = this.inferType(expr.expression);
+    if (expr.kind === "prop_access") {
+      const baseType = this.inferType(expr.receiver);
       // Phase 1.5-3e: `dunion.kind` reads the discriminator string from the
       // fat struct. inferType already enforced that only the discriminator
       // field is accessible.
       if (baseType.kind === "dunion") {
-        if (expr.name.text === baseType.discriminator) {
-          return `((${this.emitExpression(expr.expression)}).${baseType.discriminator})`;
+        if (expr.name === baseType.discriminator) {
+          return `((${this.emitExpression(expr.receiver)}).${baseType.discriminator})`;
         }
         // Phase 1.5-6 prep #18: common-field read — dispatch on the variant
         // tag (offset 0 of every class struct) and cast `.data` to the
         // matching variant before reading the field. inferType validated it.
         return this.emitDunionCommonFieldAccess(expr, baseType);
       }
-      if (baseType.kind === "string" && expr.name.text === "length") {
-        return `((topaz_number)(${this.emitExpression(expr.expression)}).len)`;
+      if (baseType.kind === "string" && expr.name === "length") {
+        return `((topaz_number)(${this.emitExpression(expr.receiver)}).len)`;
       }
-      if (isArrayType(baseType) && expr.name.text === "length") {
-        return `((topaz_number)(${this.emitExpression(expr.expression)})->len)`;
+      if (isArrayType(baseType) && expr.name === "length") {
+        return `((topaz_number)(${this.emitExpression(expr.receiver)})->len)`;
       }
-      if ((isMapType(baseType) || isSetType(baseType)) && expr.name.text === "size") {
-        return `((topaz_number)(${this.emitExpression(expr.expression)})->size)`;
+      if ((isMapType(baseType) || isSetType(baseType)) && expr.name === "size") {
+        return `((topaz_number)(${this.emitExpression(expr.receiver)})->size)`;
       }
       if (isClassType(baseType)) {
         const cls = this.classes.get(classNameOf(baseType)!)!;
-        if (cls.fields.has(expr.name.text)) {
-          return `((${this.emitExpression(expr.expression)})->${expr.name.text})`;
+        if (cls.fields.has(expr.name)) {
+          return `((${this.emitExpression(expr.receiver)})->${expr.name})`;
         }
-        if (cls.methods.has(expr.name.text)) {
+        if (cls.methods.has(expr.name)) {
           throw new CodegenError(
             expr,
-            `method '${expr.name.text}' cannot be used as a value (call it instead)`,
+            `method '${expr.name}' cannot be used as a value (call it instead)`,
           );
         }
         throw new CodegenError(
           expr,
-          `class '${cls.name}' has no member '${expr.name.text}'`,
+          `class '${cls.name}' has no member '${expr.name}'`,
         );
       }
       if (isInterfaceType(baseType)) {
         const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-        const fname = expr.name.text;
+        const fname = expr.name;
         if (iface.fields.has(fname)) {
           const id = this.tmpCounter++;
           const tmp = `__topaz_ib_${id}`;
-          const baseStr = this.emitExpression(expr.expression);
+          const baseStr = this.emitExpression(expr.receiver);
           return `({ ${cTypeName(baseType)} ${tmp} = ${baseStr}; ${tmp}.vt->get_${fname}(${tmp}.data); })`;
         }
         if (iface.methods.has(fname)) {
@@ -5746,31 +5827,31 @@ class Emitter {
       }
       throw new CodegenError(
         expr,
-        `unsupported property access '.${expr.name.text}' on ${typeIdent(baseType)}`,
+        `unsupported property access '.${expr.name}' on ${typeIdent(baseType)}`,
       );
     }
-    if (ts.isElementAccessExpression(expr)) {
-      const baseType = this.inferType(expr.expression);
+    if (expr.kind === "elem_access") {
+      const baseType = this.inferType(expr.receiver);
       const elem = arrayElem(baseType);
       if (!elem) {
         throw new CodegenError(expr, `index access is only supported on Array (got ${typeIdent(baseType)})`);
       }
-      this.expectType(expr.argumentExpression, T_NUMBER);
+      this.expectType(expr.index, T_NUMBER);
       const name = arrayShortName(baseType);
-      return `topaz_array_${name}_at(${this.emitExpression(expr.expression)}, ${this.emitExpression(expr.argumentExpression)})`;
+      return `topaz_array_${name}_at(${this.emitExpression(expr.receiver)}, ${this.emitExpression(expr.index)})`;
     }
-    if (ts.isArrayLiteralExpression(expr)) {
+    if (expr.kind === "array_lit") {
       return this.emitArrayLiteral(expr, /* expected */ undefined);
     }
-    if (ts.isNonNullExpression(expr)) {
+    if (expr.kind === "non_null") {
       // Phase 1.5-3.5c: stmt-expression around a single evaluation of the
       // operand, runtime check on the sentinel slot, then yield the unwrapped
       // value. Scalar T | undefined uses the `topaz_opt_<scalar>` struct
       // (.present / .value); reference T uses NULL pointer sentinel; iface T
       // uses fat-pointer .data == NULL sentinel.
-      const inner = this.inferType(expr.expression); // verifies T | undefined
+      const inner = this.inferType(expr.operand); // verifies T | undefined
       const stripped = withoutUndefined(inner)!;
-      const valStr = this.emitExpression(expr.expression);
+      const valStr = this.emitExpression(expr.operand);
       const id = this.tmpCounter++;
       const tmp = `__topaz_nn_${id}`;
       const ct = cTypeName(inner);
@@ -5784,73 +5865,66 @@ class Emitter {
       }
       return `({ ${ct} ${tmp} = ${valStr}; if (${tmp} == NULL) { ${panic} } ${tmp}; })`;
     }
-    if (ts.isPrefixUnaryExpression(expr)) {
+    if (expr.kind === "prefix_op") {
       this.inferType(expr); // type-check
       const op = this.prefixOp(expr);
       return `(${op}${this.emitExpression(expr.operand)})`;
     }
-    if (ts.isPostfixUnaryExpression(expr)) {
+    if (expr.kind === "postfix_op") {
       this.inferType(expr);
       const op = this.postfixOp(expr);
       return `(${this.emitExpression(expr.operand)}${op})`;
     }
-    if (ts.isBinaryExpression(expr)) {
-      const tok = expr.operatorToken.kind;
+    if (expr.kind === "instanceof_expr") {
+      // Phase 1.5-3f: `x instanceof ClassName` lowers to a tag-pointer
+      // comparison. Every class struct carries `__topaz_class_tag` at offset
+      // 0, set by the constructor to a per-class sentinel address; the check
+      // dereferences the void* payload through that field.
+      this.inferType(expr); // type-check
+      const cls = (expr.rhs as IdentExpr).name;
+      const id = this.tmpCounter++;
+      const tmp = `__topaz_io_${id}`;
+      const left = this.emitExpression(expr.lhs);
+      return `({ void *${tmp} = (void *)(${left}); ${tmp} != NULL && *((const char * const *)${tmp}) == &topaz_class_${cls}_tag; })`;
+    }
+    if (expr.kind === "assign_expr") {
+      const op = expr.op;
       // Phase 1.5-6 prep #11: object literal RHS has no standalone type, so
       // the generic inferType(expr) pre-check below would recurse into the
       // literal and throw. Route plain assignment with an object-literal RHS
       // through emitWithExpected with the LHS type up-front, which fires the
       // anon-class / dunion contextual narrowing.
-      if (
-        tok === ts.SyntaxKind.EqualsToken &&
-        ts.isObjectLiteralExpression(expr.right)
-      ) {
-        this.checkAssignTarget(expr.left, expr);
-        const lt = this.inferType(expr.left);
-        const lhsStr = this.emitExpression(expr.left);
-        const rhsStr = this.emitWithExpected(expr.right, lt);
+      if (op === "=" && expr.value.kind === "object_lit") {
+        this.checkAssignTarget(expr.target, expr);
+        const lt = this.inferType(expr.target);
+        const lhsStr = this.emitExpression(expr.target);
+        const rhsStr = this.emitWithExpected(expr.value, lt);
         return `(${lhsStr} = ${rhsStr})`;
       }
       this.inferType(expr); // type-check + const-check
       // Element-access assignment lowers to topaz_array_X_set; compound
       // assignment on a[i] is unsupported because we'd evaluate the index twice.
-      if (
-        ts.isElementAccessExpression(expr.left) &&
-        (tok === ts.SyntaxKind.EqualsToken ||
-          tok === ts.SyntaxKind.PlusEqualsToken ||
-          tok === ts.SyntaxKind.MinusEqualsToken ||
-          tok === ts.SyntaxKind.AsteriskEqualsToken ||
-          tok === ts.SyntaxKind.SlashEqualsToken ||
-          tok === ts.SyntaxKind.PercentEqualsToken)
-      ) {
-        if (tok !== ts.SyntaxKind.EqualsToken) {
+      if (expr.target.kind === "elem_access") {
+        if (op !== "=") {
           throw new CodegenError(expr, "compound assignment on array element is unsupported; use a[i] = ...");
         }
-        const baseType = this.inferType(expr.left.expression);
+        const baseType = this.inferType(expr.target.receiver);
         const name = arrayShortName(baseType);
         const elem = arrayElem(baseType)!;
-        const base = this.emitExpression(expr.left.expression);
-        const idx = this.emitExpression(expr.left.argumentExpression);
+        const base = this.emitExpression(expr.target.receiver);
+        const idx = this.emitExpression(expr.target.index);
         // Use emitWithExpected so class -> interface coercion fires when the
         // array is Array<Interface> and the RHS is a class instance.
-        const val = this.emitWithExpected(expr.right, elem);
+        const val = this.emitWithExpected(expr.value, elem);
         return `topaz_array_${name}_set(${base}, ${idx}, ${val})`;
       }
       // Interface property assignment goes through the vtable's setter; no
       // C lvalue exists for the underlying field. Compound forms would need
       // to evaluate the base twice, so reject them.
-      if (
-        ts.isPropertyAccessExpression(expr.left) &&
-        (tok === ts.SyntaxKind.EqualsToken ||
-          tok === ts.SyntaxKind.PlusEqualsToken ||
-          tok === ts.SyntaxKind.MinusEqualsToken ||
-          tok === ts.SyntaxKind.AsteriskEqualsToken ||
-          tok === ts.SyntaxKind.SlashEqualsToken ||
-          tok === ts.SyntaxKind.PercentEqualsToken)
-      ) {
-        const baseT = this.inferType(expr.left.expression);
+      if (expr.target.kind === "prop_access") {
+        const baseT = this.inferType(expr.target.receiver);
         if (isInterfaceType(baseT)) {
-          if (tok !== ts.SyntaxKind.EqualsToken) {
+          if (op !== "=") {
             throw new CodegenError(
               expr,
               "compound assignment on interface field is unsupported; use iface.field = ...",
@@ -5858,12 +5932,12 @@ class Emitter {
           }
           const iname = interfaceNameOf(baseT)!;
           const iface = this.interfaces.get(iname)!;
-          const fname = expr.left.name.text;
+          const fname = expr.target.name;
           const ftype = iface.fields.get(fname)!;
           const id = this.tmpCounter++;
           const tmp = `__topaz_ib_${id}`;
-          const baseStr = this.emitExpression(expr.left.expression);
-          const rhsStr = this.emitWithExpected(expr.right, ftype);
+          const baseStr = this.emitExpression(expr.target.receiver);
+          const rhsStr = this.emitWithExpected(expr.value, ftype);
           // The vtable setter returns void, so this expression's value is
           // void. Chained assignment (`x = (iface.field = v)`) is therefore
           // unsupported — acceptable for now since it's a rare pattern.
@@ -5872,40 +5946,44 @@ class Emitter {
       }
       // Plain assignment with rhs coercion (covers `let a: Shape = ...; a = new Circle(...)`
       // as well as `obj.field = new Circle(...)` when field is an interface).
-      if (tok === ts.SyntaxKind.EqualsToken) {
-        const lt = this.inferType(expr.left);
-        const rt = this.inferType(expr.right);
+      if (op === "=") {
+        const lt = this.inferType(expr.target);
+        const rt = this.inferType(expr.value);
         if (!typeEq(lt, rt) && this.isAssignableTo(rt, lt)) {
-          const lhsStr = this.emitExpression(expr.left);
-          const rhsStr = this.emitWithExpected(expr.right, lt);
+          const lhsStr = this.emitExpression(expr.target);
+          const rhsStr = this.emitWithExpected(expr.value, lt);
           return `(${lhsStr} = ${rhsStr})`;
         }
       }
+      if (op === "%=") {
+        const lhs = this.emitExpression(expr.target);
+        return `(${lhs} = topaz_fmod(${lhs}, ${this.emitExpression(expr.value)}))`;
+      }
+      if (op === "+=" && this.inferType(expr.target).kind === "string") {
+        const lhs = this.emitExpression(expr.target);
+        return `(${lhs} = topaz_string_concat(${lhs}, ${this.emitExpression(expr.value)}))`;
+      }
+      const cop = this.assignOp(expr);
+      const lhs = this.emitExpression(expr.target);
+      const rhs = this.emitExpression(expr.value);
+      return `(${lhs} ${cop} ${rhs})`;
+    }
+    if (expr.kind === "bin_op") {
+      const tok = expr.op;
+      this.inferType(expr); // type-check + const-check
       // JS `%` is fmod for number; C's `%` rejects double, so always lower.
-      if (tok === ts.SyntaxKind.PercentToken) {
-        return `topaz_fmod(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
+      if (tok === "%") {
+        return `topaz_fmod(${this.emitExpression(expr.lhs)}, ${this.emitExpression(expr.rhs)})`;
       }
-      if (tok === ts.SyntaxKind.PercentEqualsToken) {
-        const lhs = this.emitExpression(expr.left);
-        return `(${lhs} = topaz_fmod(${lhs}, ${this.emitExpression(expr.right)}))`;
-      }
-      if (tok === ts.SyntaxKind.PlusToken && this.inferType(expr.left).kind === "string") {
-        return `topaz_string_concat(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
+      if (tok === "+" && this.inferType(expr.lhs).kind === "string") {
+        return `topaz_string_concat(${this.emitExpression(expr.lhs)}, ${this.emitExpression(expr.rhs)})`;
       }
       if (
-        tok === ts.SyntaxKind.PlusEqualsToken &&
-        this.inferType(expr.left).kind === "string"
+        (tok === "===" || tok === "!==") &&
+        this.inferType(expr.lhs).kind === "string"
       ) {
-        const lhs = this.emitExpression(expr.left);
-        return `(${lhs} = topaz_string_concat(${lhs}, ${this.emitExpression(expr.right)}))`;
-      }
-      if (
-        (tok === ts.SyntaxKind.EqualsEqualsEqualsToken ||
-          tok === ts.SyntaxKind.ExclamationEqualsEqualsToken) &&
-        this.inferType(expr.left).kind === "string"
-      ) {
-        const inner = `topaz_string_eq(${this.emitExpression(expr.left)}, ${this.emitExpression(expr.right)})`;
-        return tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? inner : `(!${inner})`;
+        const inner = `topaz_string_eq(${this.emitExpression(expr.lhs)}, ${this.emitExpression(expr.rhs)})`;
+        return tok === "===" ? inner : `(!${inner})`;
       }
       // Phase 1.5-3.5c: `a ?? b` lowers to a stmt-expression that snapshots
       // `a` into a tmp, checks the sentinel slot, and yields either the
@@ -5915,14 +5993,14 @@ class Emitter {
       // scalar T, when the result is T | undefined we keep the whole opt
       // struct so the C ternary's branches share a type; reference / iface
       // T have the same C representation either way, so no branch needed.
-      if (tok === ts.SyntaxKind.QuestionQuestionToken) {
-        const lt = this.inferType(expr.left);
+      if (tok === "??") {
+        const lt = this.inferType(expr.lhs);
         const inner = withoutUndefined(lt)!;
-        const rt = this.inferType(expr.right);
+        const rt = this.inferType(expr.rhs);
         const rhsIsOptional = !this.isAssignableTo(rt, inner) && this.isAssignableTo(rt, lt);
         const expected = rhsIsOptional ? lt : inner;
-        const lhsStr = this.emitExpression(expr.left);
-        const rhsStr = this.emitWithExpected(expr.right, expected);
+        const lhsStr = this.emitExpression(expr.lhs);
+        const rhsStr = this.emitWithExpected(expr.rhs, expected);
         const id = this.tmpCounter++;
         const tmp = `__topaz_nc_${id}`;
         const lct = cTypeName(lt);
@@ -5936,17 +6014,6 @@ class Emitter {
         }
         return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp} != NULL ? ${tmp} : (${rhsStr}); })`;
       }
-      // Phase 1.5-3f: `x instanceof ClassName` lowers to a tag-pointer
-      // comparison. Every class struct carries `__topaz_class_tag` at offset
-      // 0, set by the constructor to a per-class sentinel address; the check
-      // dereferences the void* payload through that field.
-      if (tok === ts.SyntaxKind.InstanceOfKeyword) {
-        const cls = (expr.right as ts.Identifier).text;
-        const id = this.tmpCounter++;
-        const tmp = `__topaz_io_${id}`;
-        const left = this.emitExpression(expr.left);
-        return `({ void *${tmp} = (void *)(${left}); ${tmp} != NULL && *((const char * const *)${tmp}) == &topaz_class_${cls}_tag; })`;
-      }
       // Phase 1.5-3b: `x === undefined` / `x !== undefined` on `T | undefined`.
       // For interface | undefined the fat pointer's .data is the sentinel;
       // for reference T | undefined the pointer itself is.
@@ -5956,20 +6023,17 @@ class Emitter {
       // (narrowing strips the undefined variant first, after which the
       // typesOverlap guard in inferType rejects the comparison), so
       // emitExpression on an identifier always yields the bare struct.
-      if (
-        tok === ts.SyntaxKind.EqualsEqualsEqualsToken ||
-        tok === ts.SyntaxKind.ExclamationEqualsEqualsToken
-      ) {
-        const leftIsUndef = ts.isIdentifier(expr.left) && expr.left.text === "undefined";
-        const rightIsUndef = ts.isIdentifier(expr.right) && expr.right.text === "undefined";
+      if (tok === "===" || tok === "!==") {
+        const leftIsUndef = expr.lhs.kind === "undefined_lit";
+        const rightIsUndef = expr.rhs.kind === "undefined_lit";
         if (leftIsUndef !== rightIsUndef) {
-          const valueExpr = leftIsUndef ? expr.right : expr.left;
+          const valueExpr = leftIsUndef ? expr.rhs : expr.lhs;
           const t = this.inferType(valueExpr);
           const inner = withoutUndefined(t);
-          const op = tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? "==" : "!=";
+          const op = tok === "===" ? "==" : "!=";
           const valStr = this.emitExpression(valueExpr);
           if (inner && isScalarType(inner)) {
-            const want = tok === ts.SyntaxKind.EqualsEqualsEqualsToken ? "false" : "true";
+            const want = tok === "===" ? "false" : "true";
             return `${valStr}.present == ${want}`;
           }
           // Phase 1.5-6 prep #15: dunion uses the same fat-struct shape as
@@ -5986,30 +6050,27 @@ class Emitter {
       // the left (positive for `&&`, negative for `||`) so a dunion narrowed by
       // `x.kind === "lit"` on the left is accessible on the right. inferType
       // (above) already type-checked the right under the same narrowing.
-      if (
-        tok === ts.SyntaxKind.AmpersandAmpersandToken ||
-        tok === ts.SyntaxKind.BarBarToken
-      ) {
-        const polarity = tok === ts.SyntaxKind.AmpersandAmpersandToken;
-        const lhs = this.emitExpression(expr.left);
-        const n = this.extractNarrowing(expr.left, polarity);
+      if (tok === "&&" || tok === "||") {
+        const polarity = tok === "&&";
+        const lhs = this.emitExpression(expr.lhs);
+        const n = this.extractNarrowing(expr.lhs, polarity);
         let rhs: string;
         if (n) {
           this.scope.push();
           try {
             this.scope.narrow(n.name, n.type);
-            rhs = this.emitExpression(expr.right);
+            rhs = this.emitExpression(expr.rhs);
           } finally {
             this.scope.pop();
           }
         } else {
-          rhs = this.emitExpression(expr.right);
+          rhs = this.emitExpression(expr.rhs);
         }
         return `(${lhs} ${polarity ? "&&" : "||"} ${rhs})`;
       }
-      const op = this.binaryOp(expr.operatorToken);
-      const lhs = this.emitExpression(expr.left);
-      const rhs = this.emitExpression(expr.right);
+      const op = this.binaryOp(expr);
+      const lhs = this.emitExpression(expr.lhs);
+      const rhs = this.emitExpression(expr.rhs);
       // `==` / `!=` carry the same precedence in C as `===` / `!==` in TS, and
       // TS precedence guarantees an equality is never an unparenthesized
       // operand of a higher-precedence op (explicit source parens arrive as a
@@ -6020,13 +6081,13 @@ class Emitter {
       if (op === "==" || op === "!=") return `${lhs} ${op} ${rhs}`;
       return `(${lhs} ${op} ${rhs})`;
     }
-    if (ts.isCallExpression(expr)) {
+    if (expr.kind === "call_expr") {
       return this.emitCall(expr);
     }
-    if (ts.isNewExpression(expr)) {
+    if (expr.kind === "new_expr") {
       return this.emitNewExpression(expr, /* expected */ undefined);
     }
-    if (ts.isConditionalExpression(expr)) {
+    if (expr.kind === "ternary_expr") {
       return this.emitConditional(expr, /* expected */ undefined);
     }
     unsupported(expr, "expression");
@@ -6060,16 +6121,16 @@ class Emitter {
   // (the C ternary requires both operands type-compatible); `target` is the
   // contextual expected type when present, else the common branch type.
   private emitConditional(
-    expr: ts.ConditionalExpression,
+    expr: TernaryExpr,
     expected: TopazType | undefined,
   ): string {
-    this.expectType(expr.condition, T_BOOLEAN);
-    const nTrue = this.extractNarrowing(expr.condition, true);
-    const nFalse = this.extractNarrowing(expr.condition, false);
-    const cond = this.emitExpression(expr.condition);
+    this.expectType(expr.cond, T_BOOLEAN);
+    const nTrue = this.extractNarrowing(expr.cond, true);
+    const nFalse = this.extractNarrowing(expr.cond, false);
+    const cond = this.emitExpression(expr.cond);
     const target = expected ?? this.conditionalResultType(expr, nTrue, nFalse);
-    const a = this.underNarrowing(nTrue, () => this.emitWithExpected(expr.whenTrue, target));
-    const b = this.underNarrowing(nFalse, () => this.emitWithExpected(expr.whenFalse, target));
+    const a = this.underNarrowing(nTrue, () => this.emitWithExpected(expr.thenBranch, target));
+    const b = this.underNarrowing(nFalse, () => this.emitWithExpected(expr.elseBranch, target));
     return `(${cond} ? (${a}) : (${b}))`;
   }
 
@@ -6080,12 +6141,12 @@ class Emitter {
   // genuinely unrelated types are rejected (annotate the target to pick one) —
   // we never synthesize an arbitrary multi-member union (unsupported type).
   private conditionalResultType(
-    expr: ts.ConditionalExpression,
+    expr: TernaryExpr,
     nTrue: { name: string; type: TopazType } | undefined,
     nFalse: { name: string; type: TopazType } | undefined,
   ): TopazType {
-    const tt = this.underNarrowing(nTrue, () => this.inferType(expr.whenTrue));
-    const tf = this.underNarrowing(nFalse, () => this.inferType(expr.whenFalse));
+    const tt = this.underNarrowing(nTrue, () => this.inferType(expr.thenBranch));
+    const tf = this.underNarrowing(nFalse, () => this.inferType(expr.elseBranch));
     if (typeEq(tt, tf)) return tt;
     if (this.isAssignableTo(tf, tt)) return tt;
     if (this.isAssignableTo(tt, tf)) return tf;
@@ -6098,20 +6159,16 @@ class Emitter {
   }
 
   private emitArrayLiteral(
-    expr: ts.ArrayLiteralExpression,
+    expr: ArrayLitExpr,
     expected: TopazType | undefined,
   ): string {
-    for (const e of expr.elements) {
-      if (e.kind === ts.SyntaxKind.OmittedExpression) {
-        throw new CodegenError(e, "holes in array literals are unsupported");
-      }
-    }
     // Phase 1.5-3.5h-spread: spread (`...x`) is allowed when the source is an
     // Array<T> whose elem type matches the destination's elem type EXACTLY.
     // Set / Iterator sources stay rejected here (tracked in future sub-steps).
-    const hasSpread = expr.elements.some((e) => ts.isSpreadElement(e));
+    // Holes in array literals are rejected in convert.
+    const hasSpread = expr.elems.some((e) => e.kind === "spread");
     let arrType: TopazType;
-    if (expr.elements.length === 0) {
+    if (expr.elems.length === 0) {
       if (!expected || !isArrayType(expected)) {
         throw new CodegenError(
           expr,
@@ -6126,19 +6183,19 @@ class Emitter {
       arrType = expected;
     } else {
       // Infer from the first element: spread -> source's elem, fixed -> its type.
-      const first = expr.elements[0]!;
+      const first = expr.elems[0]!;
       let elem: TopazType;
-      if (ts.isSpreadElement(first)) {
-        const srcType = this.inferType(first.expression);
+      if (first.kind === "spread") {
+        const srcType = this.inferType(first.expr);
         if (!isArrayType(srcType)) {
           throw new CodegenError(
-            first,
+            first.expr,
             `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
           );
         }
         elem = arrayElem(srcType)!;
       } else {
-        elem = this.inferType(first as ts.Expression);
+        elem = this.inferType(first.expr);
       }
       const arr = arrayOf(elem);
       if (!arr) {
@@ -6155,44 +6212,44 @@ class Emitter {
     const parts: string[] = [];
     parts.push(`topaz_array_${name} *${tmp} = topaz_array_${name}_new();`);
     if (!hasSpread) {
-      if (expr.elements.length > 0) {
-        parts.push(`topaz_array_${name}_reserve(${tmp}, ${expr.elements.length});`);
+      if (expr.elems.length > 0) {
+        parts.push(`topaz_array_${name}_reserve(${tmp}, ${expr.elems.length});`);
       }
-      for (const e of expr.elements) {
-        parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e as ts.Expression, elemType)});`);
+      for (const e of expr.elems) {
+        parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e.expr, elemType)});`);
       }
     } else {
       // Snapshot every spread source first so the reserve sum / push loop see
       // a stable .len and .data, and each source expression evaluates once.
       const spreadTmps: string[] = [];
-      const fixedCount = expr.elements.filter((e) => !ts.isSpreadElement(e)).length;
-      for (const e of expr.elements) {
-        if (!ts.isSpreadElement(e)) continue;
-        const srcType = this.inferType(e.expression);
+      const fixedCount = expr.elems.filter((e) => e.kind !== "spread").length;
+      for (const e of expr.elems) {
+        if (e.kind !== "spread") continue;
+        const srcType = this.inferType(e.expr);
         if (!isArrayType(srcType)) {
           throw new CodegenError(
-            e,
+            e.expr,
             `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
           );
         }
         const srcElem = arrayElem(srcType)!;
         if (!typeEq(srcElem, elemType)) {
           throw new CodegenError(
-            e,
+            e.expr,
             `spread element type ${typeIdent(srcElem)} does not match destination element type ${typeIdent(elemType)}`,
           );
         }
         const spId = this.tmpCounter++;
         const spTmp = `__topaz_sp_${spId}`;
         const spName = arrayShortName(srcType);
-        parts.push(`topaz_array_${spName} *${spTmp} = ${this.emitExpression(e.expression)};`);
+        parts.push(`topaz_array_${spName} *${spTmp} = ${this.emitExpression(e.expr)};`);
         spreadTmps.push(spTmp);
       }
       const reserveSum = [String(fixedCount), ...spreadTmps.map((t) => `${t}->len`)].join(" + ");
       parts.push(`topaz_array_${name}_reserve(${tmp}, ${reserveSum});`);
       let spIdx = 0;
-      for (const e of expr.elements) {
-        if (ts.isSpreadElement(e)) {
+      for (const e of expr.elems) {
+        if (e.kind === "spread") {
           const spTmp = spreadTmps[spIdx++]!;
           const iterId = this.tmpCounter++;
           const iVar = `__topaz_si_${iterId}`;
@@ -6200,7 +6257,7 @@ class Emitter {
             `for (size_t ${iVar} = 0; ${iVar} < ${spTmp}->len; ${iVar}++) topaz_array_${name}_push(${tmp}, ${spTmp}->data[${iVar}]);`,
           );
         } else {
-          parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e as ts.Expression, elemType)});`);
+          parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e.expr, elemType)});`);
         }
       }
     }
@@ -6208,29 +6265,29 @@ class Emitter {
   }
 
   private emitNewExpression(
-    expr: ts.NewExpression,
+    expr: NewExpr,
     expected: TopazType | undefined,
   ): string {
-    if (!ts.isIdentifier(expr.expression)) {
+    if (expr.callee.kind !== "ident") {
       throw new CodegenError(expr, "only `new Map<K, V>()`, `new Set<T>()`, and class instantiation are supported");
     }
     // Phase 1.5-3.5h-spread: same positional-arguments invariant as emitCall.
-    for (const a of expr.arguments ?? []) {
-      if (ts.isSpreadElement(a)) {
+    for (const a of expr.args) {
+      if (a.kind === "spread_expr") {
         throw new CodegenError(
           a,
           "spread in `new` arguments is unsupported",
         );
       }
     }
-    const name = expr.expression.text;
+    const name = expr.callee.name;
     if (name === "Array") {
       throw new CodegenError(
         expr,
         "use array literal syntax (`[...]` or `[]`) instead of `new Array()`",
       );
     }
-    if ((name === "Map" || name === "Set") && expr.arguments && expr.arguments.length > 0) {
+    if ((name === "Map" || name === "Set") && expr.args.length > 0) {
       throw new CodegenError(
         expr,
         `${name}() constructor arguments are unsupported (initialize via .set/.add)`,
@@ -6238,9 +6295,9 @@ class Emitter {
     }
     if (name === "Map") {
       let mapType: TopazType;
-      if (expr.typeArguments && expr.typeArguments.length === 2) {
-        const k = this.typeAnno(expr.typeArguments[0]!, expr);
-        const v = this.typeAnno(expr.typeArguments[1]!, expr);
+      if (expr.typeArgs.length === 2) {
+        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
+        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentSf!);
         const t = mapOf(k, v);
         if (!t) {
           throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
@@ -6249,7 +6306,7 @@ class Emitter {
           throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
         }
         mapType = t;
-      } else if (expr.typeArguments && expr.typeArguments.length !== 2) {
+      } else if (expr.typeArgs.length !== 0) {
         throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
       } else {
         if (!expected || !isMapType(expected)) {
@@ -6265,8 +6322,8 @@ class Emitter {
     }
     if (name === "Set") {
       let setType: TopazType;
-      if (expr.typeArguments && expr.typeArguments.length === 1) {
-        const elem = this.typeAnno(expr.typeArguments[0]!, expr);
+      if (expr.typeArgs.length === 1) {
+        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
         const t = setOf(elem);
         if (!t) {
           throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
@@ -6275,7 +6332,7 @@ class Emitter {
           throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
         }
         setType = t;
-      } else if (expr.typeArguments && expr.typeArguments.length !== 1) {
+      } else if (expr.typeArgs.length !== 0) {
         throw new CodegenError(expr, "Set<T> requires exactly one type argument");
       } else {
         if (!expected || !isSetType(expected)) {
@@ -6296,16 +6353,16 @@ class Emitter {
     // name and dispatches through the same path as concrete classes.
     let className = name;
     if (this.genericClasses.has(name)) {
-      const t = this.instantiateGenericClassTs(name, expr.typeArguments, expr);
+      const t = this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentSf!);
       className = classNameOf(t)!;
-    } else if (expr.typeArguments && expr.typeArguments.length > 0) {
+    } else if (expr.typeArgs.length > 0) {
       if (this.classes.has(name)) {
         throw new CodegenError(expr, `class '${name}' takes no type arguments`);
       }
     }
     if (this.classes.has(className)) {
       const cls = this.classes.get(className)!;
-      const args = expr.arguments ?? ([] as readonly ts.Expression[]);
+      const args = expr.args;
       const t = classOf(className);
       // Class -> interface coercion happens at the caller's site (the
       // surrounding emitWithExpected); here we only need to confirm the new
@@ -6328,22 +6385,17 @@ class Emitter {
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
   }
 
-  private emitStringLiteral(
-    expr:
-      | ts.StringLiteral
-      | ts.NoSubstitutionTemplateLiteral
-      | ts.TemplateHead
-      | ts.TemplateMiddle
-      | ts.TemplateTail,
-  ): string {
-    const cooked = expr.text;
+  // Phase 1.5-6e-2: core string-literal encoder. Takes the cooked JS string and
+  // a Topaz anchor `{ pos }` for the non-ASCII error. Called for `str_lit`
+  // values, `template_lit` heads, and each `template_sub.cookedAfter`.
+  private emitStringLiteralText(cooked: string, anchor: { pos: number } | ts.Node): string {
     let escaped = '"';
     let byteLen = 0;
     for (let i = 0; i < cooked.length; i++) {
       const c = cooked.charCodeAt(i);
       if (c >= 0x80) {
         throw new CodegenError(
-          expr,
+          anchor,
           "non-ASCII characters in string literals are unsupported (UTF-16 length divergence)",
         );
       }
@@ -6369,16 +6421,18 @@ class Emitter {
   // `topaz_boolean_to_string` / identity (for string) so that arena alloc cost
   // matches the leak budget we already absorb for `+` on string operands.
   // Empty literal fragments (e.g. between adjacent `${a}${b}`) are skipped so
-  // we don't burn one arena alloc per gap.
-  private emitTemplateExpression(expr: ts.TemplateExpression): string {
-    const stringify = (sub: ts.Expression): string => {
+  // we don't burn one arena alloc per gap. A no-substitution template
+  // (`template_lit` with empty subs) yields the head as a plain string literal,
+  // matching the pre-migration NoSubstitutionTemplateLiteral path.
+  private emitTemplateExpression(expr: TemplateLitExpr): string {
+    const stringify = (sub: Expr): string => {
       const t = this.inferType(sub);
       const inner = this.emitExpression(sub);
       if (t.kind === "string") return inner;
       if (t.kind === "number") return `topaz_number_to_string(${inner})`;
       if (t.kind === "boolean") return `topaz_boolean_to_string(${inner})`;
-      // inferType's TemplateExpression branch already vets each span; this
-      // arm is defensive in case stringify gets reused later.
+      // inferType's TemplateLit branch already vets each span; this arm is
+      // defensive in case stringify gets reused later.
       throw new CodegenError(
         sub,
         `template literal substitution must be number / boolean / string, got ${typeIdent(t)}`,
@@ -6390,10 +6444,10 @@ class Emitter {
       acc = acc === null ? piece : `topaz_string_concat(${acc}, ${piece})`;
     };
 
-    if (expr.head.text !== "") append(this.emitStringLiteral(expr.head));
-    for (const span of expr.templateSpans) {
-      append(stringify(span.expression));
-      if (span.literal.text !== "") append(this.emitStringLiteral(span.literal));
+    if (expr.head !== "") append(this.emitStringLiteralText(expr.head, expr));
+    for (const sub of expr.subs) {
+      append(stringify(sub.expr));
+      if (sub.cookedAfter !== "") append(this.emitStringLiteralText(sub.cookedAfter, expr));
     }
     // All-empty template (`${a}` with empty head + empty tail) still needs to
     // yield a `topaz_string` value; fall back to the first substitution which
@@ -6407,74 +6461,84 @@ class Emitter {
     return acc;
   }
 
-  private prefixOp(expr: ts.PrefixUnaryExpression): string {
-    switch (expr.operator) {
-      case ts.SyntaxKind.MinusToken: return "-";
-      case ts.SyntaxKind.PlusToken: return "+";
-      case ts.SyntaxKind.ExclamationToken: return "!";
-      case ts.SyntaxKind.PlusPlusToken: return "++";
-      case ts.SyntaxKind.MinusMinusToken: return "--";
+  private prefixOp(expr: PrefixOpExpr): string {
+    switch (expr.op) {
+      case "-": return "-";
+      case "+": return "+";
+      case "!": return "!";
+      case "++": return "++";
+      case "--": return "--";
       default: unsupported(expr, "prefix unary operator");
     }
   }
 
-  private postfixOp(expr: ts.PostfixUnaryExpression): string {
-    switch (expr.operator) {
-      case ts.SyntaxKind.PlusPlusToken: return "++";
-      case ts.SyntaxKind.MinusMinusToken: return "--";
+  private postfixOp(expr: PostfixOpExpr): string {
+    switch (expr.op) {
+      case "++": return "++";
+      case "--": return "--";
       default: unsupported(expr, "postfix unary operator");
     }
   }
 
-  private binaryOp(tok: ts.BinaryOperatorToken): string {
-    switch (tok.kind) {
-      case ts.SyntaxKind.PlusToken: return "+";
-      case ts.SyntaxKind.MinusToken: return "-";
-      case ts.SyntaxKind.AsteriskToken: return "*";
-      case ts.SyntaxKind.SlashToken: return "/";
-      case ts.SyntaxKind.PercentToken: return "%";
-      case ts.SyntaxKind.LessThanToken: return "<";
-      case ts.SyntaxKind.LessThanEqualsToken: return "<=";
-      case ts.SyntaxKind.GreaterThanToken: return ">";
-      case ts.SyntaxKind.GreaterThanEqualsToken: return ">=";
-      case ts.SyntaxKind.EqualsEqualsEqualsToken: return "==";
-      case ts.SyntaxKind.ExclamationEqualsEqualsToken: return "!=";
-      case ts.SyntaxKind.AmpersandAmpersandToken: return "&&";
-      case ts.SyntaxKind.BarBarToken: return "||";
-      case ts.SyntaxKind.EqualsToken: return "=";
-      case ts.SyntaxKind.PlusEqualsToken: return "+=";
-      case ts.SyntaxKind.MinusEqualsToken: return "-=";
-      case ts.SyntaxKind.AsteriskEqualsToken: return "*=";
-      case ts.SyntaxKind.SlashEqualsToken: return "/=";
-      case ts.SyntaxKind.PercentEqualsToken: return "%=";
-      case ts.SyntaxKind.EqualsEqualsToken:
-      case ts.SyntaxKind.ExclamationEqualsToken:
-        throw new CodegenError(tok, "loose equality (== / !=) is unsupported; use === / !==");
+  // Phase 1.5-6e-2: compound assignment operators ("=", "+=", "-=", "*=", "/=";
+  // "%=" and string "+=" are handled before reaching here). Mirrors the
+  // pre-migration binaryOp's assignment cases.
+  private assignOp(expr: AssignExpr): string {
+    switch (expr.op) {
+      case "=": return "=";
+      case "+=": return "+=";
+      case "-=": return "-=";
+      case "*=": return "*=";
+      case "/=": return "/=";
+      case "%=": return "%=";
       default:
-        unsupported(tok, "binary operator");
+        unsupported(expr, "assignment operator");
     }
   }
 
-  private emitCall(expr: ts.CallExpression): string {
-    const callee = expr.expression;
+  private binaryOp(expr: BinOpExpr): string {
+    switch (expr.op) {
+      case "+": return "+";
+      case "-": return "-";
+      case "*": return "*";
+      case "/": return "/";
+      case "%": return "%";
+      case "<": return "<";
+      case "<=": return "<=";
+      case ">": return ">";
+      case ">=": return ">=";
+      case "===": return "==";
+      case "!==": return "!=";
+      case "&&": return "&&";
+      case "||": return "||";
+      case "==":
+      case "!=":
+        throw new CodegenError(expr, "loose equality (== / !=) is unsupported; use === / !==");
+      default:
+        unsupported(expr, "binary operator");
+    }
+  }
 
-    // Phase 1.5-3.5d: optional method call `a?.b()`. The `?.` token sits on
-    // the inner property access; the call itself is regular. `a?.()`
-    // (optional call) is rejected separately below.
-    if (ts.isPropertyAccessExpression(callee) && callee.questionDotToken) {
+  private emitCall(expr: CallExpr): string {
+    const callee = expr.callee;
+
+    // Phase 1.5-3.5d: optional method call `a?.b()`. The `?.` sits on the inner
+    // property access; the call itself is regular. `a?.()` (optional call) is
+    // rejected separately below.
+    if (callee.kind === "prop_access" && callee.optional) {
       return this.emitOptionalMethodCall(expr, callee);
     }
-    if (expr.questionDotToken) {
+    if (expr.optional) {
       throw new CodegenError(
         expr,
         "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
       );
     }
     // Phase 1.5-3.5h-spread: spread in call arguments is rejected up-front so
-    // every downstream callee can iterate `expr.arguments` positionally. Spread
-    // in array literals is supported separately by emitArrayLiteral.
-    for (const a of expr.arguments) {
-      if (ts.isSpreadElement(a)) {
+    // every downstream callee can iterate `expr.args` positionally. Spread in
+    // array literals is supported separately by emitArrayLiteral.
+    for (const a of expr.args) {
+      if (a.kind === "spread_expr") {
         throw new CodegenError(
           a,
           "spread in call arguments is unsupported (rewrite as a loop, e.g. `for (const x of xs) f(x)`)",
@@ -6483,18 +6547,18 @@ class Emitter {
     }
 
     if (
-      ts.isPropertyAccessExpression(callee) &&
-      ts.isIdentifier(callee.expression) &&
-      callee.expression.text === "console" &&
+      callee.kind === "prop_access" &&
+      callee.receiver.kind === "ident" &&
+      callee.receiver.name === "console" &&
       // Phase 1.5-6 prep #26: console.error shares console.log's one-argument
       // scalar lowering, differing only in the runtime stream (stderr).
-      (callee.name.text === "log" || callee.name.text === "error")
+      (callee.name === "log" || callee.name === "error")
     ) {
-      const method = callee.name.text;
-      if (expr.arguments.length !== 1) {
+      const method = callee.name;
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, `console.${method} expects exactly one argument`);
       }
-      const arg = expr.arguments[0]!;
+      const arg = expr.args[0]!;
       const t = this.inferType(arg);
       if (t.kind === "undefined" || t.kind === "union") {
         throw new CodegenError(
@@ -6524,10 +6588,10 @@ class Emitter {
     // `process` identifier is synthetic (no real binding), same model as
     // `console` above.
     if (
-      ts.isPropertyAccessExpression(callee) &&
-      ts.isIdentifier(callee.expression) &&
-      callee.expression.text === "process" &&
-      callee.name.text === "exit"
+      callee.kind === "prop_access" &&
+      callee.receiver.kind === "ident" &&
+      callee.receiver.name === "process" &&
+      callee.name === "exit"
     ) {
       return this.emitProcessExit(expr);
     }
@@ -6536,29 +6600,29 @@ class Emitter {
     // -> void. Recognized syntactically (the `process.stdout` receiver is never
     // evaluated as a value).
     if (
-      ts.isPropertyAccessExpression(callee) &&
-      ts.isPropertyAccessExpression(callee.expression) &&
-      ts.isIdentifier(callee.expression.expression) &&
-      callee.expression.expression.text === "process" &&
-      (callee.expression.name.text === "stdout" || callee.expression.name.text === "stderr") &&
-      callee.name.text === "write"
+      callee.kind === "prop_access" &&
+      callee.receiver.kind === "prop_access" &&
+      callee.receiver.receiver.kind === "ident" &&
+      callee.receiver.receiver.name === "process" &&
+      (callee.receiver.name === "stdout" || callee.receiver.name === "stderr") &&
+      callee.name === "write"
     ) {
-      return this.emitProcessStreamWrite(expr, callee.expression.name.text);
+      return this.emitProcessStreamWrite(expr, callee.receiver.name);
     }
 
     // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
     // syntactically (the `String` identifier is not a real binding — we don't
     // model a `String` global namespace, only this single static method).
     if (
-      ts.isPropertyAccessExpression(callee) &&
-      ts.isIdentifier(callee.expression) &&
-      callee.expression.text === "String"
+      callee.kind === "prop_access" &&
+      callee.receiver.kind === "ident" &&
+      callee.receiver.name === "String"
     ) {
       return this.emitStringStaticCall(expr, callee);
     }
 
-    if (ts.isPropertyAccessExpression(callee)) {
-      const baseType = this.inferType(callee.expression);
+    if (callee.kind === "prop_access") {
+      const baseType = this.inferType(callee.receiver);
       if (isArrayType(baseType)) {
         return this.emitArrayMethodCall(expr, callee, baseType);
       }
@@ -6577,90 +6641,90 @@ class Emitter {
       if (isInterfaceType(baseType)) {
         return this.emitInterfaceMethodCall(expr, callee, baseType);
       }
-      throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
+      throw new CodegenError(callee, `unsupported method '.${callee.name}' on ${typeIdent(baseType)}`);
     }
 
-    if (ts.isIdentifier(callee)) {
+    if (callee.kind === "ident") {
       // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
       // shortcut。loader 側で `node:fs` specifier を受理し、`readFileSync`
       // 識別子は scope に登録されない (String.fromCharCode と同方針)。
       // bare 利用 (`let f = readFileSync;`) は scope lookup が「unknown
       // identifier」で fall するので、ここの call-site 経路だけ受理する。
-      if (callee.text === "readFileSync") {
+      if (callee.name === "readFileSync") {
         return this.emitNodeFsReadFileSync(expr);
       }
       // Phase 1.5-6 prep #17: `existsSync(path)` -> bool, same syntactic
       // shortcut path as readFileSync (loader accepts the `node:fs` specifier).
-      if (callee.text === "existsSync") {
+      if (callee.name === "existsSync") {
         return this.emitNodeFsExistsSync(expr);
       }
       // Phase 1.5-6 prep #19: `writeFileSync(path, content)` -> void, same
       // syntactic shortcut path as readFileSync. Encoding is implicit utf8.
-      if (callee.text === "writeFileSync") {
+      if (callee.name === "writeFileSync") {
         return this.emitNodeFsWriteFileSync(expr);
       }
       // Phase 1.5-6 prep #20: `mkdirSync(path, { recursive: true })` -> void.
       // Recursive-only: the options literal is the only accepted second arg.
-      if (callee.text === "mkdirSync") {
+      if (callee.name === "mkdirSync") {
         return this.emitNodeFsMkdirSync(expr);
       }
       // Phase 1.5-6 prep #18: node:path.dirname / resolve, same call-site
       // shortcut (loader accepts the `node:path` specifier). bare value use
       // falls to "unknown identifier" like the node:fs builtins.
-      if (callee.text === "dirname") {
+      if (callee.name === "dirname") {
         return this.emitNodePathDirname(expr);
       }
-      if (callee.text === "resolve") {
+      if (callee.name === "resolve") {
         return this.emitNodePathResolve(expr);
       }
       // Phase 1.5-6 prep #21: node:path.basename(p, ext?), same call-site
       // shortcut. arity 1/2 dispatch to distinct runtime entries.
-      if (callee.text === "basename") {
+      if (callee.name === "basename") {
         return this.emitNodePathBasename(expr);
       }
       // Phase 1.5-6 prep #22: node:path.extname(p), same call-site shortcut.
-      if (callee.text === "extname") {
+      if (callee.name === "extname") {
         return this.emitNodePathExtname(expr);
       }
       // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic + posix
       // normalize。resolve と同じ variadic lowering で `topaz_path_join(n,
       // seg0, seg1, ...)` に降ろす。
-      if (callee.text === "join") {
+      if (callee.name === "join") {
         return this.emitNodePathJoin(expr);
       }
       // Phase 1.5-6 prep #24: node:child_process.execFileSync(cmd, args,
       // { stdio: "inherit" }) -> void。stdio inherit 固定の call-site shortcut。
-      if (callee.text === "execFileSync") {
+      if (callee.name === "execFileSync") {
         return this.emitNodeChildProcessExecFileSync(expr);
       }
       // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
       // `file://...` URL を local path に変換するだけの 1 引数 string 関数。
-      if (callee.text === "fileURLToPath") {
+      if (callee.name === "fileURLToPath") {
         return this.emitNodeUrlFileURLToPath(expr);
       }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
-      if (callee.text === "parseInt") {
+      if (callee.name === "parseInt") {
         return this.emitParseInt(expr);
       }
-      if (callee.text === "parseFloat") {
+      if (callee.name === "parseFloat") {
         return this.emitParseFloat(expr);
       }
-      if (this.genericFunctions.has(callee.text)) {
+      if (this.genericFunctions.has(callee.name)) {
         const resolved = this.resolveGenericCall(callee, expr)!;
         const args = this.emitCallArgs(
-          expr.arguments,
+          expr.args,
           resolved.sig.params,
-          `${callee.text}()`,
+          `${callee.name}()`,
           expr,
         ).join(", ");
         return `${resolved.mangled}(${args})`;
       }
-      const sig = this.functionSigs.get(callee.text);
+      const sig = this.functionSigs.get(callee.name);
       if (sig) {
-        const args = this.emitCallArgs(expr.arguments, sig.params, `${callee.text}()`, expr).join(", ");
-        return `${callee.text}(${args})`;
+        const args = this.emitCallArgs(expr.args, sig.params, `${callee.name}()`, expr).join(", ");
+        return `${callee.name}(${args})`;
       }
       // Phase 1.5-3.5e: fn-typed local (a binding holding an arrow / fn
       // value). Resolve the fn type from the scope (or captureContext) and
@@ -6669,7 +6733,7 @@ class Emitter {
       if (calleeType.kind === "fn") {
         return this.emitFnValueCall(expr, callee, calleeType);
       }
-      throw new CodegenError(callee, `unknown function '${callee.text}'`);
+      throw new CodegenError(callee, `unknown function '${callee.name}'`);
     }
 
     // Phase 1.5-3.5e: any other expression that types as a fn value (e.g.
@@ -6688,18 +6752,18 @@ class Emitter {
   // pointer. The dispatch is `({ <fn type> __t = f; __t.fn(__t.env, args); })`
   // so the callee is evaluated once even when it's a complex expression.
   private emitFnValueCall(
-    expr: ts.CallExpression,
-    callee: ts.Expression,
+    expr: CallExpr,
+    callee: Expr,
     fnType: TopazType,
   ): string {
     if (fnType.kind !== "fn") throw new Error("emitFnValueCall: not fn");
-    if (expr.arguments.length !== fnType.params.length) {
+    if (expr.args.length !== fnType.params.length) {
       throw new CodegenError(
         expr,
-        `fn value expects ${fnType.params.length} argument(s), got ${expr.arguments.length}`,
+        `fn value expects ${fnType.params.length} argument(s), got ${expr.args.length}`,
       );
     }
-    const args = expr.arguments
+    const args = expr.args
       .map((a, i) => this.emitWithExpected(a, fnType.params[i]!.type))
       .join(", ");
     const tmp = `__topaz_fc_${this.tmpCounter++}`;
@@ -6717,18 +6781,18 @@ class Emitter {
   // returns coerced to `expected`. Dispatch reuses the same fat-pointer call
   // form as emitFnValueCall (callee evaluated once into a temp).
   private emitContextualIIFE(
-    expr: ts.CallExpression,
-    arrow: ts.ArrowFunction,
+    expr: CallExpr,
+    arrow: ArrowExpr,
     expected: TopazType,
   ): string {
-    for (const a of expr.arguments) {
-      if (ts.isSpreadElement(a)) {
+    for (const a of expr.args) {
+      if (a.kind === "spread_expr") {
         throw new CodegenError(a, "spread in call arguments is unsupported");
       }
     }
     const expectedFn: TopazType = {
       kind: "fn",
-      params: expr.arguments.map((a, i) => ({
+      params: expr.args.map((a, i) => ({
         name: `__p${i}`,
         type: this.inferType(a),
         isOptional: false,
@@ -6738,7 +6802,7 @@ class Emitter {
     const fnType = this.inferArrowType(arrow, expectedFn);
     if (fnType.kind !== "fn") throw new Error("emitContextualIIFE: not fn");
     const arrowStr = this.emitArrowFunction(arrow, expectedFn);
-    const args = expr.arguments
+    const args = expr.args
       .map((a, i) => this.emitWithExpected(a, fnType.params[i]!.type))
       .join(", ");
     const tmp = `__topaz_fc_${this.tmpCounter++}`;
@@ -6748,31 +6812,31 @@ class Emitter {
   }
 
   private emitArrayMethodCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
     baseType: TopazType,
   ): string {
     const name = arrayShortName(baseType);
     const elem = arrayElem(baseType)!;
-    const method = callee.name.text;
-    const base = this.emitExpression(callee.expression);
+    const method = callee.name;
+    const base = this.emitExpression(callee.receiver);
     if (method === "push") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Array.push expects exactly one argument");
       }
-      return `topaz_array_${name}_push(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
+      return `topaz_array_${name}_push(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
     }
     if (method === "pop") {
-      if (expr.arguments.length !== 0) {
+      if (expr.args.length !== 0) {
         throw new CodegenError(expr, "Array.pop expects no arguments");
       }
       return `topaz_array_${name}_pop(${base})`;
     }
     if (method === "map") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Array.map expects exactly one argument");
       }
-      const cb = expr.arguments[0]!;
+      const cb = expr.args[0]!;
       const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
       const u = fnType.returnType;
       // The result Array<U> reuses the same monomorph machinery as any other
@@ -6813,13 +6877,13 @@ class Emitter {
       );
     }
     if (method === "slice") {
-      if (expr.arguments.length > 2) {
+      if (expr.args.length > 2) {
         throw new CodegenError(expr, "Array.slice expects at most two arguments");
       }
       // Type-check each present argument as `number` up-front so the error
       // surfaces here rather than as a cryptic C compile error inside the
       // stmt-expression.
-      for (const arg of expr.arguments) {
+      for (const arg of expr.args) {
         const at = this.inferType(arg);
         if (at.kind !== "number") {
           throw new CodegenError(
@@ -6828,11 +6892,11 @@ class Emitter {
           );
         }
       }
-      const startExpr = expr.arguments.length >= 1
-        ? `(double)(${this.emitWithExpected(expr.arguments[0]!, T_NUMBER)})`
+      const startExpr = expr.args.length >= 1
+        ? `(double)(${this.emitWithExpected(expr.args[0]!, T_NUMBER)})`
         : "(double)NAN";
-      const endExpr = expr.arguments.length >= 2
-        ? `(double)(${this.emitWithExpected(expr.arguments[1]!, T_NUMBER)})`
+      const endExpr = expr.args.length >= 2
+        ? `(double)(${this.emitWithExpected(expr.args[1]!, T_NUMBER)})`
         : "(double)NAN";
       const id = this.tmpCounter++;
       const srcVar = `__topaz_slice_src_${id}`;
@@ -6860,10 +6924,10 @@ class Emitter {
       );
     }
     if (method === "includes") {
-      if (expr.arguments.length === 0) {
+      if (expr.args.length === 0) {
         throw new CodegenError(expr, "Array.includes expects exactly one argument");
       }
-      if (expr.arguments.length > 1) {
+      if (expr.args.length > 1) {
         // Second `fromIndex` argument is unsupported (would need to negative-
         // index normalize via topaz_slice_normalize, which is not yet wired
         // up — defer to 1.5-3.5f-slice).
@@ -6871,7 +6935,7 @@ class Emitter {
       }
       // `target` must match elem exactly. emitWithExpected handles class -> iface
       // coercion automatically when elem is an interface.
-      const tStr = this.emitWithExpected(expr.arguments[0]!, elem);
+      const tStr = this.emitWithExpected(expr.args[0]!, elem);
       const id = this.tmpCounter++;
       const srcVar = `__topaz_inc_src_${id}`;
       const tVar = `__topaz_inc_t_${id}`;
@@ -6911,10 +6975,10 @@ class Emitter {
       );
     }
     if (method === "filter") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Array.filter expects exactly one argument");
       }
-      const cb = expr.arguments[0]!;
+      const cb = expr.args[0]!;
       const fnType = this.inferCallbackFn(cb, [elem], "Array.filter");
       // Strict boolean — JS truthy/falsy coercion is not adopted (consistent
       // with `if` / `while` condition strictness).
@@ -6946,7 +7010,7 @@ class Emitter {
       );
     }
     if (method === "join") {
-      if (expr.arguments.length > 1) {
+      if (expr.args.length > 1) {
         throw new CodegenError(expr, "Array.join expects at most one argument");
       }
       // Elem type is restricted to scalar 3 (number / boolean / string).
@@ -6961,15 +7025,15 @@ class Emitter {
       }
       // Separator must be `string`. Missing → default ",".
       let sepStr: string;
-      if (expr.arguments.length === 1) {
-        const sepType = this.inferType(expr.arguments[0]!);
+      if (expr.args.length === 1) {
+        const sepType = this.inferType(expr.args[0]!);
         if (sepType.kind !== "string") {
           throw new CodegenError(
-            expr.arguments[0]!,
+            expr.args[0]!,
             `Array.join separator must be string, got ${typeIdent(sepType)}`,
           );
         }
-        sepStr = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+        sepStr = this.emitWithExpected(expr.args[0]!, T_STRING);
       } else {
         // `","` static literal as a `topaz_string` compound literal.
         sepStr = `((topaz_string){ ",", 1 })`;
@@ -6985,30 +7049,30 @@ class Emitter {
   // slice args lower to `(double)NAN` so topaz_slice_normalize picks the
   // default. charCodeAt requires exactly one argument; slice accepts 0..2.
   private emitStringMethodCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
   ): string {
-    const method = callee.name.text;
-    const base = this.emitExpression(callee.expression);
+    const method = callee.name;
+    const base = this.emitExpression(callee.receiver);
     if (method === "charCodeAt") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "String.charCodeAt expects exactly one argument");
       }
-      const argType = this.inferType(expr.arguments[0]!);
+      const argType = this.inferType(expr.args[0]!);
       if (argType.kind !== "number") {
         throw new CodegenError(
-          expr.arguments[0]!,
+          expr.args[0]!,
           `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
         );
       }
-      const idx = this.emitWithExpected(expr.arguments[0]!, T_NUMBER);
+      const idx = this.emitWithExpected(expr.args[0]!, T_NUMBER);
       return `topaz_string_char_code_at(${base}, ${idx})`;
     }
     if (method === "slice") {
-      if (expr.arguments.length > 2) {
+      if (expr.args.length > 2) {
         throw new CodegenError(expr, "String.slice expects at most two arguments");
       }
-      for (const arg of expr.arguments) {
+      for (const arg of expr.args) {
         const at = this.inferType(arg);
         if (at.kind !== "number") {
           throw new CodegenError(
@@ -7017,11 +7081,11 @@ class Emitter {
           );
         }
       }
-      const startExpr = expr.arguments.length >= 1
-        ? `(double)(${this.emitWithExpected(expr.arguments[0]!, T_NUMBER)})`
+      const startExpr = expr.args.length >= 1
+        ? `(double)(${this.emitWithExpected(expr.args[0]!, T_NUMBER)})`
         : "(double)NAN";
-      const endExpr = expr.arguments.length >= 2
-        ? `(double)(${this.emitWithExpected(expr.arguments[1]!, T_NUMBER)})`
+      const endExpr = expr.args.length >= 2
+        ? `(double)(${this.emitWithExpected(expr.args[1]!, T_NUMBER)})`
         : "(double)NAN";
       return `topaz_string_slice(${base}, ${startExpr}, ${endExpr})`;
     }
@@ -7032,48 +7096,48 @@ class Emitter {
   // intentionally do not introduce a real `String` namespace binding. The
   // single-arg ASCII contract matches src/lexer.ts's `\xNN` escape decoder.
   private emitStringStaticCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
   ): string {
-    const method = callee.name.text;
+    const method = callee.name;
     if (method !== "fromCharCode") {
       throw new CodegenError(
         callee,
         `unsupported static method 'String.${method}' (only 'String.fromCharCode' is supported)`,
       );
     }
-    if (expr.arguments.length !== 1) {
+    if (expr.args.length !== 1) {
       throw new CodegenError(expr, "String.fromCharCode expects exactly one argument");
     }
-    const argType = this.inferType(expr.arguments[0]!);
+    const argType = this.inferType(expr.args[0]!);
     if (argType.kind !== "number") {
       throw new CodegenError(
-        expr.arguments[0]!,
+        expr.args[0]!,
         `String.fromCharCode argument must be number, got ${typeIdent(argType)}`,
       );
     }
-    const code = this.emitWithExpected(expr.arguments[0]!, T_NUMBER);
+    const code = this.emitWithExpected(expr.args[0]!, T_NUMBER);
     return `topaz_string_from_char_code(${code})`;
   }
 
   private inferStringStaticReturn(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
   ): TopazType {
-    const method = callee.name.text;
+    const method = callee.name;
     if (method !== "fromCharCode") {
       throw new CodegenError(
         callee,
         `unsupported static method 'String.${method}' (only 'String.fromCharCode' is supported)`,
       );
     }
-    if (expr.arguments.length !== 1) {
+    if (expr.args.length !== 1) {
       throw new CodegenError(expr, "String.fromCharCode expects exactly one argument");
     }
-    const argType = this.inferType(expr.arguments[0]!);
+    const argType = this.inferType(expr.args[0]!);
     if (argType.kind !== "number") {
       throw new CodegenError(
-        expr.arguments[0]!,
+        expr.args[0]!,
         `String.fromCharCode argument must be number, got ${typeIdent(argType)}`,
       );
     }
@@ -7084,14 +7148,14 @@ class Emitter {
   // 第 2 引数は `"utf8"` 限定 (binary 読み出しを Topaz は今のところ要らない、
   // それでも encoding argument を必須化することで「buffer 戻り value」が誤って
   // string 経路に乗ることを防ぐ)。
-  private checkNodeFsReadFileSyncArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 2) {
+  private checkNodeFsReadFileSyncArgs(expr: CallExpr): void {
+    if (expr.args.length !== 2) {
       throw new CodegenError(
         expr,
         "readFileSync expects exactly two arguments: (path: string, encoding: \"utf8\")",
       );
     }
-    const pathArg = expr.arguments[0]!;
+    const pathArg = expr.args[0]!;
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
@@ -7099,40 +7163,38 @@ class Emitter {
         `readFileSync path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
-    const encArg = expr.arguments[1]!;
-    if (
-      !ts.isStringLiteral(encArg) &&
-      !ts.isNoSubstitutionTemplateLiteral(encArg)
-    ) {
+    const encArg = expr.args[1]!;
+    const enc = stringLitText(encArg);
+    if (enc === undefined) {
       throw new CodegenError(
         encArg,
         "readFileSync encoding argument must be the string literal \"utf8\"",
       );
     }
-    if (encArg.text !== "utf8") {
+    if (enc !== "utf8") {
       throw new CodegenError(
         encArg,
-        `readFileSync encoding argument must be "utf8" (got "${encArg.text}")`,
+        `readFileSync encoding argument must be "utf8" (got "${enc}")`,
       );
     }
   }
 
-  private emitNodeFsReadFileSync(expr: ts.CallExpression): string {
+  private emitNodeFsReadFileSync(expr: CallExpr): string {
     this.checkNodeFsReadFileSyncArgs(expr);
-    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
     return `topaz_fs_read_text_file(${path})`;
   }
 
   // Phase 1.5-6 prep #17: `existsSync(path)` の引数検査。第 1 引数は string 一個
   // のみ (Node の options 第 2 引数は未対応)。emit/infer 両経路で同じ reject。
-  private checkNodeFsExistsSyncArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 1) {
+  private checkNodeFsExistsSyncArgs(expr: CallExpr): void {
+    if (expr.args.length !== 1) {
       throw new CodegenError(
         expr,
         "existsSync expects exactly one argument: (path: string)",
       );
     }
-    const pathArg = expr.arguments[0]!;
+    const pathArg = expr.args[0]!;
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
@@ -7142,23 +7204,23 @@ class Emitter {
     }
   }
 
-  private emitNodeFsExistsSync(expr: ts.CallExpression): string {
+  private emitNodeFsExistsSync(expr: CallExpr): string {
     this.checkNodeFsExistsSyncArgs(expr);
-    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
     return `topaz_fs_exists(${path})`;
   }
 
   // Phase 1.5-6 prep #19: `writeFileSync(path, content)` の引数検査。Node の
   // 3 引数目 (encoding/options) は受けない (encoding は implicit utf8)。両引数
   // 必須・string のみ。emit/infer 両経路で同じ reject。
-  private checkNodeFsWriteFileSyncArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 2) {
+  private checkNodeFsWriteFileSyncArgs(expr: CallExpr): void {
+    if (expr.args.length !== 2) {
       throw new CodegenError(
         expr,
         "writeFileSync expects exactly two arguments: (path: string, content: string)",
       );
     }
-    const pathArg = expr.arguments[0]!;
+    const pathArg = expr.args[0]!;
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
@@ -7166,7 +7228,7 @@ class Emitter {
         `writeFileSync path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
-    const contentArg = expr.arguments[1]!;
+    const contentArg = expr.args[1]!;
     const contentType = this.inferType(contentArg);
     if (contentType.kind !== "string") {
       throw new CodegenError(
@@ -7176,10 +7238,10 @@ class Emitter {
     }
   }
 
-  private emitNodeFsWriteFileSync(expr: ts.CallExpression): string {
+  private emitNodeFsWriteFileSync(expr: CallExpr): string {
     this.checkNodeFsWriteFileSyncArgs(expr);
-    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
-    const content = this.emitWithExpected(expr.arguments[1]!, T_STRING);
+    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const content = this.emitWithExpected(expr.args[1]!, T_STRING);
     return `topaz_fs_write_text_file(${path}, ${content})`;
   }
 
@@ -7189,14 +7251,14 @@ class Emitter {
   // ならない — 変数や別 shape の options は受けない (runtime は常に recursive
   // mkdir を呼ぶので、call-site で「単純な誤読」を防ぐためにここで shape を
   // 固定する)。emit/infer 両経路で同じ reject。
-  private checkNodeFsMkdirSyncArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 2) {
+  private checkNodeFsMkdirSyncArgs(expr: CallExpr): void {
+    if (expr.args.length !== 2) {
       throw new CodegenError(
         expr,
         "mkdirSync expects exactly two arguments: (path: string, { recursive: true })",
       );
     }
-    const pathArg = expr.arguments[0]!;
+    const pathArg = expr.args[0]!;
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
@@ -7204,37 +7266,37 @@ class Emitter {
         `mkdirSync path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
-    const optsArg = expr.arguments[1]!;
-    if (!ts.isObjectLiteralExpression(optsArg)) {
+    const optsArg = expr.args[1]!;
+    if (optsArg.kind !== "object_lit") {
       throw new CodegenError(
         optsArg,
         "mkdirSync options argument must be the literal { recursive: true }",
       );
     }
-    if (optsArg.properties.length !== 1) {
+    if (optsArg.props.length !== 1) {
       throw new CodegenError(
         optsArg,
         "mkdirSync options literal must contain exactly one property: { recursive: true }",
       );
     }
-    const prop = optsArg.properties[0]!;
-    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== "recursive") {
+    const prop = optsArg.props[0]!;
+    if (prop.kind !== "prop_kv" || prop.name !== "recursive") {
       throw new CodegenError(
         prop,
         "mkdirSync options property must be `recursive: true`",
       );
     }
-    if (prop.initializer.kind !== ts.SyntaxKind.TrueKeyword) {
+    if (prop.value.kind !== "bool_lit" || prop.value.value !== true) {
       throw new CodegenError(
-        prop.initializer,
+        prop.value,
         "mkdirSync `recursive` must be the literal `true`",
       );
     }
   }
 
-  private emitNodeFsMkdirSync(expr: ts.CallExpression): string {
+  private emitNodeFsMkdirSync(expr: CallExpr): string {
     this.checkNodeFsMkdirSyncArgs(expr);
-    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
     return `topaz_fs_mkdir_p(${path})`;
   }
 
@@ -7243,14 +7305,14 @@ class Emitter {
   // stdio は inherit のみ受理(child の stdout/stderr/stdin が親 fd を共有)。
   // mkdirSync と同じく options は syntactic object literal で `stdio: "inherit"`
   // 1 property だけ。emit/infer 両経路で同じ reject。
-  private checkNodeChildProcessExecFileSyncArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 3) {
+  private checkNodeChildProcessExecFileSyncArgs(expr: CallExpr): void {
+    if (expr.args.length !== 3) {
       throw new CodegenError(
         expr,
         "execFileSync expects exactly three arguments: (cmd: string, args: string[], { stdio: \"inherit\" })",
       );
     }
-    const cmdArg = expr.arguments[0]!;
+    const cmdArg = expr.args[0]!;
     const cmdType = this.inferType(cmdArg);
     if (cmdType.kind !== "string") {
       throw new CodegenError(
@@ -7258,7 +7320,7 @@ class Emitter {
         `execFileSync cmd argument must be string, got ${typeIdent(cmdType)}`,
       );
     }
-    const argsArg = expr.arguments[1]!;
+    const argsArg = expr.args[1]!;
     const argsType = this.inferType(argsArg);
     const expectedArgs = arrayOf(T_STRING)!;
     if (!typeEq(argsType, expectedArgs)) {
@@ -7267,28 +7329,29 @@ class Emitter {
         `execFileSync args argument must be Array<string>, got ${typeIdent(argsType)}`,
       );
     }
-    const optsArg = expr.arguments[2]!;
-    if (!ts.isObjectLiteralExpression(optsArg)) {
+    const optsArg = expr.args[2]!;
+    if (optsArg.kind !== "object_lit") {
       throw new CodegenError(
         optsArg,
         "execFileSync options argument must be the literal { stdio: \"inherit\" }",
       );
     }
-    if (optsArg.properties.length !== 1) {
+    if (optsArg.props.length !== 1) {
       throw new CodegenError(
         optsArg,
         "execFileSync options literal must contain exactly one property: { stdio: \"inherit\" }",
       );
     }
-    const prop = optsArg.properties[0]!;
-    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== "stdio") {
+    const prop = optsArg.props[0]!;
+    if (prop.kind !== "prop_kv" || prop.name !== "stdio") {
       throw new CodegenError(
         prop,
         "execFileSync options property must be `stdio: \"inherit\"`",
       );
     }
-    const init = prop.initializer;
-    if (!ts.isStringLiteral(init) || init.text !== "inherit") {
+    const init = prop.value;
+    const initLit = stringLitText(init);
+    if (initLit !== "inherit") {
       throw new CodegenError(
         init,
         "execFileSync `stdio` must be the string literal \"inherit\"",
@@ -7296,12 +7359,12 @@ class Emitter {
     }
   }
 
-  private emitNodeChildProcessExecFileSync(expr: ts.CallExpression): string {
+  private emitNodeChildProcessExecFileSync(expr: CallExpr): string {
     this.checkNodeChildProcessExecFileSyncArgs(expr);
     const expectedArgs = arrayOf(T_STRING)!;
     this.recordArrayMonomorph(expectedArgs);
-    const cmd = this.emitWithExpected(expr.arguments[0]!, T_STRING);
-    const args = this.emitWithExpected(expr.arguments[1]!, expectedArgs);
+    const cmd = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const args = this.emitWithExpected(expr.args[1]!, expectedArgs);
     return `topaz_child_exec_inherit(${cmd}, ${args})`;
   }
 
@@ -7310,14 +7373,14 @@ class Emitter {
   // して local path を返す 1 引数 string 関数。Node の fileURLToPath は
   // posix と win32 で挙動が分かれるが、self-hosting の実行環境は POSIX 限定で
   // 構築するので POSIX 寄りに固定。
-  private checkNodeUrlFileURLToPathArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 1) {
+  private checkNodeUrlFileURLToPathArgs(expr: CallExpr): void {
+    if (expr.args.length !== 1) {
       throw new CodegenError(
         expr,
         "fileURLToPath expects exactly one argument: (url: string)",
       );
     }
-    const urlArg = expr.arguments[0]!;
+    const urlArg = expr.args[0]!;
     const urlType = this.inferType(urlArg);
     if (urlType.kind !== "string") {
       throw new CodegenError(
@@ -7327,23 +7390,23 @@ class Emitter {
     }
   }
 
-  private emitNodeUrlFileURLToPath(expr: ts.CallExpression): string {
+  private emitNodeUrlFileURLToPath(expr: CallExpr): string {
     this.checkNodeUrlFileURLToPathArgs(expr);
-    const url = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const url = this.emitWithExpected(expr.args[0]!, T_STRING);
     return `topaz_url_file_url_to_path(${url})`;
   }
 
   // Phase 1.5-6 prep #26: process.exit(code?). arity 0 -> exit(0) (Node's
   // default), arity 1 -> the number code. More args or a non-number code are
   // rejected. Returns `never`; value use is rejected in inferType.
-  private emitProcessExit(expr: ts.CallExpression): string {
-    if (expr.arguments.length === 0) {
+  private emitProcessExit(expr: CallExpr): string {
+    if (expr.args.length === 0) {
       return `topaz_process_exit(0)`;
     }
-    if (expr.arguments.length !== 1) {
+    if (expr.args.length !== 1) {
       throw new CodegenError(expr, "process.exit expects at most one argument: (code?: number)");
     }
-    const arg = expr.arguments[0]!;
+    const arg = expr.args[0]!;
     const t = this.inferType(arg);
     if (t.kind !== "number") {
       throw new CodegenError(arg, `process.exit code must be number, got ${typeIdent(t)}`);
@@ -7354,11 +7417,11 @@ class Emitter {
   // Phase 1.5-6 prep #26: process.{stdout,stderr}.write(s). Exactly one string
   // argument; no trailing newline (unlike console.*). Returns void (Node
   // returns a backpressure boolean — dropped here).
-  private emitProcessStreamWrite(expr: ts.CallExpression, stream: string): string {
-    if (expr.arguments.length !== 1) {
+  private emitProcessStreamWrite(expr: CallExpr, stream: string): string {
+    if (expr.args.length !== 1) {
       throw new CodegenError(expr, `process.${stream}.write expects exactly one argument: (s: string)`);
     }
-    const arg = expr.arguments[0]!;
+    const arg = expr.args[0]!;
     const t = this.inferType(arg);
     if (t.kind !== "string") {
       throw new CodegenError(arg, `process.${stream}.write argument must be string, got ${typeIdent(t)}`);
@@ -7367,52 +7430,20 @@ class Emitter {
     return `${fn}(${this.emitWithExpected(arg, T_STRING)})`;
   }
 
-  // Phase 1.5-6 prep #25: `import.meta.url` 受理パスの validation。Node の
-  // `import.meta.X` 系で受け入れるのは `url` のみ(self-hosting で実際に踏むのは
-  // `dirname(fileURLToPath(import.meta.url))` の 1 形のみ)。`new.target` を含む
-  // 他の MetaProperty / `import.meta.<他>` は全 reject。
-  private checkImportMetaUrl(expr: ts.PropertyAccessExpression): void {
-    const meta = expr.expression as ts.MetaProperty;
-    if (meta.keywordToken !== ts.SyntaxKind.ImportKeyword) {
-      throw new CodegenError(
-        expr,
-        "unsupported meta property (only `import.meta.url` is accepted)",
-      );
-    }
-    if (meta.name.text !== "meta") {
-      throw new CodegenError(
-        expr,
-        `unsupported \`import.${meta.name.text}\` (only \`import.meta.url\` is accepted)`,
-      );
-    }
-    if (expr.name.text !== "url") {
-      throw new CodegenError(
-        expr,
-        `unsupported \`import.meta.${expr.name.text}\` (only \`import.meta.url\` is accepted)`,
-      );
-    }
-  }
-
-  private rejectBareMetaProperty(expr: ts.MetaProperty): never {
-    if (expr.keywordToken === ts.SyntaxKind.NewKeyword) {
-      throw new CodegenError(expr, "`new.target` is unsupported");
-    }
-    throw new CodegenError(
-      expr,
-      "bare `import.meta` is unsupported (only `import.meta.url` is accepted)",
-    );
-  }
+  // Phase 1.5-6e-2: `import.meta.url` validation / bare-meta rejection now live
+  // in convert (`convertImportMetaUrl` / `rejectBareMetaProperty`); the SCC
+  // consumes the `import_meta_url` leaf directly.
 
   // Phase 1.5-6 prep #18: node:path.dirname(p) の引数検査。1 引数 string のみ
   // (Node の dirname は単項)。emit/infer 両経路で同じ reject。
-  private checkNodePathDirnameArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 1) {
+  private checkNodePathDirnameArgs(expr: CallExpr): void {
+    if (expr.args.length !== 1) {
       throw new CodegenError(
         expr,
         "dirname expects exactly one argument: (path: string)",
       );
     }
-    const pathArg = expr.arguments[0]!;
+    const pathArg = expr.args[0]!;
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
@@ -7422,23 +7453,23 @@ class Emitter {
     }
   }
 
-  private emitNodePathDirname(expr: ts.CallExpression): string {
+  private emitNodePathDirname(expr: CallExpr): string {
     this.checkNodePathDirnameArgs(expr);
-    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
     return `topaz_path_dirname(${path})`;
   }
 
   // Phase 1.5-6 prep #18: node:path.resolve(...segments) は variadic。1 個以上の
   // string 引数を要求し、`topaz_path_resolve(n, seg0, seg1, ...)` に lower する
   // (runtime 側で getcwd フォールバック + 正規化)。
-  private checkNodePathResolveArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length < 1) {
+  private checkNodePathResolveArgs(expr: CallExpr): void {
+    if (expr.args.length < 1) {
       throw new CodegenError(
         expr,
         "resolve expects at least one argument: (...segments: string[])",
       );
     }
-    for (const arg of expr.arguments) {
+    for (const arg of expr.args) {
       const argType = this.inferType(arg);
       if (argType.kind !== "string") {
         throw new CodegenError(
@@ -7449,25 +7480,25 @@ class Emitter {
     }
   }
 
-  private emitNodePathResolve(expr: ts.CallExpression): string {
+  private emitNodePathResolve(expr: CallExpr): string {
     this.checkNodePathResolveArgs(expr);
-    const segs = expr.arguments
+    const segs = expr.args
       .map((a) => this.emitWithExpected(a, T_STRING))
       .join(", ");
-    return `topaz_path_resolve(${expr.arguments.length}, ${segs})`;
+    return `topaz_path_resolve(${expr.args.length}, ${segs})`;
   }
 
   // Phase 1.5-6 prep #21: node:path.basename(p, ext?) の引数検査。1 または 2
   // 引数で、いずれも string。Node の path.posix.basename と同じシグネチャ。
   // emit/infer 両経路で同じ reject。
-  private checkNodePathBasenameArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 1 && expr.arguments.length !== 2) {
+  private checkNodePathBasenameArgs(expr: CallExpr): void {
+    if (expr.args.length !== 1 && expr.args.length !== 2) {
       throw new CodegenError(
         expr,
         "basename expects one or two arguments: (path: string, ext?: string)",
       );
     }
-    const pathArg = expr.arguments[0]!;
+    const pathArg = expr.args[0]!;
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
@@ -7475,8 +7506,8 @@ class Emitter {
         `basename path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
-    if (expr.arguments.length === 2) {
-      const extArg = expr.arguments[1]!;
+    if (expr.args.length === 2) {
+      const extArg = expr.args[1]!;
       const extType = this.inferType(extArg);
       if (extType.kind !== "string") {
         throw new CodegenError(
@@ -7487,26 +7518,26 @@ class Emitter {
     }
   }
 
-  private emitNodePathBasename(expr: ts.CallExpression): string {
+  private emitNodePathBasename(expr: CallExpr): string {
     this.checkNodePathBasenameArgs(expr);
-    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
-    if (expr.arguments.length === 1) {
+    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
+    if (expr.args.length === 1) {
       return `topaz_path_basename(${path})`;
     }
-    const ext = this.emitWithExpected(expr.arguments[1]!, T_STRING);
+    const ext = this.emitWithExpected(expr.args[1]!, T_STRING);
     return `topaz_path_basename_ext(${path}, ${ext})`;
   }
 
   // Phase 1.5-6 prep #22: node:path.extname(p) の引数検査。1 引数 string。
   // Node の path.posix.extname と同じシグネチャ。emit/infer 両経路で同じ reject。
-  private checkNodePathExtnameArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 1) {
+  private checkNodePathExtnameArgs(expr: CallExpr): void {
+    if (expr.args.length !== 1) {
       throw new CodegenError(
         expr,
         "extname expects exactly one argument: (path: string)",
       );
     }
-    const pathArg = expr.arguments[0]!;
+    const pathArg = expr.args[0]!;
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
@@ -7516,17 +7547,17 @@ class Emitter {
     }
   }
 
-  private emitNodePathExtname(expr: ts.CallExpression): string {
+  private emitNodePathExtname(expr: CallExpr): string {
     this.checkNodePathExtnameArgs(expr);
-    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
     return `topaz_path_extname(${path})`;
   }
 
   // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic、引数 0 個も
   // Node が `.` を返す仕様なので arity の下限は無し。全引数 string を要求し、
   // resolve と同じく `topaz_path_join(n, seg0, seg1, ...)` に lower する。
-  private checkNodePathJoinArgs(expr: ts.CallExpression): void {
-    for (const arg of expr.arguments) {
+  private checkNodePathJoinArgs(expr: CallExpr): void {
+    for (const arg of expr.args) {
       const argType = this.inferType(arg);
       if (argType.kind !== "string") {
         throw new CodegenError(
@@ -7537,95 +7568,95 @@ class Emitter {
     }
   }
 
-  private emitNodePathJoin(expr: ts.CallExpression): string {
+  private emitNodePathJoin(expr: CallExpr): string {
     this.checkNodePathJoinArgs(expr);
-    const segs = expr.arguments
+    const segs = expr.args
       .map((a) => this.emitWithExpected(a, T_STRING))
       .join(", ");
-    if (expr.arguments.length === 0) {
+    if (expr.args.length === 0) {
       return `topaz_path_join(0)`;
     }
-    return `topaz_path_join(${expr.arguments.length}, ${segs})`;
+    return `topaz_path_join(${expr.args.length}, ${segs})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
   // auto-radix is unsupported); both args are type-checked here so emit-side
   // and infer-side reject in lockstep (mirrors checkNodeFsReadFileSyncArgs).
-  private checkParseIntArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 2) {
+  private checkParseIntArgs(expr: CallExpr): void {
+    if (expr.args.length !== 2) {
       throw new CodegenError(
         expr,
         "parseInt expects exactly two arguments: (s: string, radix: number)",
       );
     }
-    const sType = this.inferType(expr.arguments[0]!);
+    const sType = this.inferType(expr.args[0]!);
     if (sType.kind !== "string") {
       throw new CodegenError(
-        expr.arguments[0]!,
+        expr.args[0]!,
         `parseInt first argument must be string, got ${typeIdent(sType)}`,
       );
     }
-    const rType = this.inferType(expr.arguments[1]!);
+    const rType = this.inferType(expr.args[1]!);
     if (rType.kind !== "number") {
       throw new CodegenError(
-        expr.arguments[1]!,
+        expr.args[1]!,
         `parseInt radix argument must be number, got ${typeIdent(rType)}`,
       );
     }
   }
 
-  private emitParseInt(expr: ts.CallExpression): string {
+  private emitParseInt(expr: CallExpr): string {
     this.checkParseIntArgs(expr);
-    const s = this.emitWithExpected(expr.arguments[0]!, T_STRING);
-    const radix = this.emitWithExpected(expr.arguments[1]!, T_NUMBER);
+    const s = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const radix = this.emitWithExpected(expr.args[1]!, T_NUMBER);
     return `topaz_parse_int(${s}, ${radix})`;
   }
 
-  private checkParseFloatArgs(expr: ts.CallExpression): void {
-    if (expr.arguments.length !== 1) {
+  private checkParseFloatArgs(expr: CallExpr): void {
+    if (expr.args.length !== 1) {
       throw new CodegenError(
         expr,
         "parseFloat expects exactly one argument: (s: string)",
       );
     }
-    const sType = this.inferType(expr.arguments[0]!);
+    const sType = this.inferType(expr.args[0]!);
     if (sType.kind !== "string") {
       throw new CodegenError(
-        expr.arguments[0]!,
+        expr.args[0]!,
         `parseFloat argument must be string, got ${typeIdent(sType)}`,
       );
     }
   }
 
-  private emitParseFloat(expr: ts.CallExpression): string {
+  private emitParseFloat(expr: CallExpr): string {
     this.checkParseFloatArgs(expr);
-    const s = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const s = this.emitWithExpected(expr.args[0]!, T_STRING);
     return `topaz_parse_float(${s})`;
   }
 
   private inferStringMethodReturn(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
   ): TopazType {
-    const method = callee.name.text;
+    const method = callee.name;
     if (method === "charCodeAt") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "String.charCodeAt expects exactly one argument");
       }
-      const argType = this.inferType(expr.arguments[0]!);
+      const argType = this.inferType(expr.args[0]!);
       if (argType.kind !== "number") {
         throw new CodegenError(
-          expr.arguments[0]!,
+          expr.args[0]!,
           `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
         );
       }
       return T_NUMBER;
     }
     if (method === "slice") {
-      if (expr.arguments.length > 2) {
+      if (expr.args.length > 2) {
         throw new CodegenError(expr, "String.slice expects at most two arguments");
       }
-      for (const arg of expr.arguments) {
+      for (const arg of expr.args) {
         const at = this.inferType(arg);
         if (at.kind !== "number") {
           throw new CodegenError(
@@ -7640,43 +7671,43 @@ class Emitter {
   }
 
   private emitMapMethodCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
     baseType: TopazType,
   ): string {
     const name = mapShortName(baseType);
     const k = mapKey(baseType)!;
     const v = mapValue(baseType)!;
-    const method = callee.name.text;
-    const base = this.emitExpression(callee.expression);
+    const method = callee.name;
+    const base = this.emitExpression(callee.receiver);
     if (method === "set") {
-      if (expr.arguments.length !== 2) {
+      if (expr.args.length !== 2) {
         throw new CodegenError(expr, "Map.set expects exactly two arguments");
       }
       // emitWithExpected enables class -> interface coercion for the value
       // when V is an interface; keys are still scalar so this is a no-op for
       // them, but the helper handles both uniformly.
-      const ke = this.emitWithExpected(expr.arguments[0]!, k);
-      const ve = this.emitWithExpected(expr.arguments[1]!, v);
+      const ke = this.emitWithExpected(expr.args[0]!, k);
+      const ve = this.emitWithExpected(expr.args[1]!, v);
       return `topaz_map_${name}_set(${base}, ${ke}, ${ve})`;
     }
     if (method === "get") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Map.get expects exactly one argument");
       }
-      return `topaz_map_${name}_get(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
+      return `topaz_map_${name}_get(${base}, ${this.emitWithExpected(expr.args[0]!, k)})`;
     }
     if (method === "has") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Map.has expects exactly one argument");
       }
-      return `topaz_map_${name}_has(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
+      return `topaz_map_${name}_has(${base}, ${this.emitWithExpected(expr.args[0]!, k)})`;
     }
     if (method === "delete") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Map.delete expects exactly one argument");
       }
-      return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, k)})`;
+      return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(expr.args[0]!, k)})`;
     }
     // Phase 1.5-3.5g-iterator: `.values()` / `.keys()` now yield an Iterator<T>
     // value — a fat pointer struct allocated on the arena. The for-of dispatch
@@ -7684,16 +7715,16 @@ class Emitter {
     // standalone uses produce a real iter that can be bound / passed / consumed
     // via for-of (which uses the while-form lowering instead).
     if (method === "values") {
-      if (expr.arguments.length !== 0) {
+      if (expr.args.length !== 0) {
         throw new CodegenError(expr, "Map.values takes no arguments");
       }
-      return this.emitIterConstruction(callee.expression, baseType, "map_values", v, "value");
+      return this.emitIterConstruction(callee.receiver, baseType, "map_values", v, "value");
     }
     if (method === "keys") {
-      if (expr.arguments.length !== 0) {
+      if (expr.args.length !== 0) {
         throw new CodegenError(expr, "Map.keys takes no arguments");
       }
-      return this.emitIterConstruction(callee.expression, baseType, "map_keys", k, "key");
+      return this.emitIterConstruction(callee.receiver, baseType, "map_keys", k, "key");
     }
     if (method === "entries") {
       throw new CodegenError(
@@ -7705,12 +7736,12 @@ class Emitter {
   }
 
   private emitClassMethodCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
     baseType: TopazType,
   ): string {
     const cls = this.classes.get(classNameOf(baseType)!)!;
-    const mname = callee.name.text;
+    const mname = callee.name;
     const method = cls.methods.get(mname);
     if (!method) {
       if (cls.fields.has(mname)) {
@@ -7718,21 +7749,21 @@ class Emitter {
       }
       throw new CodegenError(callee, `class '${cls.name}' has no method '${mname}'`);
     }
-    const base = this.emitExpression(callee.expression);
+    const base = this.emitExpression(callee.receiver);
     const argParts = [
       base,
-      ...this.emitCallArgs(expr.arguments, method.params, `${cls.name}.${mname}`, expr),
+      ...this.emitCallArgs(expr.args, method.params, `${cls.name}.${mname}`, expr),
     ];
     return `topaz_class_${cls.name}_method_${mname}(${argParts.join(", ")})`;
   }
 
   private emitInterfaceMethodCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
     baseType: TopazType,
   ): string {
     const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-    const mname = callee.name.text;
+    const mname = callee.name;
     const sig = iface.methods.get(mname);
     if (!sig) {
       if (iface.fields.has(mname)) {
@@ -7742,49 +7773,49 @@ class Emitter {
     }
     const id = this.tmpCounter++;
     const tmp = `__topaz_ib_${id}`;
-    const baseStr = this.emitExpression(callee.expression);
+    const baseStr = this.emitExpression(callee.receiver);
     const argParts = [
       `${tmp}.data`,
-      ...this.emitCallArgs(expr.arguments, sig.params, `${iface.name}.${mname}`, expr),
+      ...this.emitCallArgs(expr.args, sig.params, `${iface.name}.${mname}`, expr),
     ];
     return `({ ${cTypeName(baseType)} ${tmp} = ${baseStr}; ${tmp}.vt->${mname}(${argParts.join(", ")}); })`;
   }
 
   private emitSetMethodCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
     baseType: TopazType,
   ): string {
     const name = setShortName(baseType);
     const elem = setElem(baseType)!;
-    const method = callee.name.text;
-    const base = this.emitExpression(callee.expression);
+    const method = callee.name;
+    const base = this.emitExpression(callee.receiver);
     if (method === "add") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Set.add expects exactly one argument");
       }
-      return `topaz_set_${name}_add(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
+      return `topaz_set_${name}_add(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
     }
     if (method === "has") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Set.has expects exactly one argument");
       }
-      return `topaz_set_${name}_has(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
+      return `topaz_set_${name}_has(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
     }
     if (method === "delete") {
-      if (expr.arguments.length !== 1) {
+      if (expr.args.length !== 1) {
         throw new CodegenError(expr, "Set.delete expects exactly one argument");
       }
-      return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(expr.arguments[0]!, elem)})`;
+      return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
     }
     // Phase 1.5-3.5g-iterator: Set.values() / Set.keys() yield an Iterator<T>;
     // both share `set_values` semantics (Set yields elem for either, matching
     // JS), so we always pass source="set_values" + field="key".
     if (method === "values" || method === "keys") {
-      if (expr.arguments.length !== 0) {
+      if (expr.args.length !== 0) {
         throw new CodegenError(expr, `Set.${method} takes no arguments`);
       }
-      return this.emitIterConstruction(callee.expression, baseType, "set_values", elem, "key");
+      return this.emitIterConstruction(callee.receiver, baseType, "set_values", elem, "key");
     }
     if (method === "entries") {
       throw new CodegenError(
@@ -7805,8 +7836,8 @@ class Emitter {
   // receiver is rejected so the operator's intent stays unambiguous.
 
   private resolveOptionalReceiver(
-    expr: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression,
-    receiver: ts.Expression,
+    expr: PropAccessExpr | ElemAccessExpr | CallExpr,
+    receiver: Expr,
   ): { baseType: TopazType; inner: TopazType } {
     const baseType = this.inferType(receiver);
     const inner = withoutUndefined(baseType);
@@ -7820,10 +7851,10 @@ class Emitter {
   }
 
   private resolveOptionalFieldType(
-    expr: ts.PropertyAccessExpression,
+    expr: PropAccessExpr,
   ): { baseType: TopazType; inner: TopazType; fieldType: TopazType } {
-    const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.expression);
-    const fname = expr.name.text;
+    const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.receiver);
+    const fname = expr.name;
     if (isClassType(inner)) {
       const cls = this.classes.get(classNameOf(inner)!)!;
       const ft = cls.fields.get(fname);
@@ -7855,10 +7886,10 @@ class Emitter {
   }
 
   private resolveOptionalMethodSig(
-    callee: ts.PropertyAccessExpression,
+    callee: PropAccessExpr,
   ): { baseType: TopazType; inner: TopazType; sig: { params: ParamInfo[]; returnType: TopazType } } {
-    const { baseType, inner } = this.resolveOptionalReceiver(callee, callee.expression);
-    const mname = callee.name.text;
+    const { baseType, inner } = this.resolveOptionalReceiver(callee, callee.receiver);
+    const mname = callee.name;
     if (isClassType(inner)) {
       const cls = this.classes.get(classNameOf(inner)!)!;
       const m = cls.methods.get(mname);
@@ -7884,16 +7915,16 @@ class Emitter {
   }
 
   private resolveOptionalIndexType(
-    expr: ts.ElementAccessExpression,
+    expr: ElemAccessExpr,
   ): { baseType: TopazType; inner: TopazType; elem: TopazType } {
-    const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.expression);
+    const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.receiver);
     if (!isArrayType(inner)) {
       throw new CodegenError(
         expr,
         `optional index access \`?.[i]\` is only supported on Array receivers (got ${typeIdent(baseType)})`,
       );
     }
-    this.expectType(expr.argumentExpression, T_NUMBER);
+    this.expectType(expr.index, T_NUMBER);
     return { baseType, inner, elem: arrayElem(inner)! };
   }
 
@@ -7908,7 +7939,7 @@ class Emitter {
     baseStr: string;
     accessType: TopazType;
     emitPresent: (tmp: string) => string;
-    anchor: ts.Node;
+    anchor: ts.Node | { pos: number };
   }): string {
     const id = this.tmpCounter++;
     const tmp = `__topaz_oc_${id}`;
@@ -7927,10 +7958,10 @@ class Emitter {
     return `({ ${ct} ${tmp} = ${args.baseStr}; (${isAbsent}) ? ${absentStr} : ${presentStr}; })`;
   }
 
-  private emitOptionalPropertyAccess(expr: ts.PropertyAccessExpression): string {
+  private emitOptionalPropertyAccess(expr: PropAccessExpr): string {
     const { baseType, inner, fieldType } = this.resolveOptionalFieldType(expr);
-    const baseStr = this.emitExpression(expr.expression);
-    const fname = expr.name.text;
+    const baseStr = this.emitExpression(expr.receiver);
+    const fname = expr.name;
     return this.lowerOptionalChain({
       baseType,
       inner,
@@ -7947,10 +7978,10 @@ class Emitter {
     });
   }
 
-  private emitOptionalElementAccess(expr: ts.ElementAccessExpression): string {
+  private emitOptionalElementAccess(expr: ElemAccessExpr): string {
     const { baseType, inner, elem } = this.resolveOptionalIndexType(expr);
-    const baseStr = this.emitExpression(expr.expression);
-    const idxStr = this.emitExpression(expr.argumentExpression);
+    const baseStr = this.emitExpression(expr.receiver);
+    const idxStr = this.emitExpression(expr.index);
     const name = arrayShortName(inner);
     return this.lowerOptionalChain({
       baseType,
@@ -7963,19 +7994,19 @@ class Emitter {
   }
 
   private emitOptionalMethodCall(
-    expr: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
+    expr: CallExpr,
+    callee: PropAccessExpr,
   ): string {
     const { baseType, inner, sig } = this.resolveOptionalMethodSig(callee);
-    if (expr.arguments.length !== sig.params.length) {
+    if (expr.args.length !== sig.params.length) {
       throw new CodegenError(
         expr,
-        `${typeIdent(inner)}.${callee.name.text} expects ${sig.params.length} argument(s), got ${expr.arguments.length}`,
+        `${typeIdent(inner)}.${callee.name} expects ${sig.params.length} argument(s), got ${expr.args.length}`,
       );
     }
-    const baseStr = this.emitExpression(callee.expression);
-    const argStrs = expr.arguments.map((a, i) => this.emitWithExpected(a, sig.params[i]!.type));
-    const mname = callee.name.text;
+    const baseStr = this.emitExpression(callee.receiver);
+    const argStrs = expr.args.map((a, i) => this.emitWithExpected(a, sig.params[i]!.type));
+    const mname = callee.name;
     return this.lowerOptionalChain({
       baseType,
       inner,
@@ -7995,118 +8026,105 @@ class Emitter {
     });
   }
 
-  private inferType(expr: ts.Expression): TopazType {
-    if (ts.isNumericLiteral(expr)) return T_NUMBER;
-    if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
-      return T_BOOLEAN;
-    }
-    if (expr.kind === ts.SyntaxKind.ThisKeyword) {
+  private inferType(expr: Expr): TopazType {
+    if (expr.kind === "num_lit") return T_NUMBER;
+    if (expr.kind === "bool_lit") return T_BOOLEAN;
+    if (expr.kind === "this_expr") {
       if (!this.currentClass) {
         throw new CodegenError(expr, "`this` is only valid inside class methods or constructors");
       }
       return classOf(this.currentClass);
     }
-    if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    if (expr.kind === "str_lit") {
       return T_STRING;
     }
+    if (expr.kind === "undefined_lit") return T_UNDEFINED;
+    if (expr.kind === "import_meta_url") return T_STRING;
     // Phase 1.5-3.5e: an arrow's type is built from its param + return
     // annotations. Without contextual typing we require all annotations; a
     // contextual call site (emitWithExpected) feeds the expected type
     // separately. Note: this triggers a redundant emit-into-discard but
     // matches how other compound expressions handle inferType (the slot is
     // append-only and stable).
-    if (ts.isArrowFunction(expr)) {
+    if (expr.kind === "arrow_expr") {
       return this.inferArrowType(expr, undefined);
     }
-    if (ts.isFunctionExpression(expr)) {
-      throw new CodegenError(expr, "function expressions are unsupported (use an arrow `(...) => ...` instead)");
-    }
-    if (ts.isTemplateExpression(expr)) {
+    if (expr.kind === "template_lit") {
       // Phase 1.5-3.5: each ${} substitution must be number / boolean / string
       // (after narrowing). Class / interface / array / map / set / union have
       // no defined toString policy yet — surface the error at the substitution.
-      for (const span of expr.templateSpans) {
-        const sub = this.inferType(span.expression);
-        if (sub.kind !== "number" && sub.kind !== "boolean" && sub.kind !== "string") {
+      for (const sub of expr.subs) {
+        const t = this.inferType(sub.expr);
+        if (t.kind !== "number" && t.kind !== "boolean" && t.kind !== "string") {
           throw new CodegenError(
-            span.expression,
-            `template literal substitution must be number / boolean / string, got ${typeIdent(sub)}`,
+            sub.expr,
+            `template literal substitution must be number / boolean / string, got ${typeIdent(t)}`,
           );
         }
       }
       return T_STRING;
     }
-    if (ts.isParenthesizedExpression(expr)) return this.inferType(expr.expression);
+    if (expr.kind === "paren_expr") return this.inferType(expr.inner);
     // Phase 1.5-6 prep #25: a ternary's type is the common type of its two
     // branches, each inferred under the narrowing the condition implies.
-    if (ts.isConditionalExpression(expr)) {
-      this.expectType(expr.condition, T_BOOLEAN);
-      const nTrue = this.extractNarrowing(expr.condition, true);
-      const nFalse = this.extractNarrowing(expr.condition, false);
+    if (expr.kind === "ternary_expr") {
+      this.expectType(expr.cond, T_BOOLEAN);
+      const nTrue = this.extractNarrowing(expr.cond, true);
+      const nFalse = this.extractNarrowing(expr.cond, false);
       return this.conditionalResultType(expr, nTrue, nFalse);
     }
     // Phase 1.5-6 prep: object literal expressions have no inferable type on
     // their own — they need a contextual anonymous-class target. Reject here
     // so the error surfaces at the literal site instead of inside a deeper
     // emitExpression fallthrough.
-    if (ts.isObjectLiteralExpression(expr)) {
+    if (expr.kind === "object_lit") {
       throw new CodegenError(
         expr,
         "object literal expression requires a contextually typed anonymous-class target (annotate the binding / return type)",
       );
     }
-    if (ts.isIdentifier(expr)) {
-      if (expr.text === "undefined") return T_UNDEFINED;
-      const local = this.scope.lookup(expr.text);
-      if (!local && this.captureContext && this.captureContext.captures.has(expr.text)) {
-        return this.captureContext.captures.get(expr.text)!;
+    if (expr.kind === "ident") {
+      const local = this.scope.lookup(expr.name);
+      if (!local && this.captureContext && this.captureContext.captures.has(expr.name)) {
+        return this.captureContext.captures.get(expr.name)!;
       }
       if (local) return local.type;
       // Phase 1.5-3.5g-array-fn: top-level functions are addressable as fn
       // values when referenced by name (`seeds.map(makeAdder)`). Generic
       // functions need a call-site type-arg list to monomorphize, so they
       // stay rejected here.
-      const sig = this.functionSigs.get(expr.text);
+      const sig = this.functionSigs.get(expr.name);
       if (sig) {
         const fnType: TopazType = { kind: "fn", params: sig.params, returnType: sig.returnType };
         return fnType;
       }
-      throw new CodegenError(expr, `unknown identifier '${expr.text}'`);
+      throw new CodegenError(expr, `unknown identifier '${expr.name}'`);
     }
-    if (ts.isPropertyAccessExpression(expr) && expr.questionDotToken) {
+    if (expr.kind === "prop_access" && expr.optional) {
       const { fieldType } = this.resolveOptionalFieldType(expr);
       return makeUnion([fieldType, T_UNDEFINED]);
     }
-    // Phase 1.5-6 prep #25: `import.meta.url` types as string. Any other
-    // `import.meta.*` or bare `import.meta` is rejected.
-    if (ts.isPropertyAccessExpression(expr) && ts.isMetaProperty(expr.expression)) {
-      this.checkImportMetaUrl(expr);
-      return T_STRING;
-    }
-    if (ts.isMetaProperty(expr)) {
-      this.rejectBareMetaProperty(expr);
-    }
     // Phase 1.5-6 prep #26: `process.argv` types as Array<string>. Short-circuit
-    // before inferType(expr.expression) would trip on the synthetic `process`.
+    // before inferType(expr.receiver) would trip on the synthetic `process`.
     if (
-      ts.isPropertyAccessExpression(expr) &&
-      ts.isIdentifier(expr.expression) &&
-      expr.expression.text === "process"
+      expr.kind === "prop_access" &&
+      expr.receiver.kind === "ident" &&
+      expr.receiver.name === "process"
     ) {
-      if (expr.name.text === "argv") {
+      if (expr.name === "argv") {
         return arrayOf(T_STRING)!;
       }
       throw new CodegenError(
         expr,
-        `unsupported \`process.${expr.name.text}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
+        `unsupported \`process.${expr.name}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
       );
     }
-    if (ts.isPropertyAccessExpression(expr)) {
-      const baseType = this.inferType(expr.expression);
+    if (expr.kind === "prop_access") {
+      const baseType = this.inferType(expr.receiver);
       if (baseType.kind === "union") {
         throw new CodegenError(
           expr,
-          `cannot access '.${expr.name.text}' on union type ${typeIdent(baseType)} — narrow it first with \`if (x !== undefined)\``,
+          `cannot access '.${expr.name}' on union type ${typeIdent(baseType)} — narrow it first with \`if (x !== undefined)\``,
         );
       }
       // Phase 1.5-3f: unknown values (catch payload) need `instanceof` to
@@ -8115,38 +8133,38 @@ class Emitter {
       if (baseType.kind === "unknown") {
         throw new CodegenError(
           expr,
-          `cannot access '.${expr.name.text}' on \`unknown\` — narrow it first with \`if (x instanceof ClassName)\``,
+          `cannot access '.${expr.name}' on \`unknown\` — narrow it first with \`if (x instanceof ClassName)\``,
         );
       }
       // Phase 1.5-3e: dunion exposes only the discriminator field; everything
       // else requires narrowing via `switch (d.kind)`.
       if (baseType.kind === "dunion") {
-        if (expr.name.text === baseType.discriminator) {
+        if (expr.name === baseType.discriminator) {
           return T_STRING;
         }
         // Phase 1.5-6 prep #18: a field present on every variant with one
         // identical type is a "common field" — TS lets you read it without
         // narrowing (e.g. `Token.pos` / `.end` across the lexer's token
         // variants). emit dispatches on the variant tag to pick the right cast.
-        const common = this.dunionCommonFieldType(baseType, expr.name.text);
+        const common = this.dunionCommonFieldType(baseType, expr.name);
         if (common) return common;
         throw new CodegenError(
           expr,
-          `cannot access '.${expr.name.text}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``,
+          `cannot access '.${expr.name}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``,
         );
       }
-      if (baseType.kind === "string" && expr.name.text === "length") {
+      if (baseType.kind === "string" && expr.name === "length") {
         return T_NUMBER;
       }
-      if (isArrayType(baseType) && expr.name.text === "length") {
+      if (isArrayType(baseType) && expr.name === "length") {
         return T_NUMBER;
       }
-      if ((isMapType(baseType) || isSetType(baseType)) && expr.name.text === "size") {
+      if ((isMapType(baseType) || isSetType(baseType)) && expr.name === "size") {
         return T_NUMBER;
       }
       if (isClassType(baseType)) {
         const cls = this.classes.get(classNameOf(baseType)!)!;
-        const fieldType = cls.fields.get(expr.name.text);
+        const fieldType = cls.fields.get(expr.name);
         if (fieldType) {
           // A string-literal field (e.g. a discriminator) read off a concrete
           // instance yields a runtime `topaz_string`; widen to `string` for
@@ -8159,52 +8177,52 @@ class Emitter {
           if (fieldType.kind === "string_literal") return T_STRING;
           return fieldType;
         }
-        if (cls.methods.has(expr.name.text)) {
+        if (cls.methods.has(expr.name)) {
           throw new CodegenError(
             expr,
-            `method '${expr.name.text}' cannot be used as a value (call it instead)`,
+            `method '${expr.name}' cannot be used as a value (call it instead)`,
           );
         }
         throw new CodegenError(
           expr,
-          `class '${cls.name}' has no member '${expr.name.text}'`,
+          `class '${cls.name}' has no member '${expr.name}'`,
         );
       }
       if (isInterfaceType(baseType)) {
         const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-        const f = iface.fields.get(expr.name.text);
+        const f = iface.fields.get(expr.name);
         if (f) return f;
-        if (iface.methods.has(expr.name.text)) {
+        if (iface.methods.has(expr.name)) {
           throw new CodegenError(
             expr,
-            `method '${expr.name.text}' cannot be used as a value (call it instead)`,
+            `method '${expr.name}' cannot be used as a value (call it instead)`,
           );
         }
         throw new CodegenError(
           expr,
-          `interface '${iface.name}' has no member '${expr.name.text}'`,
+          `interface '${iface.name}' has no member '${expr.name}'`,
         );
       }
       throw new CodegenError(
         expr,
-        `unsupported property access '.${expr.name.text}' on ${typeIdent(baseType)}`,
+        `unsupported property access '.${expr.name}' on ${typeIdent(baseType)}`,
       );
     }
-    if (ts.isElementAccessExpression(expr) && expr.questionDotToken) {
+    if (expr.kind === "elem_access" && expr.optional) {
       const { elem } = this.resolveOptionalIndexType(expr);
       return makeUnion([elem, T_UNDEFINED]);
     }
-    if (ts.isElementAccessExpression(expr)) {
-      const baseType = this.inferType(expr.expression);
+    if (expr.kind === "elem_access") {
+      const baseType = this.inferType(expr.receiver);
       const elem = arrayElem(baseType);
       if (!elem) {
         throw new CodegenError(expr, `index access is only supported on Array (got ${typeIdent(baseType)})`);
       }
-      this.expectType(expr.argumentExpression, T_NUMBER);
+      this.expectType(expr.index, T_NUMBER);
       return elem;
     }
-    if (ts.isArrayLiteralExpression(expr)) {
-      if (expr.elements.length === 0) {
+    if (expr.kind === "array_lit") {
+      if (expr.elems.length === 0) {
         throw new CodegenError(
           expr,
           "cannot infer element type of empty array literal; add an `Array<T>` annotation",
@@ -8213,22 +8231,22 @@ class Emitter {
       // Phase 1.5-3.5h-spread: infer elem from first element (spread -> source's
       // elem, fixed -> its type). Subsequent elements are validated by emit-time
       // type checks; inferType only needs the elem to look up the monomorph.
-      const first = expr.elements[0]!;
+      const first = expr.elems[0]!;
       let elem: TopazType;
-      if (ts.isSpreadElement(first)) {
-        const srcType = this.inferType(first.expression);
+      if (first.kind === "spread") {
+        const srcType = this.inferType(first.expr);
         if (!isArrayType(srcType)) {
           throw new CodegenError(
-            first,
+            first.expr,
             `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
           );
         }
         elem = arrayElem(srcType)!;
       } else {
-        elem = this.inferType(first);
-        for (let i = 1; i < expr.elements.length; i++) {
-          const e = expr.elements[i]!;
-          if (!ts.isSpreadElement(e)) this.expectType(e, elem);
+        elem = this.inferType(first.expr);
+        for (let i = 1; i < expr.elems.length; i++) {
+          const e = expr.elems[i]!;
+          if (e.kind !== "spread") this.expectType(e.expr, elem);
         }
       }
       const arr = arrayOf(elem);
@@ -8238,14 +8256,14 @@ class Emitter {
       this.recordArrayMonomorph(arr);
       return arr;
     }
-    if (ts.isNonNullExpression(expr)) {
+    if (expr.kind === "non_null") {
       // Phase 1.5-3.5c: `e!` asserts at runtime that the optional carries a
       // value, and yields the underlying T. Only `T | undefined` is accepted
       // (scalar / class / iface / array / map / set); a no-op `!` on an
       // already non-optional value is rejected so the assertion remains
       // meaningful (TS-style "Non-null assertion has no effect" warning is
       // upgraded to an error here).
-      const inner = this.inferType(expr.expression);
+      const inner = this.inferType(expr.operand);
       const stripped = withoutUndefined(inner);
       if (!stripped || typeEq(stripped, inner)) {
         throw new CodegenError(
@@ -8266,17 +8284,17 @@ class Emitter {
       }
       return stripped;
     }
-    if (ts.isPrefixUnaryExpression(expr)) {
-      switch (expr.operator) {
-        case ts.SyntaxKind.MinusToken:
-        case ts.SyntaxKind.PlusToken:
+    if (expr.kind === "prefix_op") {
+      switch (expr.op) {
+        case "-":
+        case "+":
           this.expectType(expr.operand, T_NUMBER);
           return T_NUMBER;
-        case ts.SyntaxKind.ExclamationToken:
+        case "!":
           this.expectType(expr.operand, T_BOOLEAN);
           return T_BOOLEAN;
-        case ts.SyntaxKind.PlusPlusToken:
-        case ts.SyntaxKind.MinusMinusToken:
+        case "++":
+        case "--":
           this.checkAssignTarget(expr.operand, expr);
           this.expectType(expr.operand, T_NUMBER);
           return T_NUMBER;
@@ -8284,42 +8302,92 @@ class Emitter {
           unsupported(expr, "prefix unary operator");
       }
     }
-    if (ts.isPostfixUnaryExpression(expr)) {
+    if (expr.kind === "postfix_op") {
       this.checkAssignTarget(expr.operand, expr);
       this.expectType(expr.operand, T_NUMBER);
       return T_NUMBER;
     }
-    if (ts.isBinaryExpression(expr)) {
-      const kind = expr.operatorToken.kind;
+    if (expr.kind === "instanceof_expr") {
+      // Phase 1.5-3f: `instanceof` runtime type test for catch payloads.
+      // Left must be `unknown` (the catch binding's type) or a class
+      // instance (tautology, but allowed for symmetry). Right must be a
+      // declared concrete class name; interface/generic targets need
+      // separate plumbing not in scope for 1.5-3f.
+      const lt = this.inferType(expr.lhs);
+      if (lt.kind !== "unknown" && !isClassType(lt)) {
+        throw new CodegenError(
+          expr.lhs,
+          `\`instanceof\` requires left side to be \`unknown\` or a class instance (got ${typeIdent(lt)})`,
+        );
+      }
+      if (expr.rhs.kind !== "ident") {
+        throw new CodegenError(
+          expr.rhs,
+          "`instanceof` right side must be a class name",
+        );
+      }
+      if (!this.classes.has(expr.rhs.name)) {
+        throw new CodegenError(
+          expr.rhs,
+          `unknown class '${expr.rhs.name}' on right side of \`instanceof\``,
+        );
+      }
+      return T_BOOLEAN;
+    }
+    if (expr.kind === "assign_expr") {
+      const op = expr.op;
+      this.checkAssignTarget(expr.target, expr);
+      if (op === "=") {
+        const lt = this.inferType(expr.target);
+        this.expectType(expr.value, lt);
+        return lt;
+      }
+      if (op === "+=") {
+        const lt = this.inferType(expr.target);
+        if (lt.kind === "string") {
+          this.expectType(expr.value, T_STRING);
+          return T_STRING;
+        }
+        this.expectType(expr.target, T_NUMBER);
+        this.expectType(expr.value, T_NUMBER);
+        return T_NUMBER;
+      }
+      // "-=", "*=", "/=", "%="
+      this.expectType(expr.target, T_NUMBER);
+      this.expectType(expr.value, T_NUMBER);
+      return T_NUMBER;
+    }
+    if (expr.kind === "bin_op") {
+      const kind = expr.op;
       switch (kind) {
-        case ts.SyntaxKind.PlusToken: {
-          const lt = this.inferType(expr.left);
+        case "+": {
+          const lt = this.inferType(expr.lhs);
           if (lt.kind === "string") {
-            this.expectType(expr.right, T_STRING);
+            this.expectType(expr.rhs, T_STRING);
             return T_STRING;
           }
-          this.expectType(expr.left, T_NUMBER);
-          this.expectType(expr.right, T_NUMBER);
+          this.expectType(expr.lhs, T_NUMBER);
+          this.expectType(expr.rhs, T_NUMBER);
           return T_NUMBER;
         }
-        case ts.SyntaxKind.MinusToken:
-        case ts.SyntaxKind.AsteriskToken:
-        case ts.SyntaxKind.SlashToken:
-        case ts.SyntaxKind.PercentToken:
-          this.expectType(expr.left, T_NUMBER);
-          this.expectType(expr.right, T_NUMBER);
+        case "-":
+        case "*":
+        case "/":
+        case "%":
+          this.expectType(expr.lhs, T_NUMBER);
+          this.expectType(expr.rhs, T_NUMBER);
           return T_NUMBER;
-        case ts.SyntaxKind.LessThanToken:
-        case ts.SyntaxKind.LessThanEqualsToken:
-        case ts.SyntaxKind.GreaterThanToken:
-        case ts.SyntaxKind.GreaterThanEqualsToken:
-          this.expectType(expr.left, T_NUMBER);
-          this.expectType(expr.right, T_NUMBER);
+        case "<":
+        case "<=":
+        case ">":
+        case ">=":
+          this.expectType(expr.lhs, T_NUMBER);
+          this.expectType(expr.rhs, T_NUMBER);
           return T_BOOLEAN;
-        case ts.SyntaxKind.EqualsEqualsEqualsToken:
-        case ts.SyntaxKind.ExclamationEqualsEqualsToken: {
-          const lt = this.inferType(expr.left);
-          const rt = this.inferType(expr.right);
+        case "===":
+        case "!==": {
+          const lt = this.inferType(expr.lhs);
+          const rt = this.inferType(expr.rhs);
           if (!typesOverlap(lt, rt)) {
             throw new CodegenError(
               expr,
@@ -8328,64 +8396,39 @@ class Emitter {
           }
           return T_BOOLEAN;
         }
-        case ts.SyntaxKind.AmpersandAmpersandToken:
-        case ts.SyntaxKind.BarBarToken: {
-          this.expectType(expr.left, T_BOOLEAN);
+        case "&&":
+        case "||": {
+          this.expectType(expr.lhs, T_BOOLEAN);
           // Phase 1.5-6 prep #19: `&&`'s right operand runs only when the left
           // is true, so it sees the left's positive narrowing; `||`'s right
           // runs when the left is false and sees the negative narrowing.
-          const polarity = kind === ts.SyntaxKind.AmpersandAmpersandToken;
-          const n = this.extractNarrowing(expr.left, polarity);
+          const polarity = kind === "&&";
+          const n = this.extractNarrowing(expr.lhs, polarity);
           if (n) {
             this.scope.push();
             try {
               this.scope.narrow(n.name, n.type);
-              this.expectType(expr.right, T_BOOLEAN);
+              this.expectType(expr.rhs, T_BOOLEAN);
             } finally {
               this.scope.pop();
             }
           } else {
-            this.expectType(expr.right, T_BOOLEAN);
+            this.expectType(expr.rhs, T_BOOLEAN);
           }
           return T_BOOLEAN;
         }
-        case ts.SyntaxKind.EqualsToken: {
-          this.checkAssignTarget(expr.left, expr);
-          const lt = this.inferType(expr.left);
-          this.expectType(expr.right, lt);
-          return lt;
-        }
-        case ts.SyntaxKind.PlusEqualsToken: {
-          this.checkAssignTarget(expr.left, expr);
-          const lt = this.inferType(expr.left);
-          if (lt.kind === "string") {
-            this.expectType(expr.right, T_STRING);
-            return T_STRING;
-          }
-          this.expectType(expr.left, T_NUMBER);
-          this.expectType(expr.right, T_NUMBER);
-          return T_NUMBER;
-        }
-        case ts.SyntaxKind.MinusEqualsToken:
-        case ts.SyntaxKind.AsteriskEqualsToken:
-        case ts.SyntaxKind.SlashEqualsToken:
-        case ts.SyntaxKind.PercentEqualsToken:
-          this.checkAssignTarget(expr.left, expr);
-          this.expectType(expr.left, T_NUMBER);
-          this.expectType(expr.right, T_NUMBER);
-          return T_NUMBER;
-        case ts.SyntaxKind.EqualsEqualsToken:
-        case ts.SyntaxKind.ExclamationEqualsToken:
+        case "==":
+        case "!=":
           throw new CodegenError(
-            expr.operatorToken,
+            expr,
             "loose equality (== / !=) is unsupported; use === / !==",
           );
-        case ts.SyntaxKind.QuestionQuestionToken: {
+        case "??": {
           // Phase 1.5-3.5c: `a ?? b` requires `a: T | undefined`. The result
           // is T when the RHS is T, or T | undefined when the RHS is itself
           // T | undefined (so chained `a ?? b ?? c` keeps optional through
           // the middle layer). The RHS must be assignable to one of those.
-          const lt = this.inferType(expr.left);
+          const lt = this.inferType(expr.lhs);
           const inner = withoutUndefined(lt);
           if (!inner || typeEq(inner, lt)) {
             throw new CodegenError(
@@ -8404,112 +8447,85 @@ class Emitter {
               `\`??\` on ${typeIdent(lt)} is unsupported`,
             );
           }
-          const rt = this.inferType(expr.right);
+          const rt = this.inferType(expr.rhs);
           if (this.isAssignableTo(rt, inner)) return inner;
           if (this.isAssignableTo(rt, lt)) return lt;
           throw new CodegenError(
-            expr.right,
+            expr.rhs,
             `\`??\` right operand has type ${typeIdent(rt)}; expected ${typeIdent(inner)} or ${typeIdent(lt)}`,
           );
         }
-        case ts.SyntaxKind.InstanceOfKeyword: {
-          // Phase 1.5-3f: `instanceof` runtime type test for catch payloads.
-          // Left must be `unknown` (the catch binding's type) or a class
-          // instance (tautology, but allowed for symmetry). Right must be a
-          // declared concrete class name; interface/generic targets need
-          // separate plumbing not in scope for 1.5-3f.
-          const lt = this.inferType(expr.left);
-          if (lt.kind !== "unknown" && !isClassType(lt)) {
-            throw new CodegenError(
-              expr.left,
-              `\`instanceof\` requires left side to be \`unknown\` or a class instance (got ${typeIdent(lt)})`,
-            );
-          }
-          if (!ts.isIdentifier(expr.right)) {
-            throw new CodegenError(
-              expr.right,
-              "`instanceof` right side must be a class name",
-            );
-          }
-          if (!this.classes.has(expr.right.text)) {
-            throw new CodegenError(
-              expr.right,
-              `unknown class '${expr.right.text}' on right side of \`instanceof\``,
-            );
-          }
-          return T_BOOLEAN;
-        }
         default:
-          unsupported(expr.operatorToken, "binary operator");
+          unsupported(expr, "binary operator");
       }
     }
-    if (ts.isCallExpression(expr)) {
-      const callee = expr.expression;
+    if (expr.kind === "call_expr") {
+      const callee = expr.callee;
       // Phase 1.5-3.5d: optional method call `a?.b()` — the result is the
       // method's return type widened to `R | undefined`.
-      if (ts.isPropertyAccessExpression(callee) && callee.questionDotToken) {
+      if (callee.kind === "prop_access" && callee.optional) {
         const { sig } = this.resolveOptionalMethodSig(callee);
         return makeUnion([sig.returnType, T_UNDEFINED]);
       }
-      if (expr.questionDotToken) {
+      if (expr.optional) {
         throw new CodegenError(
           expr,
           "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
         );
       }
       if (
-        ts.isPropertyAccessExpression(callee) &&
-        ts.isIdentifier(callee.expression) &&
-        callee.expression.text === "console" &&
-        (callee.name.text === "log" || callee.name.text === "error")
+        callee.kind === "prop_access" &&
+        callee.receiver.kind === "ident" &&
+        callee.receiver.name === "console" &&
+        (callee.name === "log" || callee.name === "error")
       ) {
-        throw new CodegenError(expr, `console.${callee.name.text} returns void and cannot be used as a value`);
+        throw new CodegenError(expr, `console.${callee.name} returns void and cannot be used as a value`);
       }
       // Phase 1.5-6 prep #26: process.exit returns `never`, process.*.write
       // returns void — neither is usable as a value.
       if (
-        ts.isPropertyAccessExpression(callee) &&
-        ts.isIdentifier(callee.expression) &&
-        callee.expression.text === "process" &&
-        callee.name.text === "exit"
+        callee.kind === "prop_access" &&
+        callee.receiver.kind === "ident" &&
+        callee.receiver.name === "process" &&
+        callee.name === "exit"
       ) {
         throw new CodegenError(expr, "process.exit returns `never` and cannot be used as a value");
       }
       if (
-        ts.isPropertyAccessExpression(callee) &&
-        ts.isPropertyAccessExpression(callee.expression) &&
-        ts.isIdentifier(callee.expression.expression) &&
-        callee.expression.expression.text === "process" &&
-        (callee.expression.name.text === "stdout" || callee.expression.name.text === "stderr") &&
-        callee.name.text === "write"
+        callee.kind === "prop_access" &&
+        callee.receiver.kind === "prop_access" &&
+        callee.receiver.receiver.kind === "ident" &&
+        callee.receiver.receiver.name === "process" &&
+        (callee.receiver.name === "stdout" || callee.receiver.name === "stderr") &&
+        callee.name === "write"
       ) {
-        throw new CodegenError(expr, `process.${callee.expression.name.text}.write returns void and cannot be used as a value`);
+        throw new CodegenError(expr, `process.${callee.receiver.name}.write returns void and cannot be used as a value`);
       }
       // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
       // syntactically (mirrors emitCall) — the `String` identifier has no
-      // real binding, so we must short-circuit before `inferType(callee.expression)`.
+      // real binding, so we must short-circuit before `inferType(callee.receiver)`.
       if (
-        ts.isPropertyAccessExpression(callee) &&
-        ts.isIdentifier(callee.expression) &&
-        callee.expression.text === "String"
+        callee.kind === "prop_access" &&
+        callee.receiver.kind === "ident" &&
+        callee.receiver.name === "String"
       ) {
         return this.inferStringStaticReturn(expr, callee);
       }
-      if (ts.isPropertyAccessExpression(callee)) {
-        const baseType = this.inferType(callee.expression);
+      if (callee.kind === "prop_access") {
+        const baseType = this.inferType(callee.receiver);
         if (isArrayType(baseType)) {
           const elem = arrayElem(baseType)!;
-          if (callee.name.text === "push") {
+          if (callee.name === "push") {
             throw new CodegenError(expr, "Array.push returns void in this dialect and cannot be used as a value");
           }
-          if (callee.name.text === "pop") {
+          if (callee.name === "pop") {
             return elem;
           }
-          if (callee.name.text === "map") {
-            if (expr.arguments.length !== 1) {
+          if (callee.name === "map") {
+            if (expr.args.length !== 1) {
               throw new CodegenError(expr, "Array.map expects exactly one argument");
             }
-            const cb = expr.arguments[0]!;
+            const cb = expr.args[0]!;
             const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
             const u = fnType.returnType;
             // Phase 1.5-3.5g-array-fn: fn return type now routes to Array<fn>
@@ -8527,11 +8543,11 @@ class Emitter {
             this.recordArrayMonomorph(result);
             return result;
           }
-          if (callee.name.text === "slice") {
-            if (expr.arguments.length > 2) {
+          if (callee.name === "slice") {
+            if (expr.args.length > 2) {
               throw new CodegenError(expr, "Array.slice expects at most two arguments");
             }
-            for (const arg of expr.arguments) {
+            for (const arg of expr.args) {
               const at = this.inferType(arg);
               if (at.kind !== "number") {
                 throw new CodegenError(
@@ -8543,16 +8559,16 @@ class Emitter {
             // dst monomorph is the same as src; no new Array<T> to register.
             return baseType;
           }
-          if (callee.name.text === "includes") {
-            if (expr.arguments.length === 0) {
+          if (callee.name === "includes") {
+            if (expr.args.length === 0) {
               throw new CodegenError(expr, "Array.includes expects exactly one argument");
             }
-            if (expr.arguments.length > 1) {
+            if (expr.args.length > 1) {
               throw new CodegenError(expr, "Array.includes `fromIndex` argument is unsupported");
             }
             // Side-effect: re-check that `target` matches elem so emit-side
             // and infer-side reject in lockstep.
-            this.emitWithExpected(expr.arguments[0]!, elem);
+            this.emitWithExpected(expr.args[0]!, elem);
             // Reject unsupported elem types up-front (mirrors emitArrayMethodCall).
             if (
               elem.kind !== "number" &&
@@ -8568,11 +8584,11 @@ class Emitter {
             }
             return T_BOOLEAN;
           }
-          if (callee.name.text === "filter") {
-            if (expr.arguments.length !== 1) {
+          if (callee.name === "filter") {
+            if (expr.args.length !== 1) {
               throw new CodegenError(expr, "Array.filter expects exactly one argument");
             }
-            const cb = expr.arguments[0]!;
+            const cb = expr.args[0]!;
             const fnType = this.inferCallbackFn(cb, [elem], "Array.filter");
             if (fnType.returnType.kind !== "boolean") {
               throw new CodegenError(
@@ -8583,8 +8599,8 @@ class Emitter {
             // dst monomorph is the same as src; no new Array<T> to register.
             return baseType;
           }
-          if (callee.name.text === "join") {
-            if (expr.arguments.length > 1) {
+          if (callee.name === "join") {
+            if (expr.args.length > 1) {
               throw new CodegenError(expr, "Array.join expects at most one argument");
             }
             if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") {
@@ -8593,11 +8609,11 @@ class Emitter {
                 `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
               );
             }
-            if (expr.arguments.length === 1) {
-              const sepType = this.inferType(expr.arguments[0]!);
+            if (expr.args.length === 1) {
+              const sepType = this.inferType(expr.args[0]!);
               if (sepType.kind !== "string") {
                 throw new CodegenError(
-                  expr.arguments[0]!,
+                  expr.args[0]!,
                   `Array.join separator must be string, got ${typeIdent(sepType)}`,
                 );
               }
@@ -8605,11 +8621,11 @@ class Emitter {
             this.recordArrayJoinMonomorph(baseType);
             return T_STRING;
           }
-          throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
+          throw new CodegenError(callee, `unsupported method '.${callee.name}' on ${typeIdent(baseType)}`);
         }
         if (isMapType(baseType)) {
           const v = mapValue(baseType)!;
-          const m = callee.name.text;
+          const m = callee.name;
           if (m === "set") {
             throw new CodegenError(expr, "Map.set returns void in this dialect and cannot be used as a value");
           }
@@ -8630,7 +8646,7 @@ class Emitter {
           throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isSetType(baseType)) {
-          const m = callee.name.text;
+          const m = callee.name;
           if (m === "add") {
             throw new CodegenError(expr, "Set.add returns void in this dialect and cannot be used as a value");
           }
@@ -8651,136 +8667,136 @@ class Emitter {
         }
         if (isClassType(baseType)) {
           const cls = this.classes.get(classNameOf(baseType)!)!;
-          const method = cls.methods.get(callee.name.text);
+          const method = cls.methods.get(callee.name);
           if (!method) {
-            throw new CodegenError(callee, `class '${cls.name}' has no method '${callee.name.text}'`);
+            throw new CodegenError(callee, `class '${cls.name}' has no method '${callee.name}'`);
           }
           return method.returnType;
         }
         if (isInterfaceType(baseType)) {
           const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-          const sig = iface.methods.get(callee.name.text);
+          const sig = iface.methods.get(callee.name);
           if (!sig) {
-            throw new CodegenError(callee, `interface '${iface.name}' has no method '${callee.name.text}'`);
+            throw new CodegenError(callee, `interface '${iface.name}' has no method '${callee.name}'`);
           }
           return sig.returnType;
         }
-        throw new CodegenError(callee, `unsupported method '.${callee.name.text}' on ${typeIdent(baseType)}`);
+        throw new CodegenError(callee, `unsupported method '.${callee.name}' on ${typeIdent(baseType)}`);
       }
-      if (ts.isIdentifier(callee)) {
+      if (callee.kind === "ident") {
         // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
         // shortcut (mirrors emitCall) — `readFileSync` 識別子は scope に存在
         // しないので、ここで先に拾わないと scope lookup が「unknown
         // identifier」で fall する。
-        if (callee.text === "readFileSync") {
+        if (callee.name === "readFileSync") {
           this.checkNodeFsReadFileSyncArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #17: existsSync types as boolean.
-        if (callee.text === "existsSync") {
+        if (callee.name === "existsSync") {
           this.checkNodeFsExistsSyncArgs(expr);
           return T_BOOLEAN;
         }
         // Phase 1.5-6 prep #19: writeFileSync returns void; reject value use
         // (mirrors Array.push / console.log).
-        if (callee.text === "writeFileSync") {
+        if (callee.name === "writeFileSync") {
           throw new CodegenError(expr, "writeFileSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #20: mkdirSync returns void; reject value use.
-        if (callee.text === "mkdirSync") {
+        if (callee.name === "mkdirSync") {
           throw new CodegenError(expr, "mkdirSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #18: node:path.dirname / resolve type as string.
-        if (callee.text === "dirname") {
+        if (callee.name === "dirname") {
           this.checkNodePathDirnameArgs(expr);
           return T_STRING;
         }
-        if (callee.text === "resolve") {
+        if (callee.name === "resolve") {
           this.checkNodePathResolveArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #21: node:path.basename types as string.
-        if (callee.text === "basename") {
+        if (callee.name === "basename") {
           this.checkNodePathBasenameArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #22: node:path.extname types as string.
-        if (callee.text === "extname") {
+        if (callee.name === "extname") {
           this.checkNodePathExtnameArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #23: node:path.join types as string.
-        if (callee.text === "join") {
+        if (callee.name === "join") {
           this.checkNodePathJoinArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #24: execFileSync returns void; reject value use
         // (mirrors writeFileSync / mkdirSync).
-        if (callee.text === "execFileSync") {
+        if (callee.name === "execFileSync") {
           throw new CodegenError(expr, "execFileSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #25: node:url.fileURLToPath types as string.
-        if (callee.text === "fileURLToPath") {
+        if (callee.name === "fileURLToPath") {
           this.checkNodeUrlFileURLToPathArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
-        if (callee.text === "parseInt") {
+        if (callee.name === "parseInt") {
           this.checkParseIntArgs(expr);
           return T_NUMBER;
         }
-        if (callee.text === "parseFloat") {
+        if (callee.name === "parseFloat") {
           this.checkParseFloatArgs(expr);
           return T_NUMBER;
         }
-        if (this.genericFunctions.has(callee.text)) {
+        if (this.genericFunctions.has(callee.name)) {
           const resolved = this.resolveGenericCall(callee, expr)!;
           return resolved.sig.returnType;
         }
-        const sig = this.functionSigs.get(callee.text);
+        const sig = this.functionSigs.get(callee.name);
         if (sig) return sig.returnType;
         // Phase 1.5-3.5e: fn-typed local — look up its inferred type and use
         // its declared return type.
         const calleeType = this.inferType(callee);
         if (calleeType.kind === "fn") return calleeType.returnType;
-        throw new CodegenError(callee, `unknown function '${callee.text}'`);
+        throw new CodegenError(callee, `unknown function '${callee.name}'`);
       }
       // Phase 1.5-3.5e: any other expression that types as a fn value.
       const ct = this.inferType(callee);
       if (ct.kind === "fn") return ct.returnType;
       unsupported(callee, "call target");
     }
-    if (ts.isNewExpression(expr)) {
-      if (!ts.isIdentifier(expr.expression)) {
+    if (expr.kind === "new_expr") {
+      if (expr.callee.kind !== "ident") {
         throw new CodegenError(expr, "only `new Map<K, V>()` and `new Set<T>()` are supported");
       }
-      const name = expr.expression.text;
+      const name = expr.callee.name;
       if (name === "Map") {
-        if (!expr.typeArguments || expr.typeArguments.length !== 2) {
+        if (expr.typeArgs.length !== 2) {
           throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
         }
-        const k = this.typeAnno(expr.typeArguments[0]!, expr);
-        const v = this.typeAnno(expr.typeArguments[1]!, expr);
+        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
+        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentSf!);
         const t = mapOf(k, v);
         if (!t) throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         this.recordMapMonomorph(t);
         return t;
       }
       if (name === "Set") {
-        if (!expr.typeArguments || expr.typeArguments.length !== 1) {
+        if (expr.typeArgs.length !== 1) {
           throw new CodegenError(expr, "Set<T> requires exactly one type argument");
         }
-        const elem = this.typeAnno(expr.typeArguments[0]!, expr);
+        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
         const t = setOf(elem);
         if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
         this.recordSetMonomorph(t);
         return t;
       }
       if (this.genericClasses.has(name)) {
-        return this.instantiateGenericClassTs(name, expr.typeArguments, expr);
+        return this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentSf!);
       }
       if (this.classes.has(name)) {
-        if (expr.typeArguments && expr.typeArguments.length > 0) {
+        if (expr.typeArgs.length > 0) {
           throw new CodegenError(expr, `class '${name}' takes no type arguments`);
         }
         return classOf(name);
@@ -8793,41 +8809,41 @@ class Emitter {
     unsupported(expr, "expression");
   }
 
-  private checkAssignTarget(target: ts.Expression, anchor: ts.Node): void {
-    if (ts.isIdentifier(target)) {
-      const b = this.scope.lookup(target.text);
+  private checkAssignTarget(target: Expr, anchor: Expr | ts.Node | { pos: number }): void {
+    if (target.kind === "ident") {
+      const b = this.scope.lookup(target.name);
       if (!b) {
-        throw new CodegenError(target, `unknown identifier '${target.text}'`);
+        throw new CodegenError(target, `unknown identifier '${target.name}'`);
       }
       if (b.isConst) {
-        throw new CodegenError(anchor, `cannot assign to const '${target.text}'`);
+        throw new CodegenError(anchor, `cannot assign to const '${target.name}'`);
       }
       return;
     }
-    if (ts.isElementAccessExpression(target)) {
+    if (target.kind === "elem_access") {
       // `const arr = [...]` rebinds the binding, not the storage — element
       // assignment mutates through the pointer and is always allowed.
-      const baseType = this.inferType(target.expression);
+      const baseType = this.inferType(target.receiver);
       if (!isArrayType(baseType)) {
         throw new CodegenError(target, `index assignment is only supported on Array (got ${typeIdent(baseType)})`);
       }
       return;
     }
-    if (ts.isPropertyAccessExpression(target)) {
+    if (target.kind === "prop_access") {
       // Compound assignment lowers to `(base)->field op= rhs`, which evaluates
       // `base` once in C. We still restrict the base to side-effect-free forms
       // so that a future lowering swap doesn't surprise anyone.
-      if (!this.isSafeLvalueBase(target.expression)) {
+      if (!this.isSafeLvalueBase(target.receiver)) {
         throw new CodegenError(target, "property assignment requires a simple base (identifier, `this`, or chained property access)");
       }
-      const baseType = this.inferType(target.expression);
+      const baseType = this.inferType(target.receiver);
       if (isInterfaceType(baseType)) {
         const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-        if (!iface.fields.has(target.name.text)) {
-          if (iface.methods.has(target.name.text)) {
-            throw new CodegenError(target, `cannot assign to method '${target.name.text}'`);
+        if (!iface.fields.has(target.name)) {
+          if (iface.methods.has(target.name)) {
+            throw new CodegenError(target, `cannot assign to method '${target.name}'`);
           }
-          throw new CodegenError(target, `interface '${iface.name}' has no field '${target.name.text}'`);
+          throw new CodegenError(target, `interface '${iface.name}' has no field '${target.name}'`);
         }
         return;
       }
@@ -8835,49 +8851,48 @@ class Emitter {
       // dunion, but a write would have to pick a variant (the field sits at a
       // variant-specific offset), so narrowing is required first.
       if (baseType.kind === "dunion") {
-        throw new CodegenError(target, `cannot assign to '.${target.name.text}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``);
+        throw new CodegenError(target, `cannot assign to '.${target.name}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``);
       }
       if (!isClassType(baseType)) {
         throw new CodegenError(target, `property assignment is only supported on class instances or interface values (got ${typeIdent(baseType)})`);
       }
       const cls = this.classes.get(classNameOf(baseType)!)!;
-      if (!cls.fields.has(target.name.text)) {
-        if (cls.methods.has(target.name.text)) {
-          throw new CodegenError(target, `cannot assign to method '${target.name.text}'`);
+      if (!cls.fields.has(target.name)) {
+        if (cls.methods.has(target.name)) {
+          throw new CodegenError(target, `cannot assign to method '${target.name}'`);
         }
-        throw new CodegenError(target, `class '${cls.name}' has no field '${target.name.text}'`);
+        throw new CodegenError(target, `class '${cls.name}' has no field '${target.name}'`);
       }
       return;
     }
     throw new CodegenError(anchor, "assignment target must be an identifier, array index, or property access");
   }
 
-  private isSafeLvalueBase(expr: ts.Expression): boolean {
-    if (ts.isIdentifier(expr)) return true;
-    if (expr.kind === ts.SyntaxKind.ThisKeyword) return true;
-    if (ts.isParenthesizedExpression(expr)) return this.isSafeLvalueBase(expr.expression);
-    if (ts.isPropertyAccessExpression(expr)) return this.isSafeLvalueBase(expr.expression);
+  private isSafeLvalueBase(expr: Expr): boolean {
+    if (expr.kind === "ident") return true;
+    if (expr.kind === "this_expr") return true;
+    if (expr.kind === "paren_expr") return this.isSafeLvalueBase(expr.inner);
+    if (expr.kind === "prop_access") return this.isSafeLvalueBase(expr.receiver);
     return false;
   }
 
-  private expectType(expr: ts.Expression, expected: TopazType): void {
+  private expectType(expr: Expr, expected: TopazType): void {
     // Phase 1.5-3e: string literal types accept a matching string literal
     // expression directly (inferType returns T_STRING for literals, so the
     // assignability check would otherwise fail). Discriminator-field assigns
     // in constructors and discriminated-union case labels both flow through
     // here.
-    if (
-      expected.kind === "string_literal" &&
-      (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) &&
-      expr.text === expected.value
-    ) {
-      return;
+    if (expected.kind === "string_literal") {
+      const lit = stringLitText(expr);
+      if (lit !== undefined && lit === expected.value) {
+        return;
+      }
     }
     // Phase 1.5-3.5g-array-fn: arrows without annotations need the expected fn
     // type to type-check (the unannotated `inferType` would throw). Mirror the
     // contextual path in emitWithExpected so `=` / `[i] = ` / `.push(arrow)`
     // see the same validation rules.
-    if (ts.isArrowFunction(expr) && expected.kind === "fn") {
+    if (expr.kind === "arrow_expr" && expected.kind === "fn") {
       const actual = this.inferArrowType(expr, expected);
       if (typeEq(actual, expected)) return;
       throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
@@ -8935,24 +8950,24 @@ class Emitter {
   // interface coercion (fat pointer compound literal) when needed. Use this
   // helper at every value-passing site (variable init, call argument, return
   // statement, assignment RHS) where the expected type is known.
-  private emitWithExpected(expr: ts.Expression, expected: TopazType): string {
+  private emitWithExpected(expr: Expr, expected: TopazType): string {
     // Phase 1.5-3b: the literal `undefined` lowers based on the expected
     // container type (NULL pointer for reference, fat pointer with .data=NULL
     // for interface). Without a `T | undefined` expected this is a type error.
-    if (ts.isIdentifier(expr) && expr.text === "undefined") {
+    if (expr.kind === "undefined_lit") {
       return this.emitUndefinedLiteral(expected, expr);
     }
     // Phase 1.5-6 prep #25: thread the expected type into both ternary arms so
     // each coerces to it (class -> interface / dunion, T -> T | undefined) and
     // the two C operands share a type. Must run before the inferType fallback,
     // which has no contextual target to coerce against.
-    if (ts.isConditionalExpression(expr)) {
+    if (expr.kind === "ternary_expr") {
       return this.emitConditional(expr, expected);
     }
     // Phase 1.5-3.5e: arrows pick up param/return types contextually from the
     // expected fn type when annotations are missing. Pass expected through so
     // `let f: (n: number) => number = (n) => n + 1` works.
-    if (ts.isArrowFunction(expr)) {
+    if (expr.kind === "arrow_expr") {
       if (expected.kind === "fn") {
         return this.emitArrowFunction(expr, expected);
       }
@@ -8963,31 +8978,31 @@ class Emitter {
     // Phase 1.5-3e: an expected string_literal accepts the matching literal
     // expression (the value flows in as plain string at runtime, so the
     // generated C is identical to the literal emit).
-    if (
-      expected.kind === "string_literal" &&
-      (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr))
-    ) {
-      if (expr.text !== expected.value) {
-        throw new CodegenError(
-          expr,
-          `type mismatch: expected ${typeIdent(expected)}, got string literal "${expr.text}"`,
-        );
+    if (expected.kind === "string_literal") {
+      const lit = stringLitText(expr);
+      if (lit !== undefined) {
+        if (lit !== expected.value) {
+          throw new CodegenError(
+            expr,
+            `type mismatch: expected ${typeIdent(expected)}, got string literal "${lit}"`,
+          );
+        }
+        return this.emitStringLiteralText(lit, expr);
       }
-      return this.emitStringLiteral(expr);
     }
-    if (ts.isArrayLiteralExpression(expr)) {
+    if (expr.kind === "array_lit") {
       // Array literal element types aren't interfaces (no Array<Interface> in
       // 1.4b), so no coercion is needed at the array itself.
       return this.emitArrayLiteral(expr, expected);
     }
-    if (ts.isNewExpression(expr)) {
+    if (expr.kind === "new_expr") {
       // Bare `new Map()` / `new Set()` carries no type info; thread expected
       // through as context. Interface widening is impossible for Map/Set, so
       // forwarding expected unmodified is safe.
       const isBareMapSet =
-        ts.isIdentifier(expr.expression) &&
-        (expr.expression.text === "Map" || expr.expression.text === "Set") &&
-        (!expr.typeArguments || expr.typeArguments.length === 0);
+        expr.callee.kind === "ident" &&
+        (expr.callee.name === "Map" || expr.callee.name === "Set") &&
+        expr.typeArgs.length === 0;
       if (isBareMapSet) {
         return this.emitNewExpression(expr, expected);
       }
@@ -9008,7 +9023,7 @@ class Emitter {
     // method shorthand, getter / setter, spread, and computed keys are
     // rejected. Non-anon expected types (concrete class / iface / scalar /
     // container) reject the literal here.
-    if (ts.isObjectLiteralExpression(expr)) {
+    if (expr.kind === "object_lit") {
       // Phase 1.5-6 prep #16: `dunion | undefined` (or `anon | undefined`)
       // contextual target (e.g. `let b: ForOfBinding | undefined = { ... }`).
       // Strip the `undefined` variant, emit the literal against the inner type
@@ -9033,13 +9048,9 @@ class Emitter {
       // diverge from the ctor parameter order).
       if (expected.kind === "dunion") {
         const disc = expected.discriminator;
-        let kindProp: ts.PropertyAssignment | undefined;
-        for (const prop of expr.properties) {
-          if (
-            ts.isPropertyAssignment(prop) &&
-            ts.isIdentifier(prop.name) &&
-            prop.name.text === disc
-          ) {
+        let kindProp: { value: Expr; pos: number; end: number } | undefined;
+        for (const prop of expr.props) {
+          if (prop.kind === "prop_kv" && prop.name === disc) {
             kindProp = prop;
             break;
           }
@@ -9050,17 +9061,13 @@ class Emitter {
             `object literal for ${typeIdent(expected)} must include discriminator property '${disc}: "..."'`,
           );
         }
-        const kindExpr = kindProp.initializer;
-        if (
-          !ts.isStringLiteral(kindExpr) &&
-          !ts.isNoSubstitutionTemplateLiteral(kindExpr)
-        ) {
+        const kindValue = stringLitText(kindProp.value);
+        if (kindValue === undefined) {
           throw new CodegenError(
             kindProp,
             `discriminator '${disc}' must be a plain string literal to select a ${typeIdent(expected)} variant`,
           );
         }
-        const kindValue = kindExpr.text;
         let matchedVariant: string | undefined;
         for (const variantName of expected.variants) {
           const info = this.classes.get(variantName);
@@ -9097,31 +9104,24 @@ class Emitter {
       const className = classNameOf(expected)!;
       const info = this.classes.get(className)!;
       const seen = new Set<string>();
-      const valuesByField = new Map<string, ts.Expression>();
-      for (const prop of expr.properties) {
+      const valuesByField = new Map<string, Expr>();
+      for (const prop of expr.props) {
         let fname: string;
-        let valueExpr: ts.Expression;
-        if (ts.isPropertyAssignment(prop)) {
-          if (!ts.isIdentifier(prop.name)) {
-            throw new CodegenError(prop, "object literal property name must be a simple identifier");
-          }
-          fname = prop.name.text;
-          valueExpr = prop.initializer;
-        } else if (ts.isShorthandPropertyAssignment(prop)) {
+        let valueExpr: Expr;
+        if (prop.kind === "prop_kv") {
+          fname = prop.name;
+          valueExpr = prop.value;
+        } else if (prop.kind === "prop_shorthand") {
           // Phase 1.5-6 prep: `{ x }` desugars to `{ x: x }` — the property name
           // doubles as an identifier reference resolved in the current scope, so
-          // the value expression is just `prop.name`. `{ x = default }`
+          // the value expression is just an ident reading `x`. `{ x = default }`
           // (objectAssignmentInitializer) is destructuring-target-only syntax
-          // and stays rejected.
-          if (prop.objectAssignmentInitializer) {
-            throw new CodegenError(
-              prop,
-              "object literal shorthand with default (`{ x = v }`) is destructuring-only and not supported",
-            );
-          }
-          fname = prop.name.text;
-          valueExpr = prop.name;
+          // and is rejected in convert.
+          fname = prop.name;
+          valueExpr = { kind: "ident", name: prop.name, pos: prop.pos, end: prop.end };
         } else {
+          // prop_spread — method shorthand / getter / setter are rejected in
+          // convert; spread reaches here.
           throw new CodegenError(
             prop,
             "object literal only supports `name: value` and `name` shorthand properties (no method shorthand, getter / setter, spread)",
@@ -9164,10 +9164,10 @@ class Emitter {
     // contextually (see emitContextualIIFE). Arrows WITH a return annotation
     // type on their own and fall through to the normal call path (their return
     // may differ from `expected`, so we must not override it).
-    if (ts.isCallExpression(expr) && !expr.questionDotToken) {
-      let callee: ts.Expression = expr.expression;
-      while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
-      if (ts.isArrowFunction(callee) && !callee.type) {
+    if (expr.kind === "call_expr" && !expr.optional) {
+      let callee: Expr = expr.callee;
+      while (callee.kind === "paren_expr") callee = callee.inner;
+      if (callee.kind === "arrow_expr" && !callee.returnType) {
         return this.emitContextualIIFE(expr, callee, expected);
       }
     }
@@ -9193,10 +9193,10 @@ class Emitter {
   // [requiredParamCount, params.length] is rejected with the canonical
   // "expects N got M" message; the caller passes the human-readable name.
   private emitCallArgs(
-    args: readonly ts.Expression[],
+    args: readonly Expr[],
     params: readonly ParamInfo[],
     label: string,
-    anchor: ts.Node,
+    anchor: ts.Node | { pos: number },
   ): string[] {
     const req = requiredParamCount(params);
     if (args.length < req || args.length > params.length) {
@@ -9218,7 +9218,7 @@ class Emitter {
     return out;
   }
 
-  private emitUndefinedLiteral(expected: TopazType, anchor: ts.Node): string {
+  private emitUndefinedLiteral(expected: TopazType, anchor: ts.Node | { pos: number }): string {
     if (expected.kind === "undefined") {
       // Bare `undefined` target has no observable C representation; emit NULL
       // as a placeholder (the value is never read because nothing else can be
@@ -9258,7 +9258,7 @@ class Emitter {
     );
   }
 
-  private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: ts.Node): string {
+  private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: ts.Node | { pos: number }): string {
     if (typeEq(actual, expected)) return raw;
     // Phase 1.5-3b: widening T -> `T | undefined`. For reference / interface
     // representations the C value is identical (a pointer or a fat pointer),
