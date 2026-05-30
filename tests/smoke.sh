@@ -345,6 +345,12 @@ run_fail_case node_path_resolve_type_fail examples/node_path_resolve_type_fail.t
 run_fail_case node_path_as_value_fail examples/node_path_as_value_fail.ts "unknown identifier 'resolve'"
 run_fail_case node_path_unknown_named_import_fail examples/node_path_unknown_named_import_fail.ts "unsupported named import 'join'"
 
+run_case node_path_basename $'baz.ts\nbar\nbar\nfoo\nfoo\n\ntrue\nbaz\nfoo\nmain\nbar.ts\ntrue\nindex'
+run_fail_case node_path_basename_arity_fail examples/node_path_basename_arity_fail.ts "basename expects one or two arguments"
+run_fail_case node_path_basename_path_type_fail examples/node_path_basename_path_type_fail.ts "basename path argument must be string"
+run_fail_case node_path_basename_ext_type_fail examples/node_path_basename_ext_type_fail.ts "basename ext argument must be string"
+run_fail_case node_path_basename_as_value_fail examples/node_path_basename_as_value_fail.ts "unknown identifier 'basename'"
+
 run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
 run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"
 run_fail_case parse_int_arg_type_fail examples/parse_int_arg_type_fail.ts "parseInt first argument must be string"

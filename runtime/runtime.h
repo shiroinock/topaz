@@ -458,6 +458,75 @@ static inline topaz_string topaz_path_resolve(int n, ...) {
   return dot;
 }
 
+// Phase 1.5-6 prep #21: node:path.basename(p) — last segment after stripping
+// trailing slashes. Empty / all-slashes input yields "". Mirrors Node's
+// path.posix.basename(path).
+static inline topaz_string topaz_path_basename(topaz_string p) {
+  long start = 0;
+  long end = -1;
+  bool matched_slash = true;
+  for (long i = (long)p.len - 1; i >= 0; --i) {
+    if (p.data[i] == '/') {
+      if (!matched_slash) { start = i + 1; break; }
+    } else if (end == -1) {
+      matched_slash = false;
+      end = i + 1;
+    }
+  }
+  if (end == -1) { topaz_string r = { "", 0 }; return r; }
+  size_t out_len = (size_t)(end - start);
+  char *buf = (char *)topaz_arena_alloc(out_len + 1);
+  if (out_len) memcpy(buf, p.data + start, out_len);
+  buf[out_len] = '\0';
+  topaz_string r = { buf, out_len };
+  return r;
+}
+
+// Phase 1.5-6 prep #21: node:path.basename(p, ext). Strips a matching `ext`
+// suffix from the last segment if one is present. Port of Node's path.posix
+// `basename` with the suffix-matching branch (RTL scan with ext index).
+static inline topaz_string topaz_path_basename_ext(
+    topaz_string p, topaz_string ext) {
+  if (ext.len == 0 || ext.len > p.len) return topaz_path_basename(p);
+  if (ext.len == p.len && memcmp(ext.data, p.data, ext.len) == 0) {
+    topaz_string r = { "", 0 };
+    return r;
+  }
+  long start = 0;
+  long end = -1;
+  long first_non_slash_end = -1;
+  long ext_idx = (long)ext.len - 1;
+  bool matched_slash = true;
+  for (long i = (long)p.len - 1; i >= 0; --i) {
+    char code = p.data[i];
+    if (code == '/') {
+      if (!matched_slash) { start = i + 1; break; }
+    } else {
+      if (first_non_slash_end == -1) {
+        matched_slash = false;
+        first_non_slash_end = i + 1;
+      }
+      if (ext_idx >= 0) {
+        if (code == ext.data[ext_idx]) {
+          if (--ext_idx == -1) end = i;
+        } else {
+          ext_idx = -1;
+          end = first_non_slash_end;
+        }
+      }
+    }
+  }
+  if (start == end) end = first_non_slash_end;
+  else if (end == -1) end = (long)p.len;
+  if (end <= start) { topaz_string r = { "", 0 }; return r; }
+  size_t out_len = (size_t)(end - start);
+  char *buf = (char *)topaz_arena_alloc(out_len + 1);
+  memcpy(buf, p.data + start, out_len);
+  buf[out_len] = '\0';
+  topaz_string r = { buf, out_len };
+  return r;
+}
+
 // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s) for the
 // self-hosted number-literal parser. The codegen requires an explicit radix
 // for parseInt (1-arg auto-radix is a footgun, unused in src/). Both copy into

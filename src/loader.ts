@@ -135,10 +135,11 @@ function validateImport(filePath: string, stmt: ts.ImportDeclaration): void {
 // 経由で取り込んだ識別子は codegen 側で syntactic shortcut として処理する。
 // 現状は `node:fs` から `readFileSync` / `existsSync` (1.5-6 prep #17) /
 // `writeFileSync` (1.5-6 prep #19) / `mkdirSync` (1.5-6 prep #20)、
-// `node:path` から `dirname` / `resolve` (1.5-6 prep #18) を受理。
+// `node:path` から `dirname` / `resolve` (1.5-6 prep #18) /
+// `basename` (1.5-6 prep #21) を受理。
 const STDLIB_SPECIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["node:fs", new Set(["readFileSync", "existsSync", "writeFileSync", "mkdirSync"])],
-  ["node:path", new Set(["dirname", "resolve"])],
+  ["node:path", new Set(["dirname", "resolve", "basename"])],
 ]);
 
 function isStdlibSpecifier(spec: string): boolean {

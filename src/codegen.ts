@@ -6475,6 +6475,11 @@ class Emitter {
       if (callee.text === "resolve") {
         return this.emitNodePathResolve(expr);
       }
+      // Phase 1.5-6 prep #21: node:path.basename(p, ext?), same call-site
+      // shortcut. arity 1/2 dispatch to distinct runtime entries.
+      if (callee.text === "basename") {
+        return this.emitNodePathBasename(expr);
+      }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
@@ -7127,6 +7132,46 @@ class Emitter {
       .map((a) => this.emitWithExpected(a, T_STRING))
       .join(", ");
     return `topaz_path_resolve(${expr.arguments.length}, ${segs})`;
+  }
+
+  // Phase 1.5-6 prep #21: node:path.basename(p, ext?) の引数検査。1 または 2
+  // 引数で、いずれも string。Node の path.posix.basename と同じシグネチャ。
+  // emit/infer 両経路で同じ reject。
+  private checkNodePathBasenameArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 1 && expr.arguments.length !== 2) {
+      throw new CodegenError(
+        expr,
+        "basename expects one or two arguments: (path: string, ext?: string)",
+      );
+    }
+    const pathArg = expr.arguments[0]!;
+    const pathType = this.inferType(pathArg);
+    if (pathType.kind !== "string") {
+      throw new CodegenError(
+        pathArg,
+        `basename path argument must be string, got ${typeIdent(pathType)}`,
+      );
+    }
+    if (expr.arguments.length === 2) {
+      const extArg = expr.arguments[1]!;
+      const extType = this.inferType(extArg);
+      if (extType.kind !== "string") {
+        throw new CodegenError(
+          extArg,
+          `basename ext argument must be string, got ${typeIdent(extType)}`,
+        );
+      }
+    }
+  }
+
+  private emitNodePathBasename(expr: ts.CallExpression): string {
+    this.checkNodePathBasenameArgs(expr);
+    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    if (expr.arguments.length === 1) {
+      return `topaz_path_basename(${path})`;
+    }
+    const ext = this.emitWithExpected(expr.arguments[1]!, T_STRING);
+    return `topaz_path_basename_ext(${path}, ${ext})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
@@ -8234,6 +8279,11 @@ class Emitter {
         }
         if (callee.text === "resolve") {
           this.checkNodePathResolveArgs(expr);
+          return T_STRING;
+        }
+        // Phase 1.5-6 prep #21: node:path.basename types as string.
+        if (callee.text === "basename") {
+          this.checkNodePathBasenameArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
