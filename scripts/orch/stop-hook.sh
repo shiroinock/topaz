@@ -19,7 +19,7 @@ set -euo pipefail
 [[ -n "${TOPAZ_ORCH_PHASE:-}" ]] || exit 0
 
 PHASE="$TOPAZ_ORCH_PHASE"
-REPO="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+REPO="${CODEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}"
 ORCH_DIR="$REPO/.topaz-orch"
 mkdir -p "$ORCH_DIR"
 
