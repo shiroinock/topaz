@@ -177,7 +177,7 @@ class Converter {
         items.push({ kind: "module_stmt", stmt: s });
       }
     }
-    return { filePath: this.sf.fileName, items };
+    return { filePath: this.sf.fileName, lineStarts: [...this.sf.getLineStarts()], items };
   }
 
   isDeclLike(stmt: ts.Statement): boolean {

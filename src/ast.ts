@@ -644,5 +644,10 @@ export type ModuleItem =
 
 export type SourceModule = {
   filePath: string;
+  // lineStarts[i] = byte offset of the start of line i (0-based), mirroring
+  // ts.SourceFile.getLineStarts(). Required: codegen's posToLineCol uses it to
+  // render `file:line:col` diagnostics without a tsc dependency. Stripped before
+  // parser-oracle comparison (position metadata, not semantic AST).
+  lineStarts: Array<number>;
   items: Array<ModuleItem>;
 };

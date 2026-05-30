@@ -15,6 +15,7 @@ import {
   PunctToken,
   Token,
   tokenize,
+  computeLineStarts,
 } from "./lexer.js";
 import {
   Decl,
@@ -62,10 +63,12 @@ export class Parser {
   file: string;
   tokens: Array<Token>;
   pos: number = 0;
+  lineStarts: Array<number>;
 
-  constructor(tokens: Array<Token>, file: string) {
+  constructor(tokens: Array<Token>, file: string, lineStarts: Array<number>) {
     this.tokens = tokens;
     this.file = file;
+    this.lineStarts = lineStarts;
   }
 
   peek(offset: number): Token {
@@ -185,7 +188,7 @@ export class Parser {
       const item: ModuleItem = this.parseModuleItem();
       items.push(item);
     }
-    return { filePath: this.file, items: items };
+    return { filePath: this.file, lineStarts: this.lineStarts, items: items };
   }
 
   parseModuleItem(): ModuleItem {
@@ -1839,6 +1842,6 @@ function parseNumberLiteral(text: string): number {
 export function parseFile(filePath: string): SourceModule {
   const source: string = readFileSync(filePath, "utf8");
   const tokens: Array<Token> = tokenize(source, filePath);
-  const parser: Parser = new Parser(tokens, filePath);
+  const parser: Parser = new Parser(tokens, filePath, computeLineStarts(source));
   return parser.parseModule();
 }

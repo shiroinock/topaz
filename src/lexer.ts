@@ -650,3 +650,19 @@ export function tokenize(source: string, file: string): Array<Token> {
   const lex: Lexer = new Lexer(source, file);
   return lex.tokenize();
 }
+
+// Phase 1.5-6e-4: byte offsets of each line start (0-based), mirroring
+// ts.SourceFile.getLineStarts(): index 0 is always 0, and every byte after a
+// LF (0x0a) begins a new line. The topaz parser stamps the result onto the
+// SourceModule so codegen's posToLineCol can render diagnostics self-hosted.
+export function computeLineStarts(source: string): Array<number> {
+  const starts: Array<number> = [0];
+  let i: number = 0;
+  while (i < source.length) {
+    if (source.charCodeAt(i) === 10) {
+      starts.push(i + 1);
+    }
+    i = i + 1;
+  }
+  return starts;
+}

@@ -6,7 +6,7 @@
 //   node dist/parser_check.js <file.ts> [<file2.ts> ...]
 //   exit 0 = 全 file 一致、exit 1 = 1 つでも diff、exit 2 = parse 失敗。
 //
-// 比較前に `pos` / `end` を除外する (両 parser の trivia 扱いが異なるため、
+// 比較前に `pos` / `end` / `lineStarts` を除外する (両 parser の trivia 扱いが異なるため、
 // span そのものは parser 単体検証の対象外。範囲指定がズレてもエラー位置を
 // 出す精度の差にとどまり、ast の semantic な等価性とは独立)。
 
@@ -20,7 +20,7 @@ function stripSpans(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(stripSpans);
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(v as Record<string, unknown>)) {
-    if (k === "pos" || k === "end") continue;
+    if (k === "pos" || k === "end" || k === "lineStarts") continue;
     out[k] = stripSpans((v as Record<string, unknown>)[k]);
   }
   return out;

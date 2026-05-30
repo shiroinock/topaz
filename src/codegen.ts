@@ -1,5 +1,3 @@
-import * as ts from "typescript";
-import { convertFromTsc } from "./convert_from_tsc.js";
 import type {
   TypeNode,
   TypeLiteralNode,
@@ -45,7 +43,7 @@ import type {
 // → SCC boundary, save/restore-style). The Topaz `pos` equals the tsc
 // `getStart(sf)` recorded by convert, so positions are byte-identical to the
 // pre-migration tsc-anchored errors.
-let g_currentSf: ts.SourceFile | undefined;
+let g_currentModule: SourceModule | undefined;
 
 // Phase 1.4c-3: TopazType is a structured tagged-union. Until 1.4c-2 we used a
 // string-union ("topaz_array_class_Box" etc.) keyed by canonical C identifier,
@@ -556,46 +554,49 @@ function zeroValueOfElem(elem: TopazType): string {
 
 type Binding = { type: TopazType; isConst: boolean };
 
+// Phase 1.5-6e-4: resolve a byte offset to 0-based { line, col } using the
+// module's lineStarts table (the byte offset of each line start). Mirrors
+// ts.SourceFile.getLineAndCharacterOfPosition so `file:line:col` diagnostics
+// stay byte-identical after the tsc dependency is dropped.
+function posToLineCol(module: SourceModule, pos: number): { line: number; col: number } {
+  const starts = module.lineStarts;
+  let lo = 0;
+  let hi = starts.length - 1;
+  let line = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid]! <= pos) {
+      line = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return { line, col: pos - starts[line]! };
+}
+
 class CodegenError extends Error {
-  // Phase 1.5-6e-1: accept either a tsc node (position computed from its own
-  // SourceFile) or an already-formatted `file:line:col: message` string. The
-  // string form lets the migrated type machine — which walks Topaz `TypeNode`
-  // that don't carry their SourceFile — build positions via `Emitter.typeErr`
-  // (pos + the ambient `currentTypeSf`).
-  constructor(nodeOrFormatted: ts.Node | { pos: number } | string, message?: string) {
+  // Phase 1.5-6e-4: accept a Topaz node `{ pos }` (resolved against the ambient
+  // SourceModule's lineStarts) or an already-formatted `file:line:col: message`
+  // string. The string form lets the type machine — which walks Topaz `TypeNode`
+  // that don't carry their module — build positions via `Emitter.typeErr`.
+  constructor(nodeOrFormatted: { pos: number } | string, message?: string) {
     if (typeof nodeOrFormatted === "string") {
       super(nodeOrFormatted);
       return;
     }
-    const node = nodeOrFormatted;
-    if (typeof (node as { getSourceFile?: unknown }).getSourceFile === "function") {
-      const tscNode = node as ts.Node;
-      const sf = tscNode.getSourceFile();
-      if (sf) {
-        const { line, character } = sf.getLineAndCharacterOfPosition(tscNode.getStart(sf));
-        super(`${sf.fileName}:${line + 1}:${character + 1}: ${message}`);
-      } else {
-        super(message ?? "");
-      }
-      return;
-    }
-    // Phase 1.5-6e-2: Topaz node `{ pos }` — resolve the file from the ambient
-    // SourceFile set at the decl-land → SCC boundary.
-    const sf = g_currentSf;
-    if (sf) {
-      const { line, character } = sf.getLineAndCharacterOfPosition((node as { pos: number }).pos);
-      super(`${sf.fileName}:${line + 1}:${character + 1}: ${message}`);
+    const module = g_currentModule;
+    if (module) {
+      const { line, col } = posToLineCol(module, nodeOrFormatted.pos);
+      super(`${module.filePath}:${line + 1}:${col + 1}: ${message}`);
     } else {
       super(message ?? "");
     }
   }
 }
 
-function unsupported(node: ts.Node | { kind: string }, what: string): never {
-  if (typeof (node as { kind: unknown }).kind === "string") {
-    throw new CodegenError(node as { pos: number }, `unsupported ${what} (${(node as { kind: string }).kind})`);
-  }
-  throw new CodegenError(node as ts.Node, `unsupported ${what} (${ts.SyntaxKind[(node as ts.Node).kind]})`);
+function unsupported(node: { kind: string; pos: number }, what: string): never {
+  throw new CodegenError(node, `unsupported ${what} (${node.kind})`);
 }
 
 class Scope {
@@ -629,18 +630,13 @@ class Scope {
     this.barriers.pop();
   }
 
-  // Phase 1.5-6e-1: the anon-class ctor (synthesized from a Topaz
-  // TypeLiteralNode) declares its params with the Topaz node as anchor, so
-  // accept either a tsc node or a Topaz `{ pos }`. The redeclaration error
-  // never fires for anon ctors (recordAnonClass guarantees unique field
-  // names), so the position-less fallback for the Topaz branch is dead in
-  // practice; tsc-node callers keep their exact `file:line:col`.
-  declare(name: string, type: TopazType, isConst: boolean, node: ts.Node | { pos: number }): void {
+  // Phase 1.5-6e-4: every caller passes a Topaz node `{ pos }`. The
+  // redeclaration error never fires in practice (recordAnonClass guarantees
+  // unique anon-class field names), so it keeps its historical position-less
+  // message; `_node` is retained only as the diagnostic-anchor slot.
+  declare(name: string, type: TopazType, isConst: boolean, _node: { pos: number }): void {
     const top = this.stack[this.stack.length - 1]!;
     if (top.has(name)) {
-      if (typeof (node as { getSourceFile?: unknown }).getSourceFile === "function") {
-        throw new CodegenError(node as ts.Node, `redeclaration of '${name}'`);
-      }
       throw new CodegenError(`redeclaration of '${name}'`);
     }
     top.set(name, { type, isConst });
@@ -769,10 +765,10 @@ type ClassInfo = {
   // Phase 1.5-6e-3: user classes carry the Topaz `ClassDecl`.
   decl: ClassDecl | TypeLiteralNode;
   // Phase 1.5-6e-3: declaring module's SourceFile, used as the ambient position
-  // oracle (g_currentSf / currentTypeSf) while emitting ctor / method bodies and
+  // oracle (g_currentModule / currentTypeModule) while emitting ctor / method bodies and
   // field initializers. `undefined` for anon classes synthesized from a
   // TypeLiteral (no user body, so the SCC is never entered for them).
-  sf: ts.SourceFile | undefined;
+  sf: SourceModule | undefined;
 };
 
 // Phase 1.5-6e-3: `decl` dropped — it was only an error anchor and is never
@@ -803,7 +799,7 @@ type GenericFunctionInfo = {
   decl: FunctionDecl;
   // Phase 1.5-6e-3: declaring module's SourceFile for ambient position oracle
   // while resolving the monomorph signature / unifying call-site arguments.
-  sf: ts.SourceFile;
+  sf: SourceModule;
 };
 
 type MonomorphInfo = {
@@ -815,7 +811,7 @@ type MonomorphInfo = {
   decl: FunctionDecl;
   // Phase 1.5-6e-3: declaring module's SourceFile for ambient position oracle
   // while emitting the monomorph body.
-  sf: ts.SourceFile;
+  sf: SourceModule;
 };
 
 // Phase 1.4c-3: generic top-level classes. Same shape as GenericFunctionInfo
@@ -828,7 +824,7 @@ type GenericClassInfo = {
   decl: ClassDecl;
   // Phase 1.5-6e-3: declaring module's SourceFile for ambient position oracle
   // while collecting the monomorph's members.
-  sf: ts.SourceFile;
+  sf: SourceModule;
 };
 
 // Per realized (class, typeArgs) tuple. The ClassInfo under the mangled name
@@ -940,7 +936,7 @@ class Emitter {
     string,
     {
       body: TypeNode;
-      sf: ts.SourceFile;
+      sf: SourceModule;
       resolved?: TopazType;
       resolving: boolean;
       recursive: boolean;
@@ -955,12 +951,12 @@ class Emitter {
   // Phase 1.5-6e-1: the SourceFile each pre-allocated Topaz `TypeLiteralNode`
   // was converted from, so `fillPreAllocatedAnonFields` can position its
   // diagnostics (the Topaz node carries `pos` but not its file).
-  private preAllocatedAnonSf = new Map<TypeLiteralNode, ts.SourceFile>();
+  private preAllocatedAnonSf = new Map<TypeLiteralNode, SourceModule>();
   // Phase 1.5-6e-1: the SourceFile of the Topaz type tree currently being
   // lowered by `typeFromAnnotation` (and the helpers it calls). Set/restored at
   // every `typeFromAnnotation` entry so `typeErr` can turn a Topaz node's `pos`
   // into `file:line:col`. Undefined outside type-machine execution.
-  private currentTypeSf: ts.SourceFile | undefined;
+  private currentTypeModule: SourceModule | undefined;
   // Phase 1.5-3.5e: each arrow expression lowers to (a) a static C function
   // `__topaz_arrow_<N>` and (b) optionally an env struct `__topaz_env_<N>`
   // for its captures. arrowDefLines accumulates both halves in source order
@@ -1061,7 +1057,7 @@ class Emitter {
       decl: anchor,
       // Anon classes carry no user ctor / method body, so `sf` is only a best-
       // effort anchor; the ambient type-resolution SourceFile is the closest fit.
-      sf: this.currentTypeSf,
+      sf: this.currentTypeModule,
     };
     this.classes.set(mangled, info);
     // Reuse the generic-class monomorph worklist so the struct / signature /
@@ -1138,7 +1134,7 @@ class Emitter {
   // is not a discriminated class union (caller falls back to general union).
   private tryMakeDiscriminatedUnion(
     variants: readonly TopazType[],
-    anchor: ts.Node | { pos: number },
+    anchor: { pos: number },
   ): TopazType | undefined {
     if (variants.length < 2) return undefined;
     if (!variants.every((v) => v.kind === "class")) return undefined;
@@ -1341,7 +1337,7 @@ class Emitter {
   // recordAnonClass path so `type Pair = { a; b }` and `type Pair2 = { a; b }`
   // still collapse to one C struct.
   private preAllocateRecursiveAnons(): void {
-    const visit = (node: TypeNode, sf: ts.SourceFile): void => {
+    const visit = (node: TypeNode, sf: SourceModule): void => {
       if (node.kind === "type_union") {
         for (const t of node.variants) visit(t, sf);
         return;
@@ -1434,14 +1430,14 @@ class Emitter {
     }
 
     // Sub-pass B: fully resolve fields. Mirrors the validation in the inline
-    // TypeLiteralNode branch of typeFromAnnotation. `currentTypeSf` is set per
+    // TypeLiteralNode branch of typeFromAnnotation. `currentTypeModule` is set per
     // literal node so the validation / typeFromAnnotation diagnostics position
     // against the module the recursive alias was declared in.
     for (const [literalNode, anonName] of this.preAllocatedAnons) {
       const cls = this.classes.get(anonName)!;
       const sf = this.preAllocatedAnonSf.get(literalNode)!;
-      const savedSf = this.currentTypeSf;
-      this.currentTypeSf = sf;
+      const savedSf = this.currentTypeModule;
+      this.currentTypeModule = sf;
       try {
       if (literalNode.members.length === 0) {
         throw this.typeErr(literalNode, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
@@ -1475,36 +1471,36 @@ class Emitter {
       cls.optionalFields = new Set(optionalFields);
       cls.ctor = { params, decl: undefined };
       } finally {
-        this.currentTypeSf = savedSf;
+        this.currentTypeModule = savedSf;
       }
     }
   }
 
-  // Phase 1.5-6e-3 (A案): convert every tsc SourceFile to a Topaz `SourceModule`
-  // and flatten its items into the per-kind declaration buckets the prepass
-  // walks. Imports are ignored (all modules share one global namespace, so name
+  // Flatten every Topaz `SourceModule`'s items into the per-kind declaration
+  // buckets the prepass walks. Imports are ignored (all modules share one
+  // global namespace, so name
   // imports carry no codegen meaning). Module-level statements land in
   // `topLevel`: the root module accepts any statement (they become `main()`
   // body); a non-root module only accepts a hoistable scalar-literal `const`
   // (file-static lowering) — anything else is rejected, exactly as before.
   // Each entry is paired with the declaring `sf` so later passes can set the
   // ambient position oracle (Topaz nodes carry `pos`/`end` but not their file).
-  private extractDecls(sourceFiles: readonly ts.SourceFile[]): {
-    functions: Array<{ decl: FunctionDecl; sf: ts.SourceFile }>;
-    classes: Array<{ decl: ClassDecl; sf: ts.SourceFile }>;
-    interfaces: Array<{ decl: InterfaceDecl; sf: ts.SourceFile }>;
-    aliases: Array<{ decl: TypeAliasDecl; sf: ts.SourceFile }>;
-    topLevel: Array<{ stmt: Stmt; sf: ts.SourceFile }>;
+  private extractDecls(sourceFiles: readonly SourceModule[]): {
+    functions: Array<{ decl: FunctionDecl; sf: SourceModule }>;
+    classes: Array<{ decl: ClassDecl; sf: SourceModule }>;
+    interfaces: Array<{ decl: InterfaceDecl; sf: SourceModule }>;
+    aliases: Array<{ decl: TypeAliasDecl; sf: SourceModule }>;
+    topLevel: Array<{ stmt: Stmt; sf: SourceModule }>;
   } {
-    const functions: Array<{ decl: FunctionDecl; sf: ts.SourceFile }> = [];
-    const classes: Array<{ decl: ClassDecl; sf: ts.SourceFile }> = [];
-    const interfaces: Array<{ decl: InterfaceDecl; sf: ts.SourceFile }> = [];
-    const aliases: Array<{ decl: TypeAliasDecl; sf: ts.SourceFile }> = [];
-    const topLevel: Array<{ stmt: Stmt; sf: ts.SourceFile }> = [];
+    const functions: Array<{ decl: FunctionDecl; sf: SourceModule }> = [];
+    const classes: Array<{ decl: ClassDecl; sf: SourceModule }> = [];
+    const interfaces: Array<{ decl: InterfaceDecl; sf: SourceModule }> = [];
+    const aliases: Array<{ decl: TypeAliasDecl; sf: SourceModule }> = [];
+    const topLevel: Array<{ stmt: Stmt; sf: SourceModule }> = [];
     const rootSf = sourceFiles[sourceFiles.length - 1]!;
     for (const sf of sourceFiles) {
       const isRoot = sf === rootSf;
-      const module: SourceModule = convertFromTsc(sf);
+      const module: SourceModule = sf;
       for (const item of module.items) {
         if (item.kind === "module_decl") {
           const d: Decl = item.decl;
@@ -1548,17 +1544,15 @@ class Emitter {
     return { functions, classes, interfaces, aliases, topLevel };
   }
 
-  emit(sourceFiles: readonly ts.SourceFile[]): string {
+  emit(sourceFiles: readonly SourceModule[]): string {
     if (sourceFiles.length === 0) {
       throw new Error("codegen: at least one source file is required");
     }
-    // Phase 1.5-6e-3 (A案): convert each tsc SourceFile to a Topaz
-    // `SourceModule` at the emit entry and walk Topaz `Decl` / `Stmt` from here
-    // on. `extractDecls` flattens every module's items into the per-kind
-    // declaration buckets (paired with the declaring `sf` for position
-    // diagnostics) plus the root module's top-level statements. This is the
-    // single remaining tsc seam in codegen — 6e-4 hoists `convertFromTsc` out
-    // to `codegen()` and removes it.
+    // Phase 1.5-6e-4: codegen consumes Topaz `SourceModule[]` directly (the
+    // `convertFromTsc` bridge now lives in cli.ts). `extractDecls` flattens
+    // every module's items into the per-kind declaration buckets (paired with
+    // the declaring module for position diagnostics) plus the root module's
+    // top-level statements.
     const { functions, classes, interfaces, aliases, topLevel } =
       this.extractDecls(sourceFiles);
 
@@ -2469,7 +2463,7 @@ class Emitter {
   // remaining semantic rules (duplicate members, void / fn-typed fields and
   // method params / returns). `readonly` on interface fields is accepted as a
   // no-op (carried as `isReadonly` on the member, unused here).
-  private collectInterfaceMembers(iface: InterfaceDecl, sf: ts.SourceFile): void {
+  private collectInterfaceMembers(iface: InterfaceDecl, sf: SourceModule): void {
     this.withSf(sf, () => {
       const info = this.interfaces.get(iface.name)!;
       for (const m of iface.members) {
@@ -2515,7 +2509,7 @@ class Emitter {
   // convert; the heritage list arrives pre-flattened as `implementsList`. `sf`
   // is the declaring module (set ambient for member type resolution); the
   // generic-monomorph path passes the generic class's `sf` via `infoOverride`.
-  private collectClassMembers(cls: ClassDecl, sf: ts.SourceFile, infoOverride?: ClassInfo): void {
+  private collectClassMembers(cls: ClassDecl, sf: SourceModule, infoOverride?: ClassInfo): void {
     this.withSf(sf, () => {
     // infoOverride is set when collecting members for a generic class
     // monomorph (the ClassInfo lives under the mangled name, not cls.name);
@@ -2626,7 +2620,7 @@ class Emitter {
   // Phase 1.4b: exact structural match — interface field types and method
   // signatures must equal the class's. No coercion happens at the vtable
   // boundary, only at user-visible value sites.
-  private verifyImplements(cls: ClassInfo, iface: InterfaceInfo, anchor: ts.Node | { pos: number }): void {
+  private verifyImplements(cls: ClassInfo, iface: InterfaceInfo, anchor: { pos: number }): void {
     for (const fname of iface.fieldOrder) {
       const want = iface.fields.get(fname)!;
       const got = cls.fields.get(fname);
@@ -2684,7 +2678,7 @@ class Emitter {
   // Phase 1.5-6e-3: consumes the Topaz `ClassFieldMember`. Name-identifier,
   // optional `?`, and `!` rejection live in convert; `type` is always present.
   // `sf` positions the field's type-annotation diagnostics.
-  private collectField(info: ClassInfo, m: ClassFieldMember, sf: ts.SourceFile): void {
+  private collectField(info: ClassInfo, m: ClassFieldMember, sf: SourceModule): void {
     const fname = m.name;
     if (info.fields.has(fname)) {
       throw new CodegenError(m, `redeclaration of field '${fname}'`);
@@ -2711,7 +2705,7 @@ class Emitter {
 
   // Phase 1.5-6e-3: consumes the Topaz ctor member (`ClassMethodMember` with
   // `isCtor`). Generic-ctor / missing-body rejection live in convert.
-  private collectConstructor(info: ClassInfo, m: ClassMethodMember, sf: ts.SourceFile): void {
+  private collectConstructor(info: ClassInfo, m: ClassMethodMember, sf: SourceModule): void {
     if (info.ctor) {
       throw new CodegenError(m, `class '${info.name}' has multiple constructors`);
     }
@@ -2721,7 +2715,7 @@ class Emitter {
 
   // Phase 1.5-6e-3: consumes the Topaz `ClassMethodMember`. Name-identifier,
   // generic / optional / generator / missing-body rejection live in convert.
-  private collectMethod(info: ClassInfo, m: ClassMethodMember, sf: ts.SourceFile): void {
+  private collectMethod(info: ClassInfo, m: ClassMethodMember, sf: SourceModule): void {
     const mname = m.name;
     if (info.methods.has(mname)) {
       throw new CodegenError(m, `redeclaration of method '${mname}'`);
@@ -2738,7 +2732,7 @@ class Emitter {
   // default / rest, parameter-property modifiers, and the optional-trailing rule
   // are all enforced in convert; `?` arrives as `isOptional` and `type` is always
   // present. `sf` positions the param's type-annotation diagnostics.
-  private collectParams(params: readonly FunctionParam[], sf: ts.SourceFile): ParamInfo[] {
+  private collectParams(params: readonly FunctionParam[], sf: SourceModule): ParamInfo[] {
     const out: ParamInfo[] = [];
     for (const p of params) {
       const annot = this.typeFromAnnotation(p.type, p, sf);
@@ -2814,11 +2808,11 @@ class Emitter {
     // field inits and no user body, so the SCC is never entered for them; their
     // `info.sf` is a best-effort anchor (or undefined).
     const declSf = info.sf;
-    const savedG = g_currentSf;
-    const savedT = this.currentTypeSf;
+    const savedG = g_currentModule;
+    const savedT = this.currentTypeModule;
     if (declSf) {
-      g_currentSf = declSf;
-      this.currentTypeSf = declSf;
+      g_currentModule = declSf;
+      this.currentTypeModule = declSf;
     }
     try {
       const anchor = ctor.decl ?? info.decl;
@@ -2860,8 +2854,8 @@ class Emitter {
     } finally {
       this.scope.pop();
       this.currentClass = undefined;
-      g_currentSf = savedG;
-      this.currentTypeSf = savedT;
+      g_currentModule = savedG;
+      this.currentTypeModule = savedT;
     }
   }
 
@@ -2985,7 +2979,7 @@ class Emitter {
   // slots. `void` has no value representation, so it cannot appear as a
   // parameter type, variable type, field type, container element / value /
   // key, union variant, type argument, or fn-type return position.
-  private assertNotVoid(t: TopazType, anchor: ts.Node | { pos: number }, what: string): void {
+  private assertNotVoid(t: TopazType, anchor: { pos: number }, what: string): void {
     if (t.kind === "void") {
       throw this.typeErr(anchor, `\`void\` is only allowed as a function / method return type (used in ${what})`);
     }
@@ -2993,45 +2987,40 @@ class Emitter {
 
   // Phase 1.5-6e-1: build a CodegenError for a diagnostic anchor that is either
   // a tsc node (carries its own SourceFile) or a Topaz node `{ pos }` (file
-  // supplied by the ambient `currentTypeSf`). The Topaz `pos` equals the tsc
+  // supplied by the ambient `currentTypeModule`). The Topaz `pos` equals the tsc
   // `getStart(sf)` that `convertType` recorded, so positions are identical to
   // the pre-migration tsc-anchored errors.
-  private typeErr(anchor: ts.Node | { pos: number }, message: string): CodegenError {
-    if (typeof (anchor as { getSourceFile?: unknown }).getSourceFile === "function") {
-      return new CodegenError(anchor as ts.Node, message);
-    }
-    const sf = this.currentTypeSf;
-    if (!sf) return new CodegenError(message);
-    const { line, character } = sf.getLineAndCharacterOfPosition((anchor as { pos: number }).pos);
-    return new CodegenError(`${sf.fileName}:${line + 1}:${character + 1}: ${message}`);
+  private typeErr(anchor: { pos: number }, message: string): CodegenError {
+    const module = this.currentTypeModule;
+    if (!module) return new CodegenError(message);
+    const { line, col } = posToLineCol(module, anchor.pos);
+    return new CodegenError(`${module.filePath}:${line + 1}:${col + 1}: ${message}`);
   }
 
-  // Phase 1.5-6e-2 seam: decl-land → emit/infer SCC boundary helpers. Each sets
-  // the ambient `g_currentSf` (so CodegenError can resolve Topaz-node positions)
-  // and `currentTypeSf` (so typeFromAnnotation reached from the SCC has a file
-  // for inline annotations), converts the tsc subtree to Topaz, runs the SCC,
-  // and restores. The boundary shrinks as upper layers migrate in 6e-3..6e-4.
-  private withSf<T>(sf: ts.SourceFile, fn: () => T): T {
-    const savedG = g_currentSf;
-    const savedT = this.currentTypeSf;
-    g_currentSf = sf;
-    this.currentTypeSf = sf;
+  // decl-land → emit/infer SCC boundary helper. Sets the ambient
+  // `g_currentModule` (so CodegenError can resolve Topaz-node positions) and
+  // `currentTypeModule` (so typeFromAnnotation reached from the SCC has a module
+  // for inline annotation positions), runs the SCC, and restores.
+  private withSf<T>(sf: SourceModule, fn: () => T): T {
+    const savedG = g_currentModule;
+    const savedT = this.currentTypeModule;
+    g_currentModule = sf;
+    this.currentTypeModule = sf;
     try {
       return fn();
     } finally {
-      g_currentSf = savedG;
-      this.currentTypeSf = savedT;
+      g_currentModule = savedG;
+      this.currentTypeModule = savedT;
     }
   }
 
-  // Phase 1.5-6e-3: the statement / block is already a Topaz node (the decl
-  // bodies were converted up front by `convertFromTsc`); set the ambient
-  // SourceFile so the SCC can resolve positions, then emit directly.
-  private emitStatementBoundary(stmt: Stmt, sf: ts.SourceFile): string {
+  // The statement / block is a Topaz node; set the ambient SourceModule so the
+  // SCC can resolve positions, then emit directly.
+  private emitStatementBoundary(stmt: Stmt, sf: SourceModule): string {
     return this.withSf(sf, () => this.emitStatement(stmt, 1));
   }
 
-  private emitBlockBoundary(block: BlockStmt, sf: ts.SourceFile): string {
+  private emitBlockBoundary(block: BlockStmt, sf: SourceModule): string {
     return this.withSf(sf, () => this.emitBlock(block, 0));
   }
 
@@ -3039,14 +3028,14 @@ class Emitter {
   // the module the tree was converted from — threaded so `typeErr` can position
   // diagnostics (Topaz nodes carry `pos` but not their file) and switched when
   // recursing into an alias body declared in another module. The save/restore
-  // of `currentTypeSf` keeps it correct after each nested resolution returns.
+  // of `currentTypeModule` keeps it correct after each nested resolution returns.
   private typeFromAnnotation(
     node: TypeNode | undefined,
-    anchor: ts.Node | { pos: number },
-    sf: ts.SourceFile,
+    anchor: { pos: number },
+    sf: SourceModule,
   ): TopazType {
-    const savedSf = this.currentTypeSf;
-    this.currentTypeSf = sf;
+    const savedSf = this.currentTypeModule;
+    this.currentTypeModule = sf;
     try {
       if (!node) throw this.typeErr(anchor, "type annotation required");
       if (node.kind === "type_void") return T_VOID;
@@ -3305,11 +3294,11 @@ class Emitter {
       }
       throw this.typeErr(node, `unsupported type (${node.kind})`);
     } finally {
-      this.currentTypeSf = savedSf;
+      this.currentTypeModule = savedSf;
     }
   }
 
-  private formatSignature(fn: FunctionDecl, sf: ts.SourceFile): string {
+  private formatSignature(fn: FunctionDecl, sf: SourceModule): string {
     const ret = this.typeFromAnnotation(fn.returnType, fn, sf);
     // Phase 1.5-6 prep: `formatSignature` is the early C declaration pass; it
     // must agree with `collectParams` on the lowered C type for each param
@@ -3321,7 +3310,7 @@ class Emitter {
     return `static ${cReturnTypeName(ret)} ${fn.name}(${params || "void"})`;
   }
 
-  private emitFunctionDefinition(fn: FunctionDecl, sf: ts.SourceFile): string {
+  private emitFunctionDefinition(fn: FunctionDecl, sf: SourceModule): string {
     const sig = this.functionSigs.get(fn.name)!;
     const prevRet = this.currentReturnType;
     const prevLive = this.liveTryFrames;
@@ -3396,7 +3385,7 @@ class Emitter {
       const p = arrow.params[i]!;
       let pt: TopazType;
       if (p.type) {
-        pt = this.typeFromAnnotation(p.type, p, g_currentSf!);
+        pt = this.typeFromAnnotation(p.type, p, g_currentModule!);
       } else if (expectedFn) {
         pt = expectedFn.params[i]!.type;
       } else {
@@ -3406,7 +3395,7 @@ class Emitter {
     }
     let returnType: TopazType;
     if (arrow.returnType) {
-      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentSf!);
+      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentModule!);
     } else if (expectedFn) {
       returnType = expectedFn.returnType;
     } else {
@@ -3447,7 +3436,7 @@ class Emitter {
         const p = cb.params[i]!;
         const pt = paramTypes[i]!;
         if (p.type) {
-          const annot = this.typeFromAnnotation(p.type, p, g_currentSf!);
+          const annot = this.typeFromAnnotation(p.type, p, g_currentModule!);
           if (!typeEq(annot, pt)) {
             throw new CodegenError(
               p,
@@ -3463,7 +3452,7 @@ class Emitter {
       }
       let returnType: TopazType;
       if (cb.returnType) {
-        returnType = this.typeFromAnnotation(cb.returnType, cb, g_currentSf!);
+        returnType = this.typeFromAnnotation(cb.returnType, cb, g_currentModule!);
       } else if (cb.body.kind === "arrow_expr_body") {
         // Expression body: push the params into a fresh scope so inferType
         // can resolve identifier references to them, then pop. We don't
@@ -3562,7 +3551,7 @@ class Emitter {
       const p = arrow.params[i]!;
       let pt: TopazType;
       if (p.type) {
-        pt = this.typeFromAnnotation(p.type, p, g_currentSf!);
+        pt = this.typeFromAnnotation(p.type, p, g_currentModule!);
       } else if (expectedFn) {
         pt = expectedFn.params[i]!.type;
       } else {
@@ -3583,7 +3572,7 @@ class Emitter {
     // an expected fn type supplies it.
     let returnType: TopazType;
     if (arrow.returnType) {
-      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentSf!);
+      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentModule!);
     } else if (expectedFn) {
       returnType = expectedFn.returnType;
     } else {
@@ -3701,7 +3690,7 @@ class Emitter {
   // Phase 1.5-3.5e: emit an identifier as the outer scope sees it (for
   // capture initialization). Handles narrowed scalar opt unions and narrowed
   // dunion / unknown the same way emitExpression's identifier branch does.
-  private emitCapturedIdentifier(name: string, _capturedType: TopazType, anchor: ts.Node | { pos: number }): string {
+  private emitCapturedIdentifier(name: string, _capturedType: TopazType, anchor: { pos: number }): string {
     const b = this.scope.lookup(name);
     if (!b) throw new CodegenError(anchor, `capture '${name}' is not visible at the arrow construction site`);
     const base = this.scope.lookupBase(name)!;
@@ -3934,7 +3923,7 @@ class Emitter {
         // type parameters (when a generic body calls another generic), so
         // typeFromAnnotation must run with the outer typeParamScope still
         // active. We don't swap it here.
-        const t = this.typeFromAnnotation(expr.typeArgs[i]!, expr, g_currentSf!);
+        const t = this.typeFromAnnotation(expr.typeArgs[i]!, expr, g_currentModule!);
         subs.set(generic.typeParams[i]!, t);
       }
     } else {
@@ -4011,8 +4000,8 @@ class Emitter {
   private instantiateGenericClass(
     refName: string,
     typeArgNodes: readonly TypeNode[] | undefined,
-    anchor: ts.Node | { pos: number },
-    sf: ts.SourceFile,
+    anchor: { pos: number },
+    sf: SourceModule,
   ): TopazType {
     const generic = this.genericClasses.get(refName)!;
     if (!typeArgNodes || typeArgNodes.length !== generic.typeParams.length) {
@@ -4081,7 +4070,7 @@ class Emitter {
     argType: TopazType,
     params: string[],
     subs: Map<string, TopazType>,
-    anchor: ts.Node | { pos: number },
+    anchor: { pos: number },
   ): void {
     if (paramTypeNode.kind === "type_array") {
       if (!isArrayType(argType)) return;
@@ -4498,7 +4487,7 @@ class Emitter {
     if (!catchClause.bindingType) {
       errType = T_UNKNOWN;
     } else {
-      errType = this.typeFromAnnotation(catchClause.bindingType, catchClause, g_currentSf!);
+      errType = this.typeFromAnnotation(catchClause.bindingType, catchClause, g_currentModule!);
       if (errType.kind !== "unknown" && !isClassType(errType)) {
         throw new CodegenError(
           catchClause.bindingType,
@@ -4689,7 +4678,7 @@ class Emitter {
   // single-binding `const NAME[: T] = LIT;` whose initializer is a scalar
   // literal (convert already split multi-decls and rejected destructuring).
   // `sf` positions the (side-effect-free) annotation resolution.
-  private canHoistModuleConst(stmt: Stmt, sf: ts.SourceFile): boolean {
+  private canHoistModuleConst(stmt: Stmt, sf: SourceModule): boolean {
     if (stmt.kind !== "var_decl") return false;
     if (stmt.declKind !== "const") return false;
     if (stmt.init === undefined) return false;
@@ -4711,7 +4700,7 @@ class Emitter {
   // (let, no initializer, non-scalar literal initializer, type-annotation
   // mismatch, etc.) — those fall through to the regular emitVarDecls path
   // inside main() body.
-  private tryHoistModuleConst(stmt: Stmt, sf: ts.SourceFile): string | undefined {
+  private tryHoistModuleConst(stmt: Stmt, sf: SourceModule): string | undefined {
     if (!this.canHoistModuleConst(stmt, sf)) return undefined;
     const d = stmt as VarDeclStmt;
     const lit = this.tryScalarLiteralInit(d.init!)!;
@@ -4878,7 +4867,7 @@ class Emitter {
     let type: TopazType;
     let initExpr: string;
     if (decl.type) {
-      type = this.typeFromAnnotation(decl.type, decl, g_currentSf!);
+      type = this.typeFromAnnotation(decl.type, decl, g_currentModule!);
       this.assertNotVoid(type, decl, "variable type");
       // emitWithExpected threads `type` through ArrayLiteral / NewExpression
       // context typing and applies class -> interface coercion when needed.
@@ -5156,7 +5145,7 @@ class Emitter {
     const elemType = arrayElem(rhsType)!;
 
     if (bindingType) {
-      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentSf!);
+      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentModule!);
       if (!typeEq(declared, elemType)) {
         throw new CodegenError(
           bindingType,
@@ -5241,7 +5230,7 @@ class Emitter {
     const pad = "  ".repeat(indent);
 
     if (bindSpec.kind === "single" && bindingType) {
-      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentSf!);
+      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentModule!);
       if (!typeEq(declared, bindSpec.type)) {
         const what =
           bindSpec.field === "value" ? "value" : (isMapType(containerType) ? "key" : "element");
@@ -5330,7 +5319,7 @@ class Emitter {
     const bindType = iterType.elem;
 
     if (bindingType) {
-      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentSf!);
+      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentModule!);
       if (!typeEq(declared, bindType)) {
         throw new CodegenError(
           bindingType,
@@ -6194,8 +6183,8 @@ class Emitter {
     if (name === "Map") {
       let mapType: TopazType;
       if (expr.typeArgs.length === 2) {
-        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
-        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentSf!);
+        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
+        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
         const t = mapOf(k, v);
         if (!t) {
           throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
@@ -6221,7 +6210,7 @@ class Emitter {
     if (name === "Set") {
       let setType: TopazType;
       if (expr.typeArgs.length === 1) {
-        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
+        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
         const t = setOf(elem);
         if (!t) {
           throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
@@ -6251,7 +6240,7 @@ class Emitter {
     // name and dispatches through the same path as concrete classes.
     let className = name;
     if (this.genericClasses.has(name)) {
-      const t = this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentSf!);
+      const t = this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentModule!);
       className = classNameOf(t)!;
     } else if (expr.typeArgs.length > 0) {
       if (this.classes.has(name)) {
@@ -6286,7 +6275,7 @@ class Emitter {
   // Phase 1.5-6e-2: core string-literal encoder. Takes the cooked JS string and
   // a Topaz anchor `{ pos }` for the non-ASCII error. Called for `str_lit`
   // values, `template_lit` heads, and each `template_sub.cookedAfter`.
-  private emitStringLiteralText(cooked: string, anchor: { pos: number } | ts.Node): string {
+  private emitStringLiteralText(cooked: string, anchor: { pos: number }): string {
     let escaped = '"';
     let byteLen = 0;
     for (let i = 0; i < cooked.length; i++) {
@@ -7837,7 +7826,7 @@ class Emitter {
     baseStr: string;
     accessType: TopazType;
     emitPresent: (tmp: string) => string;
-    anchor: ts.Node | { pos: number };
+    anchor: { pos: number };
   }): string {
     const id = this.tmpCounter++;
     const tmp = `__topaz_oc_${id}`;
@@ -8673,8 +8662,8 @@ class Emitter {
         if (expr.typeArgs.length !== 2) {
           throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
         }
-        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
-        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentSf!);
+        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
+        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
         const t = mapOf(k, v);
         if (!t) throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         this.recordMapMonomorph(t);
@@ -8684,14 +8673,14 @@ class Emitter {
         if (expr.typeArgs.length !== 1) {
           throw new CodegenError(expr, "Set<T> requires exactly one type argument");
         }
-        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentSf!);
+        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
         const t = setOf(elem);
         if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
         this.recordSetMonomorph(t);
         return t;
       }
       if (this.genericClasses.has(name)) {
-        return this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentSf!);
+        return this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentModule!);
       }
       if (this.classes.has(name)) {
         if (expr.typeArgs.length > 0) {
@@ -8707,7 +8696,7 @@ class Emitter {
     unsupported(expr, "expression");
   }
 
-  private checkAssignTarget(target: Expr, anchor: Expr | ts.Node | { pos: number }): void {
+  private checkAssignTarget(target: Expr, anchor: Expr | { pos: number }): void {
     if (target.kind === "ident") {
       const b = this.scope.lookup(target.name);
       if (!b) {
@@ -9094,7 +9083,7 @@ class Emitter {
     args: readonly Expr[],
     params: readonly ParamInfo[],
     label: string,
-    anchor: ts.Node | { pos: number },
+    anchor: { pos: number },
   ): string[] {
     const req = requiredParamCount(params);
     if (args.length < req || args.length > params.length) {
@@ -9116,7 +9105,7 @@ class Emitter {
     return out;
   }
 
-  private emitUndefinedLiteral(expected: TopazType, anchor: ts.Node | { pos: number }): string {
+  private emitUndefinedLiteral(expected: TopazType, anchor: { pos: number }): string {
     if (expected.kind === "undefined") {
       // Bare `undefined` target has no observable C representation; emit NULL
       // as a placeholder (the value is never read because nothing else can be
@@ -9156,7 +9145,7 @@ class Emitter {
     );
   }
 
-  private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: ts.Node | { pos: number }): string {
+  private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: { pos: number }): string {
     if (typeEq(actual, expected)) return raw;
     // Phase 1.5-3b: widening T -> `T | undefined`. For reference / interface
     // representations the C value is identical (a pointer or a fat pointer),
@@ -9254,7 +9243,7 @@ class Emitter {
   }
 }
 
-export function codegen(sourceFiles: ts.SourceFile | readonly ts.SourceFile[]): string {
-  const files = Array.isArray(sourceFiles) ? (sourceFiles as readonly ts.SourceFile[]) : [sourceFiles as ts.SourceFile];
+export function codegen(sourceFiles: SourceModule | readonly SourceModule[]): string {
+  const files = Array.isArray(sourceFiles) ? (sourceFiles as readonly SourceModule[]) : [sourceFiles as SourceModule];
   return new Emitter().emit(files);
 }

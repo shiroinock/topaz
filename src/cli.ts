@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { codegen } from "./codegen.js";
+import { convertFromTsc } from "./convert_from_tsc.js";
 import { tokenize, type Token } from "./lexer.js";
 import { loadModuleGraph } from "./loader.js";
 import { parseFile as topazParseFile } from "./topaz_parser.js";
@@ -74,7 +75,10 @@ function main(): void {
   mkdirSync(dirname(output), { recursive: true });
 
   const graph = loadModuleGraph(input);
-  const cSource = codegen(graph.files);
+  // Phase 1.5-6e-4: loader still returns tsc `SourceFile[]` (Topaz-ification is
+  // deferred to 6g); bridge each to a Topaz `SourceModule` here so codegen is
+  // entirely tsc-independent.
+  const cSource = codegen(graph.files.map((sf) => convertFromTsc(sf)));
   writeFileSync(cPath, cSource);
 
   if (parsed.values["emit-c-only"]) {
