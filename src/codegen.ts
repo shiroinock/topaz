@@ -1826,7 +1826,14 @@ class Emitter {
     const monomorphDefSlot = out.length;
     out.push("");
 
-    out.push("int main(void) {");
+    // Phase 1.5-6 prep #26: main takes argc/argv and stashes them so
+    // `process.argv` can read them. The params use the `__topaz_` reserved
+    // prefix (same namespace as internal temps) so a user variable named
+    // `argv` does not collide. The init call is unconditional (every program
+    // gets it) so the params are always used — no -Wunused-parameter under
+    // -Wextra even when the program never touches process.argv.
+    out.push("int main(int __topaz_argc, char **__topaz_argv) {");
+    out.push("  topaz_runtime_init_argv(__topaz_argc, __topaz_argv);");
     this.scope.push();
     for (const stmt of topLevel) {
       // Phase 1.5-6 prep #9: hoisted module consts are already emitted at
@@ -5588,6 +5595,24 @@ class Emitter {
     if (ts.isMetaProperty(expr)) {
       this.rejectBareMetaProperty(expr);
     }
+    // Phase 1.5-6 prep #26: `process.argv` -> Array<string>. The `process`
+    // identifier is synthetic (no real binding), so short-circuit before
+    // inferType(expr.expression) would trip on "unknown identifier". Other
+    // `process.<member>` value reads are rejected (exit / stdout / stderr are
+    // call-only).
+    if (
+      ts.isPropertyAccessExpression(expr) &&
+      ts.isIdentifier(expr.expression) &&
+      expr.expression.text === "process"
+    ) {
+      if (expr.name.text === "argv") {
+        return `topaz_process_argv()`;
+      }
+      throw new CodegenError(
+        expr,
+        `unsupported \`process.${expr.name.text}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
+      );
+    }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
       // Phase 1.5-3e: `dunion.kind` reads the discriminator string from the
@@ -6389,33 +6414,64 @@ class Emitter {
       ts.isPropertyAccessExpression(callee) &&
       ts.isIdentifier(callee.expression) &&
       callee.expression.text === "console" &&
-      callee.name.text === "log"
+      // Phase 1.5-6 prep #26: console.error shares console.log's one-argument
+      // scalar lowering, differing only in the runtime stream (stderr).
+      (callee.name.text === "log" || callee.name.text === "error")
     ) {
+      const method = callee.name.text;
       if (expr.arguments.length !== 1) {
-        throw new CodegenError(expr, "console.log expects exactly one argument");
+        throw new CodegenError(expr, `console.${method} expects exactly one argument`);
       }
       const arg = expr.arguments[0]!;
       const t = this.inferType(arg);
       if (t.kind === "undefined" || t.kind === "union") {
         throw new CodegenError(
           arg,
-          `console.log on ${typeIdent(t)} is unsupported (narrow it with \`if (x !== undefined)\` first)`,
+          `console.${method} on ${typeIdent(t)} is unsupported (narrow it with \`if (x !== undefined)\` first)`,
         );
       }
       if (t.kind === "unknown") {
         throw new CodegenError(
           arg,
-          "console.log on `unknown` is unsupported (narrow it with `if (x instanceof ClassName)` first)",
+          `console.${method} on \`unknown\` is unsupported (narrow it with \`if (x instanceof ClassName)\` first)`,
         );
       }
       if (isReferenceType(t) || isInterfaceType(t)) {
-        throw new CodegenError(arg, `console.log on ${typeIdent(t)} is unsupported`);
+        throw new CodegenError(arg, `console.${method} on ${typeIdent(t)} is unsupported`);
       }
+      const family = method === "log" ? "log" : "error";
       const fn =
-        t.kind === "boolean" ? "topaz_console_log_boolean"
-        : t.kind === "string" ? "topaz_console_log_string"
-        : "topaz_console_log_number";
+        t.kind === "boolean" ? `topaz_console_${family}_boolean`
+        : t.kind === "string" ? `topaz_console_${family}_string`
+        : `topaz_console_${family}_number`;
       return `${fn}(${this.emitExpression(arg)})`;
+    }
+
+    // Phase 1.5-6 prep #26: process.exit(code?) -> never. Lowered to the
+    // runtime exit wrapper; arity 0 defaults to 0 (Node's default code). The
+    // `process` identifier is synthetic (no real binding), same model as
+    // `console` above.
+    if (
+      ts.isPropertyAccessExpression(callee) &&
+      ts.isIdentifier(callee.expression) &&
+      callee.expression.text === "process" &&
+      callee.name.text === "exit"
+    ) {
+      return this.emitProcessExit(expr);
+    }
+
+    // Phase 1.5-6 prep #26: process.stdout.write(s) / process.stderr.write(s)
+    // -> void. Recognized syntactically (the `process.stdout` receiver is never
+    // evaluated as a value).
+    if (
+      ts.isPropertyAccessExpression(callee) &&
+      ts.isPropertyAccessExpression(callee.expression) &&
+      ts.isIdentifier(callee.expression.expression) &&
+      callee.expression.expression.text === "process" &&
+      (callee.expression.name.text === "stdout" || callee.expression.name.text === "stderr") &&
+      callee.name.text === "write"
+    ) {
+      return this.emitProcessStreamWrite(expr, callee.expression.name.text);
     }
 
     // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
@@ -7205,6 +7261,40 @@ class Emitter {
     return `topaz_url_file_url_to_path(${url})`;
   }
 
+  // Phase 1.5-6 prep #26: process.exit(code?). arity 0 -> exit(0) (Node's
+  // default), arity 1 -> the number code. More args or a non-number code are
+  // rejected. Returns `never`; value use is rejected in inferType.
+  private emitProcessExit(expr: ts.CallExpression): string {
+    if (expr.arguments.length === 0) {
+      return `topaz_process_exit(0)`;
+    }
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(expr, "process.exit expects at most one argument: (code?: number)");
+    }
+    const arg = expr.arguments[0]!;
+    const t = this.inferType(arg);
+    if (t.kind !== "number") {
+      throw new CodegenError(arg, `process.exit code must be number, got ${typeIdent(t)}`);
+    }
+    return `topaz_process_exit(${this.emitWithExpected(arg, T_NUMBER)})`;
+  }
+
+  // Phase 1.5-6 prep #26: process.{stdout,stderr}.write(s). Exactly one string
+  // argument; no trailing newline (unlike console.*). Returns void (Node
+  // returns a backpressure boolean — dropped here).
+  private emitProcessStreamWrite(expr: ts.CallExpression, stream: string): string {
+    if (expr.arguments.length !== 1) {
+      throw new CodegenError(expr, `process.${stream}.write expects exactly one argument: (s: string)`);
+    }
+    const arg = expr.arguments[0]!;
+    const t = this.inferType(arg);
+    if (t.kind !== "string") {
+      throw new CodegenError(arg, `process.${stream}.write argument must be string, got ${typeIdent(t)}`);
+    }
+    const fn = stream === "stdout" ? "topaz_stdout_write" : "topaz_stderr_write";
+    return `${fn}(${this.emitWithExpected(arg, T_STRING)})`;
+  }
+
   // Phase 1.5-6 prep #25: `import.meta.url` 受理パスの validation。Node の
   // `import.meta.X` 系で受け入れるのは `url` のみ(self-hosting で実際に踏むのは
   // `dirname(fileURLToPath(import.meta.url))` の 1 形のみ)。`new.target` を含む
@@ -7924,6 +8014,21 @@ class Emitter {
     if (ts.isMetaProperty(expr)) {
       this.rejectBareMetaProperty(expr);
     }
+    // Phase 1.5-6 prep #26: `process.argv` types as Array<string>. Short-circuit
+    // before inferType(expr.expression) would trip on the synthetic `process`.
+    if (
+      ts.isPropertyAccessExpression(expr) &&
+      ts.isIdentifier(expr.expression) &&
+      expr.expression.text === "process"
+    ) {
+      if (expr.name.text === "argv") {
+        return arrayOf(T_STRING)!;
+      }
+      throw new CodegenError(
+        expr,
+        `unsupported \`process.${expr.name.text}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
+      );
+    }
     if (ts.isPropertyAccessExpression(expr)) {
       const baseType = this.inferType(expr.expression);
       if (baseType.kind === "union") {
@@ -8284,9 +8389,29 @@ class Emitter {
         ts.isPropertyAccessExpression(callee) &&
         ts.isIdentifier(callee.expression) &&
         callee.expression.text === "console" &&
-        callee.name.text === "log"
+        (callee.name.text === "log" || callee.name.text === "error")
       ) {
-        throw new CodegenError(expr, "console.log returns void and cannot be used as a value");
+        throw new CodegenError(expr, `console.${callee.name.text} returns void and cannot be used as a value`);
+      }
+      // Phase 1.5-6 prep #26: process.exit returns `never`, process.*.write
+      // returns void — neither is usable as a value.
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === "process" &&
+        callee.name.text === "exit"
+      ) {
+        throw new CodegenError(expr, "process.exit returns `never` and cannot be used as a value");
+      }
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isPropertyAccessExpression(callee.expression) &&
+        ts.isIdentifier(callee.expression.expression) &&
+        callee.expression.expression.text === "process" &&
+        (callee.expression.name.text === "stdout" || callee.expression.name.text === "stderr") &&
+        callee.name.text === "write"
+      ) {
+        throw new CodegenError(expr, `process.${callee.expression.name.text}.write returns void and cannot be used as a value`);
       }
       // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
       // syntactically (mirrors emitCall) — the `String` identifier has no

@@ -130,6 +130,13 @@ static inline void topaz_console_log_string(topaz_string s) {
   putchar('\n');
 }
 
+// Phase 1.5-6 prep #26: console.error mirrors console.log but writes to stderr
+// (Node sends console.error to fd 2). Same `\n`-terminated, one-argument shape.
+static inline void topaz_console_error_string(topaz_string s) {
+  if (s.len) fwrite(s.data, 1, s.len, stderr);
+  putc('\n', stderr);
+}
+
 // JS `%` is IEEE-754 remainder with truncated quotient = fmod.
 // C's `%` is integer-only, so all topaz_number `%` lowers to this helper.
 static inline topaz_number topaz_fmod(topaz_number a, topaz_number b) {
@@ -672,6 +679,10 @@ static inline void topaz_console_log_boolean(topaz_boolean b) {
   fputs(b ? "true\n" : "false\n", stdout);
 }
 
+static inline void topaz_console_error_boolean(topaz_boolean b) {
+  fputs(b ? "true\n" : "false\n", stderr);
+}
+
 // Phase 1.5-3.5: boolean → string. Returns a `topaz_string` pointing into a
 // `static const` literal; no arena alloc, immutable byte string.
 static inline topaz_string topaz_boolean_to_string(topaz_boolean b) {
@@ -787,6 +798,12 @@ static inline void topaz_console_log_number(topaz_number n) {
   putchar('\n');
 }
 
+static inline void topaz_console_error_number(topaz_number n) {
+  topaz_string s = topaz_number_to_string(n);
+  if (s.len) fwrite(s.data, 1, s.len, stderr);
+  putc('\n', stderr);
+}
+
 // Phase 1.3: monomorphized growable arrays. Reference semantics — variables
 // hold `topaz_array_<elem> *` and share storage on assignment. Bounds-checked
 // with abort on violation. Arena-allocated; the old buffer left behind by
@@ -846,6 +863,47 @@ static inline elem_t topaz_array_##name##_set(                                  
 TOPAZ_ARRAY_DEFINE(number, topaz_number)
 TOPAZ_ARRAY_DEFINE(boolean, topaz_boolean)
 TOPAZ_ARRAY_DEFINE(string, topaz_string)
+
+// Phase 1.5-6 prep #26: process.argv / process.exit / process.{stdout,stderr}
+// .write. The generated `main` always calls topaz_runtime_init_argv so the
+// stored argc/argv back `process.argv`. DIVERGENCE from Node: Node's argv is
+// `[node, script, ...userArgs]`; a Topaz native binary has no separate script
+// layer, so argv is `[executablePath, ...userArgs]` — one fewer leading
+// element. Each `process.argv` read builds a *fresh* topaz_array_string (no
+// identity-stable singleton); the element bytes alias the OS argv strings,
+// which stay valid for the whole process, so no copy is made.
+static int topaz_argc_storage = 0;
+static char **topaz_argv_storage = NULL;
+
+static inline void topaz_runtime_init_argv(int argc, char **argv) {
+  topaz_argc_storage = argc;
+  topaz_argv_storage = argv;
+}
+
+static inline topaz_array_string *topaz_process_argv(void) {
+  topaz_array_string *a = topaz_array_string_new();
+  for (int i = 0; i < topaz_argc_storage; ++i) {
+    const char *s = topaz_argv_storage[i];
+    topaz_string elem = { s, strlen(s) };
+    topaz_array_string_push(a, elem);
+  }
+  return a;
+}
+
+// process.exit(code): truncate the IEEE-754 code to int (matching C `exit`),
+// then exit. Node coerces non-integers too; NaN/Inf collapse to 0 here.
+static inline void topaz_process_exit(topaz_number code) {
+  int c = (isnan(code) || isinf(code)) ? 0 : (int)code;
+  exit(c);
+}
+
+static inline void topaz_stdout_write(topaz_string s) {
+  if (s.len) fwrite(s.data, 1, s.len, stdout);
+}
+
+static inline void topaz_stderr_write(topaz_string s) {
+  if (s.len) fwrite(s.data, 1, s.len, stderr);
+}
 
 // Phase 1.5-6 prep #24: node:child_process.execFileSync(cmd, args,
 // { stdio: "inherit" }) -> void. fork + execvp + waitpid; stdio inherits the
