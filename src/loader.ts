@@ -1,44 +1,39 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import * as ts from "typescript";
 
-import { parseFile } from "./parser.js";
+import type { ImportDecl, ImportSpecifier, SourceModule } from "./ast.js";
+import { parseFile } from "./topaz_parser.js";
 
-// Phase 1.5-2: ES module 静的解決。CLI から root を渡され、`import` を DFS で
-// 辿って依存グラフを構築する。返り値は topological 順 (依存が先、root が最後)
-// の SourceFile 配列。codegen 側はこの配列を順に flatten するだけで済む。
-//
-// 設計上の制約 (CLAUDE.md / docs/archive/self-hosting-inventory.md §6):
-// - 相対パス (`./foo` / `../foo` / `./foo.js`) のみ受ける。`.js` 拡張子は `.ts`
-//   に解決する (TS のお作法どおり、source 側は `.js` で書く)。
-// - `node:*` / bare specifier / 絶対パスは parser 戦略 (1.5-6) 側に降ろすため
-//   ここで明示エラーにする。
-// - default import / namespace import / rename import は未対応。
-// - 循環依存はエラー。
+// Phase 1.5-6g-1: production loading now uses the native Topaz parser. The
+// loader still owns module-specifier validation, DFS order, and cycle errors;
+// codegen owns the non-root executable statement policy.
 export type ModuleGraph = {
   // topological 順。root が末尾。
-  files: ts.SourceFile[];
+  files: SourceModule[];
   // 絶対パス (resolve 済み) の Set。重複読込防止用。
   loaded: Set<string>;
 };
 
+type ImportSite = {
+  file: string;
+  module: SourceModule;
+  stmt: ImportDecl;
+};
+
 export function loadModuleGraph(rootPath: string): ModuleGraph {
   const root = resolve(rootPath);
-  const loaded = new Map<string, ts.SourceFile>();
-  const order: ts.SourceFile[] = [];
-  // DFS の path stack: 循環検出用。
+  const loaded = new Map<string, SourceModule>();
+  const order: SourceModule[] = [];
   const visiting = new Set<string>();
 
-  function visit(absPath: string, importedFrom: { file: string; spec: ts.StringLiteralLike } | null): void {
+  function visit(absPath: string, importedFrom: ImportSite | null): void {
     if (loaded.has(absPath)) return;
     if (visiting.has(absPath)) {
-      // 循環。importedFrom 側のソース位置を添えて落とす (root を含むため
-      // importedFrom は null になり得ない: visiting に入っている時点で別 module
-      // からの再帰呼び出しなので import 元が存在する)。
       const from = importedFrom!;
       throw new LoaderError(
         from.file,
-        from.spec,
+        from.module,
+        from.stmt.modulePathPos,
         `circular import detected: '${absPath}' is already being loaded`,
       );
     }
@@ -47,32 +42,30 @@ export function loadModuleGraph(rootPath: string): ModuleGraph {
       if (importedFrom) {
         throw new LoaderError(
           importedFrom.file,
-          importedFrom.spec,
-          `cannot resolve module '${importedFrom.spec.text}' (looked for '${absPath}')`,
+          importedFrom.module,
+          importedFrom.stmt.modulePathPos,
+          `cannot resolve module '${importedFrom.stmt.modulePath}' (looked for '${absPath}')`,
         );
       }
       throw new Error(`topaz: cannot resolve module '${absPath}'`);
     }
-    const sf = parseFile(absPath);
-    for (const stmt of sf.statements) {
-      if (!ts.isImportDeclaration(stmt)) continue;
-      const specNode = stmt.moduleSpecifier as ts.StringLiteralLike;
-      const specText = specNode.text;
-      // Phase 1.5-6 prep #13: `node:fs` は loader 側で「stdlib specifier」
-      // として受理し、visit を skip。named import の名前リスト validation だけ
-      // 別経路 (validateStdlibImport) で走らせて、codegen 側で個別の identifier
-      // を syntactic shortcut として処理する。
+    const mod = parseFile(absPath);
+    for (const item of mod.items) {
+      if (item.kind !== "module_decl") continue;
+      const decl = item.decl;
+      if (decl.kind !== "import_decl") continue;
+      const specText = decl.modulePath;
       if (isStdlibSpecifier(specText)) {
-        validateStdlibImport(absPath, stmt, specText);
+        validateStdlibImport(absPath, mod, decl, specText);
         continue;
       }
-      validateImport(absPath, stmt);
-      const target = resolveSpecifier(absPath, specNode, specText);
-      visit(target, { file: absPath, spec: specNode });
+      validateImport(absPath, mod, decl);
+      const target = resolveSpecifier(absPath, mod, decl, specText);
+      visit(target, { file: absPath, module: mod, stmt: decl });
     }
     visiting.delete(absPath);
-    loaded.set(absPath, sf);
-    order.push(sf);
+    loaded.set(absPath, mod);
+    order.push(mod);
   }
 
   visit(root, null);
@@ -80,54 +73,57 @@ export function loadModuleGraph(rootPath: string): ModuleGraph {
 }
 
 class LoaderError extends Error {
-  constructor(file: string, node: ts.Node, message: string) {
-    const sf = node.getSourceFile();
-    if (sf) {
-      const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-      super(`${file}:${line + 1}:${character + 1}: ${message}`);
-    } else {
-      super(`${file}: ${message}`);
-    }
+  constructor(file: string, module: SourceModule, pos: number, message: string) {
+    const loc = posToLineCol(module, pos);
+    super(`${file}:${loc.line}:${loc.col}: ${message}`);
   }
 }
 
-function validateImport(filePath: string, stmt: ts.ImportDeclaration): void {
-  // `import "./foo.js"` (side-effect-only) は OK、依存追加のみ。
-  if (!stmt.importClause) return;
-  const clause = stmt.importClause;
-  if (clause.isTypeOnly) {
-    throw new LoaderError(filePath, stmt, "`import type` is unsupported (Phase 1.5-2)");
+function posToLineCol(module: SourceModule, pos: number): { line: number; col: number } {
+  let lineIndex = 0;
+  for (let i = 0; i < module.lineStarts.length; i++) {
+    if (module.lineStarts[i]! > pos) break;
+    lineIndex = i;
   }
-  if (clause.name) {
+  return { line: lineIndex + 1, col: pos - module.lineStarts[lineIndex]! + 1 };
+}
+
+function validateImport(filePath: string, module: SourceModule, stmt: ImportDecl): void {
+  if (stmt.isTypeOnly) {
+    throw new LoaderError(filePath, module, stmt.pos, "`import type` is unsupported (Phase 1.5-2)");
+  }
+  if (stmt.defaultName !== undefined) {
     throw new LoaderError(
       filePath,
-      stmt,
+      module,
+      stmt.defaultNamePos,
       "default import (`import X from \"...\"`) is unsupported (Phase 1.5-2)",
     );
   }
-  const named = clause.namedBindings;
-  if (!named) return;
-  if (ts.isNamespaceImport(named)) {
+  if (stmt.namespaceName !== undefined) {
     throw new LoaderError(
       filePath,
-      stmt,
+      module,
+      stmt.namespaceNamePos,
       "namespace import (`import * as X from \"...\"`) is unsupported (Phase 1.5-2)",
     );
   }
-  if (!ts.isNamedImports(named)) {
-    throw new LoaderError(filePath, stmt, "unsupported import form");
+  for (const el of stmt.specifiers) {
+    validateImportSpecifier(filePath, module, el);
   }
-  for (const el of named.elements) {
-    if (el.isTypeOnly) {
-      throw new LoaderError(filePath, el, "`import type` is unsupported (Phase 1.5-2)");
-    }
-    if (el.propertyName) {
-      throw new LoaderError(
-        filePath,
-        el,
-        "import rename (`import { a as b }`) is unsupported (Phase 1.5-2)",
-      );
-    }
+}
+
+function validateImportSpecifier(filePath: string, module: SourceModule, el: ImportSpecifier): void {
+  if (el.isTypeOnly) {
+    throw new LoaderError(filePath, module, el.pos, "`import type` is unsupported (Phase 1.5-2)");
+  }
+  if (el.importedName !== el.localName) {
+    throw new LoaderError(
+      filePath,
+      module,
+      el.pos,
+      "import rename (`import { a as b }`) is unsupported (Phase 1.5-2)",
+    );
   }
 }
 
@@ -151,79 +147,65 @@ function isStdlibSpecifier(spec: string): boolean {
   return STDLIB_SPECIFIERS.has(spec);
 }
 
-function validateStdlibImport(filePath: string, stmt: ts.ImportDeclaration, spec: string): void {
+function validateStdlibImport(filePath: string, module: SourceModule, stmt: ImportDecl, spec: string): void {
   const allowed = STDLIB_SPECIFIERS.get(spec)!;
-  // side-effect-only `import "node:fs"` は意味が無いので明示エラー。
-  if (!stmt.importClause) {
+  if (stmt.specifiers.length === 0 && stmt.defaultName === undefined && stmt.namespaceName === undefined) {
     throw new LoaderError(
       filePath,
-      stmt,
+      module,
+      stmt.pos,
       `side-effect-only import of stdlib specifier '${spec}' is unsupported`,
     );
   }
-  const clause = stmt.importClause;
-  if (clause.isTypeOnly) {
-    throw new LoaderError(filePath, stmt, "`import type` is unsupported (Phase 1.5-2)");
+  if (stmt.isTypeOnly) {
+    throw new LoaderError(filePath, module, stmt.pos, "`import type` is unsupported (Phase 1.5-2)");
   }
-  if (clause.name) {
+  if (stmt.defaultName !== undefined) {
     throw new LoaderError(
       filePath,
-      stmt,
+      module,
+      stmt.defaultNamePos,
       `default import from stdlib specifier '${spec}' is unsupported`,
     );
   }
-  const named = clause.namedBindings;
-  if (!named) {
-    throw new LoaderError(filePath, stmt, `stdlib import from '${spec}' requires named bindings`);
-  }
-  if (ts.isNamespaceImport(named)) {
+  if (stmt.namespaceName !== undefined) {
     throw new LoaderError(
       filePath,
-      stmt,
+      module,
+      stmt.namespaceNamePos,
       `namespace import of stdlib specifier '${spec}' is unsupported`,
     );
   }
-  if (!ts.isNamedImports(named)) {
-    throw new LoaderError(filePath, stmt, "unsupported import form");
+  if (stmt.specifiers.length === 0) {
+    throw new LoaderError(filePath, module, stmt.pos, `stdlib import from '${spec}' requires named bindings`);
   }
-  for (const el of named.elements) {
-    if (el.isTypeOnly) {
-      throw new LoaderError(filePath, el, "`import type` is unsupported (Phase 1.5-2)");
-    }
-    if (el.propertyName) {
+  for (const el of stmt.specifiers) {
+    validateImportSpecifier(filePath, module, el);
+    if (!allowed.has(el.importedName)) {
       throw new LoaderError(
         filePath,
-        el,
-        "import rename (`import { a as b }`) is unsupported (Phase 1.5-2)",
-      );
-    }
-    if (!allowed.has(el.name.text)) {
-      throw new LoaderError(
-        filePath,
-        el,
-        `unsupported named import '${el.name.text}' from stdlib specifier '${spec}' (allowed: ${Array.from(allowed).join(", ")})`,
+        module,
+        el.pos,
+        `unsupported named import '${el.importedName}' from stdlib specifier '${spec}' (allowed: ${Array.from(allowed).join(", ")})`,
       );
     }
   }
 }
 
-function resolveSpecifier(fromFile: string, node: ts.StringLiteralLike, spec: string): string {
-  // 受け入れるのは相対パスのみ。`node:*` / npm bare / 絶対パスは明示エラー。
-  // node:* は parser 戦略 (1.5-6) と地続きなのでここでは降ろさない。
+function resolveSpecifier(fromFile: string, module: SourceModule, stmt: ImportDecl, spec: string): string {
   if (!spec.startsWith("./") && !spec.startsWith("../")) {
     throw new LoaderError(
       fromFile,
-      node,
+      module,
+      stmt.modulePathPos,
       `non-relative module specifier '${spec}' is unsupported (only './foo' / '../foo' allowed in Phase 1.5-2)`,
     );
   }
   const fromDir = dirname(fromFile);
-  // `.js` 拡張子で書かれていたら `.ts` に置き換える (TS の慣習)。
   let candidate: string;
   if (spec.endsWith(".js")) {
     candidate = resolve(fromDir, spec.slice(0, -3) + ".ts");
   } else if (spec.endsWith(".ts")) {
-    // `.ts` 直書きも受ける (loader 内部で正規化しておく)。
     candidate = resolve(fromDir, spec);
   } else {
     candidate = resolve(fromDir, spec + ".ts");

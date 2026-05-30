@@ -622,6 +622,8 @@ export type TypeAliasDecl = {
 
 export type ImportSpecifier = {
   importedName: string;
+  localName: string;
+  isTypeOnly: boolean;
   pos: number;
   end: number;
 };
@@ -630,6 +632,13 @@ export type ImportDecl = {
   kind: "import_decl";
   specifiers: Array<ImportSpecifier>;
   modulePath: string;
+  modulePathPos: number;
+  modulePathEnd: number;
+  isTypeOnly: boolean;
+  defaultName: string | undefined;
+  defaultNamePos: number;
+  namespaceName: string | undefined;
+  namespaceNamePos: number;
   pos: number;
   end: number;
 };

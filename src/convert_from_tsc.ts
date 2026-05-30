@@ -209,32 +209,50 @@ class Converter {
       throw this.err(moduleSpec, "import module specifier must be a string literal");
     }
     const specifiers: ImportSpecifier[] = [];
+    let defaultName: string | undefined = undefined;
+    let defaultNamePos: number = -1;
+    let namespaceName: string | undefined = undefined;
+    let namespaceNamePos: number = -1;
+    let isTypeOnly: boolean = false;
     if (stmt.importClause) {
       const clause = stmt.importClause;
-      if (clause.isTypeOnly) throw this.err(stmt, "`import type` is unsupported");
-      if (clause.name) throw this.err(stmt, "default import is unsupported");
+      isTypeOnly = clause.isTypeOnly;
+      if (clause.name) {
+        defaultName = clause.name.text;
+        defaultNamePos = clause.name.getStart(this.sf);
+      }
       const named = clause.namedBindings;
       if (named) {
         if (ts.isNamespaceImport(named)) {
-          throw this.err(named, "namespace import is unsupported");
-        }
-        if (!ts.isNamedImports(named)) {
+          namespaceName = named.name.text;
+          namespaceNamePos = named.name.getStart(this.sf);
+        } else if (ts.isNamedImports(named)) {
+          for (const el of named.elements) {
+            const importedName = el.propertyName ? el.propertyName.text : el.name.text;
+            specifiers.push({
+              importedName,
+              localName: el.name.text,
+              isTypeOnly: el.isTypeOnly,
+              ...this.span(el),
+            });
+          }
+        } else {
           throw this.err(named, "unsupported import form");
-        }
-        for (const el of named.elements) {
-          if (el.isTypeOnly) throw this.err(el, "`import type` specifier is unsupported");
-          if (el.propertyName) throw this.err(el, "import rename is unsupported");
-          specifiers.push({
-            importedName: el.name.text,
-            ...this.span(el),
-          });
         }
       }
     }
+    const specSpan = this.span(moduleSpec);
     return {
       kind: "import_decl",
       specifiers,
       modulePath: moduleSpec.text,
+      modulePathPos: specSpan.pos,
+      modulePathEnd: specSpan.end,
+      isTypeOnly,
+      defaultName,
+      defaultNamePos,
+      namespaceName,
+      namespaceNamePos,
       ...this.span(stmt),
     };
   }

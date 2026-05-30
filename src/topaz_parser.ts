@@ -229,14 +229,106 @@ export class Parser {
   parseImportDecl(): Decl {
     const start: Token = this.expectKeyword("import");
     const specifiers: Array<ImportSpecifier> = [];
+    let isTypeOnly: boolean = false;
+    let defaultName: string | undefined = undefined;
+    let defaultNamePos: number = -1;
+    let namespaceName: string | undefined = undefined;
+    let namespaceNamePos: number = -1;
+    const afterImport: Token = this.current();
+    if (afterImport.kind === "string") {
+      const sidePath = afterImport;
+      this.pos += 1;
+      this.matchPunct(";");
+      return {
+        kind: "import_decl",
+        specifiers: specifiers,
+        modulePath: sidePath.value,
+        modulePathPos: sidePath.pos,
+        modulePathEnd: sidePath.end,
+        isTypeOnly: isTypeOnly,
+        defaultName: defaultName,
+        defaultNamePos: defaultNamePos,
+        namespaceName: namespaceName,
+        namespaceNamePos: namespaceNamePos,
+        pos: start.pos,
+        end: sidePath.end,
+      };
+    }
+    if (this.matchKeyword("type")) {
+      isTypeOnly = true;
+    }
     if (this.matchPunct("{")) {
       while (!this.matchPunct("}")) {
         this.skipNewlines();
-        const name: Token = this.expectIdent();
-        specifiers.push({ importedName: name.text, pos: name.pos, end: name.end });
+        let specIsTypeOnly: boolean = false;
+        let specStart: number = this.current().pos;
+        if (this.matchKeyword("type")) {
+          specIsTypeOnly = true;
+        }
+        const imported: Token = this.expectIdent();
+        let localName: string = imported.text;
+        let specEnd: number = imported.end;
+        if (this.matchKeyword("as")) {
+          const local: Token = this.expectIdent();
+          localName = local.text;
+          specEnd = local.end;
+        }
+        specifiers.push({
+          importedName: imported.text,
+          localName: localName,
+          isTypeOnly: specIsTypeOnly,
+          pos: specStart,
+          end: specEnd,
+        });
         if (!this.matchPunct(",")) {
           this.expectPunct("}");
           break;
+        }
+      }
+    } else if (this.matchPunct("*")) {
+      this.expectKeyword("as");
+      const ns: Token = this.expectIdent();
+      namespaceName = ns.text;
+      namespaceNamePos = ns.pos;
+    } else {
+      const def: Token = this.expectIdent();
+      defaultName = def.text;
+      defaultNamePos = def.pos;
+      if (this.matchPunct(",")) {
+        if (this.matchPunct("*")) {
+          this.expectKeyword("as");
+          const ns: Token = this.expectIdent();
+          namespaceName = ns.text;
+          namespaceNamePos = ns.pos;
+        } else {
+          this.expectPunct("{");
+          while (!this.matchPunct("}")) {
+            this.skipNewlines();
+            let specIsTypeOnly: boolean = false;
+            let specStart: number = this.current().pos;
+            if (this.matchKeyword("type")) {
+              specIsTypeOnly = true;
+            }
+            const imported: Token = this.expectIdent();
+            let localName: string = imported.text;
+            let specEnd: number = imported.end;
+            if (this.matchKeyword("as")) {
+              const local: Token = this.expectIdent();
+              localName = local.text;
+              specEnd = local.end;
+            }
+            specifiers.push({
+              importedName: imported.text,
+              localName: localName,
+              isTypeOnly: specIsTypeOnly,
+              pos: specStart,
+              end: specEnd,
+            });
+            if (!this.matchPunct(",")) {
+              this.expectPunct("}");
+              break;
+            }
+          }
         }
       }
     }
@@ -251,6 +343,13 @@ export class Parser {
       kind: "import_decl",
       specifiers: specifiers,
       modulePath: path.value,
+      modulePathPos: path.pos,
+      modulePathEnd: path.end,
+      isTypeOnly: isTypeOnly,
+      defaultName: defaultName,
+      defaultNamePos: defaultNamePos,
+      namespaceName: namespaceName,
+      namespaceNamePos: namespaceNamePos,
       pos: start.pos,
       end: path.end,
     };
@@ -586,7 +685,7 @@ export class Parser {
             throw new ParseError(
               this.file,
               afterT.pos,
-              "property rename in object destructuring is unsupported",
+              "property rename / nested pattern in object destructuring is unsupported",
             );
           }
           if (afterT.kind === "punct" && afterT.op === "=") {
@@ -606,6 +705,13 @@ export class Parser {
           this.expectPunct("}");
           break;
         }
+      }
+      if (this.isPunct(this.current(), ":")) {
+        throw new ParseError(
+          this.file,
+          this.current().pos,
+          "type annotation on object destructuring pattern is unsupported",
+        );
       }
       this.expectPunct("=");
       const init: Expr = this.parseAssign();
@@ -1497,6 +1603,11 @@ export class Parser {
         this.pos += 1;
         const value: Expr = this.parseAssign();
         props.push({ kind: "prop_kv", name: name, value: value, pos: nameStart, end: value.end });
+      } else if (after.kind === "punct" && after.op === "(") {
+        throw this.error(
+          after,
+          "object literal only supports `name: value` and `name` shorthand properties (no method shorthand, getter / setter, spread)",
+        );
       } else {
         // shorthand: `{ a, b }` — `a` desugars to `a: a`.
         props.push({ kind: "prop_shorthand", name: name, pos: nameStart, end: nameEnd });

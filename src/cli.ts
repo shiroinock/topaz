@@ -6,10 +6,9 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { codegen } from "./codegen.js";
-import { convertFromTsc } from "./convert_from_tsc.js";
-import { tokenize, type Token } from "./lexer.js";
+import { computeLineStarts, LexError, tokenize, type Token } from "./lexer.js";
 import { loadModuleGraph } from "./loader.js";
-import { parseFile as topazParseFile } from "./topaz_parser.js";
+import { ParseError, parseFile as topazParseFile } from "./topaz_parser.js";
 
 const USAGE = `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
 
@@ -75,10 +74,9 @@ function main(): void {
   mkdirSync(dirname(output), { recursive: true });
 
   const graph = loadModuleGraph(input);
-  // Phase 1.5-6e-4: loader still returns tsc `SourceFile[]` (Topaz-ification is
-  // deferred to 6g); bridge each to a Topaz `SourceModule` here so codegen is
-  // entirely tsc-independent.
-  const cSource = codegen(graph.files.map((sf) => convertFromTsc(sf)));
+  // Phase 1.5-6g-1: loader returns Topaz `SourceModule[]`; normal compile no
+  // longer uses the tsc bridge.
+  const cSource = codegen(graph.files);
   writeFileSync(cPath, cSource);
 
   if (parsed.values["emit-c-only"]) {
@@ -123,9 +121,22 @@ function formatToken(t: Token): string {
   }
 }
 
+function formatSourceError(file: string, pos: number, message: string): string {
+  const source = readFileSync(file, "utf8");
+  const lineStarts = computeLineStarts(source);
+  let lineIndex = 0;
+  for (let i = 0; i < lineStarts.length; i++) {
+    if (lineStarts[i]! > pos) break;
+    lineIndex = i;
+  }
+  return `${file}:${lineIndex + 1}:${pos - lineStarts[lineIndex]! + 1}: ${message}`;
+}
+
 try {
   main();
 } catch (err) {
+  if (err instanceof ParseError) die(formatSourceError(err.file, err.pos, err.message));
+  if (err instanceof LexError) die(formatSourceError(err.file, err.pos, err.message));
   if (err instanceof Error) die(err.message);
   throw err;
 }
