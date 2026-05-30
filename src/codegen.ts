@@ -6484,6 +6484,12 @@ class Emitter {
       if (callee.text === "extname") {
         return this.emitNodePathExtname(expr);
       }
+      // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic + posix
+      // normalize。resolve と同じ variadic lowering で `topaz_path_join(n,
+      // seg0, seg1, ...)` に降ろす。
+      if (callee.text === "join") {
+        return this.emitNodePathJoin(expr);
+      }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
       // call site — `let f = parseInt;` still falls to "unknown identifier".
@@ -7201,6 +7207,32 @@ class Emitter {
     this.checkNodePathExtnameArgs(expr);
     const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     return `topaz_path_extname(${path})`;
+  }
+
+  // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic、引数 0 個も
+  // Node が `.` を返す仕様なので arity の下限は無し。全引数 string を要求し、
+  // resolve と同じく `topaz_path_join(n, seg0, seg1, ...)` に lower する。
+  private checkNodePathJoinArgs(expr: ts.CallExpression): void {
+    for (const arg of expr.arguments) {
+      const argType = this.inferType(arg);
+      if (argType.kind !== "string") {
+        throw new CodegenError(
+          arg,
+          `join segment argument must be string, got ${typeIdent(argType)}`,
+        );
+      }
+    }
+  }
+
+  private emitNodePathJoin(expr: ts.CallExpression): string {
+    this.checkNodePathJoinArgs(expr);
+    const segs = expr.arguments
+      .map((a) => this.emitWithExpected(a, T_STRING))
+      .join(", ");
+    if (expr.arguments.length === 0) {
+      return `topaz_path_join(0)`;
+    }
+    return `topaz_path_join(${expr.arguments.length}, ${segs})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
@@ -8318,6 +8350,11 @@ class Emitter {
         // Phase 1.5-6 prep #22: node:path.extname types as string.
         if (callee.text === "extname") {
           this.checkNodePathExtnameArgs(expr);
+          return T_STRING;
+        }
+        // Phase 1.5-6 prep #23: node:path.join types as string.
+        if (callee.text === "join") {
+          this.checkNodePathJoinArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.

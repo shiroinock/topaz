@@ -570,6 +570,69 @@ static inline topaz_string topaz_path_extname(topaz_string p) {
   return r;
 }
 
+// Phase 1.5-6 prep #23: node:path.join(...segments) — concatenate non-empty
+// segments with "/" then run posix.normalize. Mirrors Node's path.posix.join:
+// zero args / all-empty args yield ".", a leading "/" is preserved, a trailing
+// "/" is preserved when the normalized middle is non-empty, "/" alone collapses
+// to "/", and a relative join of only "..." segments keeps leading ".." via
+// allow_above_root. Variadic args are topaz_string passed through varargs.
+static inline topaz_string topaz_path_join(int n, ...) {
+  if (n == 0) { topaz_string dot = { ".", 1 }; return dot; }
+
+  topaz_string *args =
+      (topaz_string *)topaz_arena_alloc(sizeof(topaz_string) * n);
+  va_list ap;
+  va_start(ap, n);
+  for (int i = 0; i < n; ++i) args[i] = va_arg(ap, topaz_string);
+  va_end(ap);
+
+  size_t total = 0;
+  int nonempty = 0;
+  for (int i = 0; i < n; ++i) {
+    if (args[i].len > 0) {
+      if (nonempty > 0) total += 1; // "/" separator
+      total += args[i].len;
+      ++nonempty;
+    }
+  }
+  if (nonempty == 0) { topaz_string dot = { ".", 1 }; return dot; }
+
+  char *joined = (char *)topaz_arena_alloc(total + 1);
+  size_t pos = 0;
+  bool first = true;
+  for (int i = 0; i < n; ++i) {
+    if (args[i].len == 0) continue;
+    if (!first) joined[pos++] = '/';
+    memcpy(joined + pos, args[i].data, args[i].len);
+    pos += args[i].len;
+    first = false;
+  }
+  joined[pos] = '\0';
+
+  bool absolute = pos > 0 && joined[0] == '/';
+  bool trailing = pos > 0 && joined[pos - 1] == '/';
+
+  topaz_string norm = topaz_path_normalize_string(joined, pos, !absolute);
+
+  if (norm.len == 0) {
+    if (absolute) { topaz_string r = { "/", 1 }; return r; }
+    if (trailing) { topaz_string r = { "./", 2 }; return r; }
+    topaz_string dot = { ".", 1 };
+    return dot;
+  }
+
+  size_t out_len = norm.len + (absolute ? 1u : 0u) + (trailing ? 1u : 0u);
+  char *out = (char *)topaz_arena_alloc(out_len + 1);
+  size_t op = 0;
+  if (absolute) out[op++] = '/';
+  memcpy(out + op, norm.data, norm.len);
+  op += norm.len;
+  if (trailing) out[op++] = '/';
+  out[op] = '\0';
+  topaz_string r = { out, out_len };
+  return r;
+}
+
 // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s) for the
 // self-hosted number-literal parser. The codegen requires an explicit radix
 // for parseInt (1-arg auto-radix is a footgun, unused in src/). Both copy into

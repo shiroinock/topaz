@@ -343,7 +343,7 @@ run_fail_case node_path_dirname_type_fail examples/node_path_dirname_type_fail.t
 run_fail_case node_path_resolve_arity_fail examples/node_path_resolve_arity_fail.ts "resolve expects at least one argument"
 run_fail_case node_path_resolve_type_fail examples/node_path_resolve_type_fail.ts "resolve segment argument must be string"
 run_fail_case node_path_as_value_fail examples/node_path_as_value_fail.ts "unknown identifier 'resolve'"
-run_fail_case node_path_unknown_named_import_fail examples/node_path_unknown_named_import_fail.ts "unsupported named import 'join'"
+run_fail_case node_path_unknown_named_import_fail examples/node_path_unknown_named_import_fail.ts "unsupported named import 'relative'"
 
 run_case node_path_basename $'baz.ts\nbar\nbar\nfoo\nfoo\n\ntrue\nbaz\nfoo\nmain\nbar.ts\ntrue\nindex'
 run_fail_case node_path_basename_arity_fail examples/node_path_basename_arity_fail.ts "basename expects one or two arguments"
@@ -355,6 +355,10 @@ run_case node_path_extname $'.html\n.md\n.\ntrue\ntrue\n.md\n.ts\ntrue\n.gz\ntru
 run_fail_case node_path_extname_arity_fail examples/node_path_extname_arity_fail.ts "extname expects exactly one argument"
 run_fail_case node_path_extname_type_fail examples/node_path_extname_type_fail.ts "extname path argument must be string"
 run_fail_case node_path_extname_as_value_fail examples/node_path_extname_as_value_fail.ts "unknown identifier 'extname'"
+
+run_case node_path_join $'.\n.\nfoo/bar\n/foo/bar\n/bar\n../b\na/b/c/\na\n/\n.\n..\n/a/b/c\nfoo/bar\n/pkg/src/index'
+run_fail_case node_path_join_type_fail examples/node_path_join_type_fail.ts "join segment argument must be string"
+run_fail_case node_path_join_as_value_fail examples/node_path_join_as_value_fail.ts "unknown identifier 'join'"
 
 run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
 run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"
