@@ -130,6 +130,7 @@ export type Expr =
   | NullLitExpr
   | UndefinedLitExpr
   | ThisExpr
+  | ImportMetaUrlExpr
   | TemplateLitExpr
   | ArrayLitExpr
   | ObjectLitExpr
@@ -156,6 +157,10 @@ export type BoolLitExpr = { kind: "bool_lit"; value: boolean; pos: number; end: 
 export type NullLitExpr = { kind: "null_lit"; pos: number; end: number };
 export type UndefinedLitExpr = { kind: "undefined_lit"; pos: number; end: number };
 export type ThisExpr = { kind: "this_expr"; pos: number; end: number };
+// `import.meta.url` のみを表す leaf。codegen は他の MetaProperty 形
+// (bare `import.meta` / 他 property / `new.target`) を全 reject するので
+// 汎用 MetaProperty ノードは過剰。最小忠実表現として専用 leaf を持つ。
+export type ImportMetaUrlExpr = { kind: "import_meta_url"; pos: number; end: number };
 
 export type TemplateLitExpr = {
   kind: "template_lit";

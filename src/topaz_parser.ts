@@ -1341,6 +1341,9 @@ export class Parser {
       if (t.word === "new") {
         return this.parseNewExpr();
       }
+      if (t.word === "import") {
+        return this.parseImportMetaUrl();
+      }
     }
     if (this.isPunct(t, "(")) {
       // arrow function detection lookahead — handle simple `() => ...`
@@ -1365,6 +1368,36 @@ export class Parser {
       return { kind: "spread_expr", operand: operand, pos: t.pos, end: operand.end };
     }
     throw this.error(t, "expected expression");
+  }
+
+  // `import.meta.url` のみ受理(codegen `checkImportMetaUrl` /
+  // `rejectBareMetaProperty` と同一の受理 / reject 条件)。式位置のみ。
+  // import 宣言(statement 位置)は parseModuleItem が先に拾う。
+  parseImportMetaUrl(): Expr {
+    const start: KeywordToken = this.expectKeyword("import");
+    this.expectPunct(".");
+    const meta: { text: string; pos: number; end: number } = this.expectMemberName();
+    if (meta.text !== "meta") {
+      throw this.error(
+        this.current(),
+        `unsupported \`import.${meta.text}\` (only \`import.meta.url\` is accepted)`,
+      );
+    }
+    if (!this.isPunct(this.current(), ".")) {
+      throw this.error(
+        this.current(),
+        "bare `import.meta` is unsupported (only `import.meta.url` is accepted)",
+      );
+    }
+    this.expectPunct(".");
+    const prop: { text: string; pos: number; end: number } = this.expectMemberName();
+    if (prop.text !== "url") {
+      throw this.error(
+        this.current(),
+        `unsupported \`import.meta.${prop.text}\` (only \`import.meta.url\` is accepted)`,
+      );
+    }
+    return { kind: "import_meta_url", pos: start.pos, end: prop.end };
   }
 
   parseTemplateLit(): Expr {

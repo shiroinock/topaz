@@ -67,6 +67,7 @@ import type {
   NullLitExpr,
   UndefinedLitExpr,
   ThisExpr,
+  ImportMetaUrlExpr,
   TemplateLitExpr,
   TemplateSub,
   ArrayLitExpr,
@@ -869,6 +870,16 @@ class Converter {
     }
     if (ts.isCallExpression(e)) return this.convertCall(e);
     if (ts.isNewExpression(e)) return this.convertNew(e);
+    // `import.meta.url` は PropertyAccess(expression = MetaProperty `import.meta`)。
+    // codegen `checkImportMetaUrl` / `rejectBareMetaProperty` と同一条件で受理 /
+    // reject する(`.url` のみ accept、他 `import.meta.<X>` / bare `import.meta` /
+    // `new.target` は reject)。convertPropAccess の前で拾う。
+    if (ts.isPropertyAccessExpression(e) && ts.isMetaProperty(e.expression)) {
+      return this.convertImportMetaUrl(e);
+    }
+    if (ts.isMetaProperty(e)) {
+      this.rejectBareMetaProperty(e);
+    }
     if (ts.isPropertyAccessExpression(e)) return this.convertPropAccess(e);
     if (ts.isElementAccessExpression(e)) return this.convertElemAccess(e);
     if (ts.isPrefixUnaryExpression(e)) return this.convertPrefixOp(e);
@@ -903,6 +914,39 @@ class Converter {
       return t;
     }
     throw this.err(e, `unsupported expression ${ts.SyntaxKind[e.kind]}`);
+  }
+
+  convertImportMetaUrl(e: ts.PropertyAccessExpression): ImportMetaUrlExpr {
+    const meta = e.expression as ts.MetaProperty;
+    if (meta.keywordToken !== ts.SyntaxKind.ImportKeyword) {
+      throw this.err(
+        e,
+        "unsupported meta property (only `import.meta.url` is accepted)",
+      );
+    }
+    if (meta.name.text !== "meta") {
+      throw this.err(
+        e,
+        `unsupported \`import.${meta.name.text}\` (only \`import.meta.url\` is accepted)`,
+      );
+    }
+    if (e.name.text !== "url") {
+      throw this.err(
+        e,
+        `unsupported \`import.meta.${e.name.text}\` (only \`import.meta.url\` is accepted)`,
+      );
+    }
+    return { kind: "import_meta_url", ...this.span(e) };
+  }
+
+  rejectBareMetaProperty(e: ts.MetaProperty): never {
+    if (e.keywordToken === ts.SyntaxKind.NewKeyword) {
+      throw this.err(e, "`new.target` is unsupported");
+    }
+    throw this.err(
+      e,
+      "bare `import.meta` is unsupported (only `import.meta.url` is accepted)",
+    );
   }
 
   convertIdent(e: ts.Identifier): IdentExpr | UndefinedLitExpr {
