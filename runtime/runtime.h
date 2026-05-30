@@ -115,6 +115,16 @@ static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
   return memcmp(a.data, b.data, a.len) == 0;
 }
 
+static inline topaz_boolean topaz_string_starts_with(topaz_string s, topaz_string search) {
+  if (search.len > s.len) return false;
+  return memcmp(s.data, search.data, search.len) == 0;
+}
+
+static inline topaz_boolean topaz_string_ends_with(topaz_string s, topaz_string search) {
+  if (search.len > s.len) return false;
+  return memcmp(s.data + (s.len - search.len), search.data, search.len) == 0;
+}
+
 // Phase 1.5-6 prep #10: ASCII-only String.prototype.charCodeAt. JS spec
 // integer-truncates the index and returns NaN for out-of-range / NaN input.
 // Negative indices return NaN (no JS-style wrap-around — they treat as OOB).

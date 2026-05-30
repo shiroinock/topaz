@@ -286,6 +286,11 @@ run_fail_case string_char_code_at_arity_fail examples/string_char_code_at_arity_
 run_fail_case string_char_code_at_arg_type_fail examples/string_char_code_at_arg_type_fail.ts "String.charCodeAt argument must be number"
 run_fail_case string_slice_arg_type_fail examples/string_slice_arg_type_fail.ts "String.slice argument must be number"
 run_fail_case string_slice_too_many_args_fail examples/string_slice_too_many_args_fail.ts "String.slice expects at most two arguments"
+run_case string_starts_ends_with $'true\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nrelative\nrelative\nbare\nmodule\nmodule\nother'
+run_fail_case string_starts_with_arity_fail examples/string_starts_with_arity_fail.ts "String.startsWith expects exactly one argument"
+run_fail_case string_starts_with_arg_type_fail examples/string_starts_with_arg_type_fail.ts "String.startsWith argument must be string, got topaz_number"
+run_fail_case string_ends_with_arity_fail examples/string_ends_with_arity_fail.ts "String.endsWith expects exactly one argument"
+run_fail_case string_ends_with_arg_type_fail examples/string_ends_with_arg_type_fail.ts "String.endsWith argument must be string, got topaz_number"
 run_fail_case string_unsupported_method_fail examples/string_unsupported_method_fail.ts "unsupported method '.indexOf' on topaz_string"
 
 run_case string_from_char_code $'A\na\n0\nz\nB\n1\n72\nHello\n5\nA\nz\nmark=!\n1\n1\n127\nA\nA\nD\nZ\nabcde'

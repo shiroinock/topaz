@@ -6931,10 +6931,10 @@ class Emitter {
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
-  // Phase 1.5-6 prep #10: String.prototype.charCodeAt / .slice. Arguments
-  // are number-EXACT (no number-literal-via-string coercion), and missing
-  // slice args lower to `(double)NAN` so topaz_slice_normalize picks the
-  // default. charCodeAt requires exactly one argument; slice accepts 0..2.
+  // Phase 1.5-6 prep #10/#6f: String.prototype.charCodeAt / .slice /
+  // .startsWith / .endsWith. Arguments are exact Topaz types (no JS coercion).
+  // Missing slice args lower to `(double)NAN` so topaz_slice_normalize picks
+  // the default. startsWith / endsWith intentionally accept only search.
   private emitStringMethodCall(
     expr: CallExpr,
     callee: PropAccessExpr,
@@ -6975,6 +6975,20 @@ class Emitter {
         ? `(double)(${this.emitWithExpected(expr.args[1]!, T_NUMBER)})`
         : "(double)NAN";
       return `topaz_string_slice(${base}, ${startExpr}, ${endExpr})`;
+    }
+    if (method === "startsWith" || method === "endsWith") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError(expr, `String.${method} expects exactly one argument`);
+      }
+      const argType = this.inferType(expr.args[0]!);
+      if (argType.kind !== "string") {
+        throw new CodegenError(
+          expr.args[0]!,
+          `String.${method} argument must be string, got ${typeIdent(argType)}`,
+        );
+      }
+      const search = this.emitWithExpected(expr.args[0]!, T_STRING);
+      return `topaz_string_${method === "startsWith" ? "starts_with" : "ends_with"}(${base}, ${search})`;
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on topaz_string`);
   }
@@ -7553,6 +7567,19 @@ class Emitter {
         }
       }
       return T_STRING;
+    }
+    if (method === "startsWith" || method === "endsWith") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError(expr, `String.${method} expects exactly one argument`);
+      }
+      const argType = this.inferType(expr.args[0]!);
+      if (argType.kind !== "string") {
+        throw new CodegenError(
+          expr.args[0]!,
+          `String.${method} argument must be string, got ${typeIdent(argType)}`,
+        );
+      }
+      return T_BOOLEAN;
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on topaz_string`);
   }
