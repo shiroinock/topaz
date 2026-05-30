@@ -309,7 +309,7 @@ run_fail_case node_fs_read_file_path_type_fail examples/node_fs_read_file_path_t
 run_fail_case node_fs_read_file_encoding_not_literal_fail examples/node_fs_read_file_encoding_not_literal_fail.ts "encoding argument must be the string literal"
 run_fail_case node_fs_read_file_unknown_encoding_fail examples/node_fs_read_file_unknown_encoding_fail.ts "encoding argument must be \"utf8\""
 run_fail_case node_fs_read_file_as_value_fail examples/node_fs_read_file_as_value_fail.ts "unknown identifier 'readFileSync'"
-run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'writeFileSync'"
+run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'mkdirSync'"
 run_fail_case node_fs_namespace_import_fail examples/node_fs_namespace_import_fail.ts "namespace import of stdlib specifier 'node:fs'"
 run_fail_case node_fs_rename_import_fail examples/node_fs_rename_import_fail.ts "import rename"
 
@@ -317,6 +317,12 @@ run_case node_fs_exists $'true\nfalse\ntrue\nfound\ntrue\nfalse\ntrue\ntrue'
 run_fail_case node_fs_exists_arity_fail examples/node_fs_exists_arity_fail.ts "existsSync expects exactly one argument"
 run_fail_case node_fs_exists_path_type_fail examples/node_fs_exists_path_type_fail.ts "existsSync path argument must be string"
 run_fail_case node_fs_exists_as_value_fail examples/node_fs_exists_as_value_fail.ts "unknown identifier 'existsSync'"
+
+run_case node_fs_write_file $'true\nhello topaz write\n\nshorter\n0\nvia fn\n\nhello topaz!'
+run_fail_case node_fs_write_file_arity_fail examples/node_fs_write_file_arity_fail.ts "writeFileSync expects exactly two arguments"
+run_fail_case node_fs_write_file_path_type_fail examples/node_fs_write_file_path_type_fail.ts "writeFileSync path argument must be string"
+run_fail_case node_fs_write_file_content_type_fail examples/node_fs_write_file_content_type_fail.ts "writeFileSync content argument must be string"
+run_fail_case node_fs_write_file_as_value_fail examples/node_fs_write_file_as_value_fail.ts "writeFileSync returns void and cannot be used as a value"
 
 run_case node_path_basic $'/foo/bar\n/foo\nfoo\n.\n/\n/\n/foo/bar\n/a/c\n/a/b/d\n/foo/bar/baz\n/bar\n/x/w\n/a/b/util.ts\n/pkg/src\ntrue'
 run_fail_case node_path_dirname_arity_fail examples/node_path_dirname_arity_fail.ts "dirname expects exactly one argument"

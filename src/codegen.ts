@@ -6456,6 +6456,11 @@ class Emitter {
       if (callee.text === "existsSync") {
         return this.emitNodeFsExistsSync(expr);
       }
+      // Phase 1.5-6 prep #19: `writeFileSync(path, content)` -> void, same
+      // syntactic shortcut path as readFileSync. Encoding is implicit utf8.
+      if (callee.text === "writeFileSync") {
+        return this.emitNodeFsWriteFileSync(expr);
+      }
       // Phase 1.5-6 prep #18: node:path.dirname / resolve, same call-site
       // shortcut (loader accepts the `node:path` specifier). bare value use
       // falls to "unknown identifier" like the node:fs builtins.
@@ -6973,6 +6978,41 @@ class Emitter {
     this.checkNodeFsExistsSyncArgs(expr);
     const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
     return `topaz_fs_exists(${path})`;
+  }
+
+  // Phase 1.5-6 prep #19: `writeFileSync(path, content)` の引数検査。Node の
+  // 3 引数目 (encoding/options) は受けない (encoding は implicit utf8)。両引数
+  // 必須・string のみ。emit/infer 両経路で同じ reject。
+  private checkNodeFsWriteFileSyncArgs(expr: ts.CallExpression): void {
+    if (expr.arguments.length !== 2) {
+      throw new CodegenError(
+        expr,
+        "writeFileSync expects exactly two arguments: (path: string, content: string)",
+      );
+    }
+    const pathArg = expr.arguments[0]!;
+    const pathType = this.inferType(pathArg);
+    if (pathType.kind !== "string") {
+      throw new CodegenError(
+        pathArg,
+        `writeFileSync path argument must be string, got ${typeIdent(pathType)}`,
+      );
+    }
+    const contentArg = expr.arguments[1]!;
+    const contentType = this.inferType(contentArg);
+    if (contentType.kind !== "string") {
+      throw new CodegenError(
+        contentArg,
+        `writeFileSync content argument must be string, got ${typeIdent(contentType)}`,
+      );
+    }
+  }
+
+  private emitNodeFsWriteFileSync(expr: ts.CallExpression): string {
+    this.checkNodeFsWriteFileSyncArgs(expr);
+    const path = this.emitWithExpected(expr.arguments[0]!, T_STRING);
+    const content = this.emitWithExpected(expr.arguments[1]!, T_STRING);
+    return `topaz_fs_write_text_file(${path}, ${content})`;
   }
 
   // Phase 1.5-6 prep #18: node:path.dirname(p) の引数検査。1 引数 string のみ
@@ -8117,6 +8157,11 @@ class Emitter {
         if (callee.text === "existsSync") {
           this.checkNodeFsExistsSyncArgs(expr);
           return T_BOOLEAN;
+        }
+        // Phase 1.5-6 prep #19: writeFileSync returns void; reject value use
+        // (mirrors Array.push / console.log).
+        if (callee.text === "writeFileSync") {
+          throw new CodegenError(expr, "writeFileSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #18: node:path.dirname / resolve type as string.
         if (callee.text === "dirname") {

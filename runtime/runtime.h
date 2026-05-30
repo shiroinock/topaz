@@ -229,6 +229,29 @@ static inline bool topaz_fs_exists(topaz_string path) {
   return access(cpath, F_OK) == 0;
 }
 
+// Phase 1.5-6 prep #19: node:fs.writeFileSync(path, content) -> void. fopen
+// "wb" + fwrite; truncates existing files (matches Node's default behaviour).
+// Encoding is implicitly utf8 — topaz_string bytes are written verbatim. The
+// path is copied into the arena to NUL-terminate (topaz_string is not).
+static inline void topaz_fs_write_text_file(topaz_string path, topaz_string content) {
+  char *cpath = (char *)topaz_arena_alloc(path.len + 1);
+  memcpy(cpath, path.data, path.len);
+  cpath[path.len] = '\0';
+  FILE *fp = fopen(cpath, "wb");
+  if (!fp) {
+    fputs("topaz: writeFileSync failed to open '", stderr);
+    fwrite(path.data, 1, path.len, stderr);
+    fputs("'\n", stderr);
+    abort();
+  }
+  size_t put = content.len > 0 ? fwrite(content.data, 1, content.len, fp) : 0;
+  fclose(fp);
+  if (put != content.len) {
+    fputs("topaz: writeFileSync short write\n", stderr);
+    abort();
+  }
+}
+
 // Phase 1.5-6 prep #18: node:path.dirname / resolve (POSIX). Ports of Node's
 // path.posix algorithms so the self-hosted loader resolves module specifiers
 // identically. Topaz targets Unix only, so the Windows path handling is
