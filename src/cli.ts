@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { codegen } from "./codegen.js";
 import { computeLineStarts, LexError, tokenize, type Token } from "./lexer.js";
-import { loadModuleGraph } from "./loader.js";
+import { LoaderError, loadModuleGraph } from "./loader.js";
 import { ParseError, parseFile as topazParseFile } from "./topaz_parser.js";
 
 const USAGE = `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
@@ -137,6 +137,7 @@ try {
 } catch (err) {
   if (err instanceof ParseError) die(formatSourceError(err.file, err.pos, err.message));
   if (err instanceof LexError) die(formatSourceError(err.file, err.pos, err.message));
+  if (err instanceof LoaderError) die(err.message);
   if (err instanceof Error) die(err.message);
   throw err;
 }

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-import type { ImportDecl, ImportSpecifier, SourceModule } from "./ast.js";
+import { ImportDecl, ImportSpecifier, SourceModule } from "./ast.js";
 import { parseFile } from "./topaz_parser.js";
 
 // Phase 1.5-6g-1: production loading now uses the native Topaz parser. The
@@ -22,32 +22,40 @@ type ImportSite = {
 
 export function loadModuleGraph(rootPath: string): ModuleGraph {
   const root = resolve(rootPath);
-  const loaded = new Map<string, SourceModule>();
-  const order: SourceModule[] = [];
-  const visiting = new Set<string>();
+  const state = new LoaderState();
+  state.visit(root, undefined);
+  return { files: state.order, loaded: state.loadedPaths() };
+}
 
-  function visit(absPath: string, importedFrom: ImportSite | null): void {
-    if (loaded.has(absPath)) return;
-    if (visiting.has(absPath)) {
-      const from = importedFrom!;
-      throw new LoaderError(
-        from.file,
-        from.module,
-        from.stmt.modulePathPos,
-        `circular import detected: '${absPath}' is already being loaded`,
-      );
+class LoaderState {
+  loaded: Map<string, SourceModule> = new Map<string, SourceModule>();
+  order: Array<SourceModule> = [];
+  visiting: Set<string> = new Set<string>();
+
+  visit(absPath: string, importedFrom: ImportSite | undefined): void {
+    if (this.loaded.has(absPath)) return;
+    if (this.visiting.has(absPath)) {
+      if (importedFrom !== undefined) {
+        throw loaderErrorAt(
+          importedFrom.file,
+          importedFrom.module,
+          importedFrom.stmt.modulePathPos,
+          `circular import detected: '${absPath}' is already being loaded`,
+        );
+      }
+      return;
     }
-    visiting.add(absPath);
+    this.visiting.add(absPath);
     if (!existsSync(absPath)) {
-      if (importedFrom) {
-        throw new LoaderError(
+      if (importedFrom !== undefined) {
+        throw loaderErrorAt(
           importedFrom.file,
           importedFrom.module,
           importedFrom.stmt.modulePathPos,
           `cannot resolve module '${importedFrom.stmt.modulePath}' (looked for '${absPath}')`,
         );
       }
-      throw new Error(`topaz: cannot resolve module '${absPath}'`);
+      throw new LoaderError(`topaz: cannot resolve module '${absPath}'`);
     }
     const mod = parseFile(absPath);
     for (const item of mod.items) {
@@ -61,39 +69,50 @@ export function loadModuleGraph(rootPath: string): ModuleGraph {
       }
       validateImport(absPath, mod, decl);
       const target = resolveSpecifier(absPath, mod, decl, specText);
-      visit(target, { file: absPath, module: mod, stmt: decl });
+      this.visit(target, { file: absPath, module: mod, stmt: decl });
     }
-    visiting.delete(absPath);
-    loaded.set(absPath, mod);
-    order.push(mod);
+    this.visiting.delete(absPath);
+    this.loaded.set(absPath, mod);
+    this.order.push(mod);
   }
 
-  visit(root, null);
-  return { files: order, loaded: new Set(loaded.keys()) };
+  loadedPaths(): Set<string> {
+    const out = new Set<string>();
+    for (const path of this.loaded.keys()) {
+      out.add(path);
+    }
+    return out;
+  }
 }
 
-class LoaderError extends Error {
-  constructor(file: string, module: SourceModule, pos: number, message: string) {
-    const loc = posToLineCol(module, pos);
-    super(`${file}:${loc.line}:${loc.col}: ${message}`);
+export class LoaderError {
+  message: string;
+  constructor(message: string) {
+    this.message = message;
   }
+}
+
+function loaderErrorAt(file: string, module: SourceModule, pos: number, message: string): LoaderError {
+  const loc = posToLineCol(module, pos);
+  return new LoaderError(`${file}:${loc.line}:${loc.col}: ${message}`);
 }
 
 function posToLineCol(module: SourceModule, pos: number): { line: number; col: number } {
   let lineIndex = 0;
   for (let i = 0; i < module.lineStarts.length; i++) {
-    if (module.lineStarts[i]! > pos) break;
+    const lineStart = module.lineStarts[i];
+    if (lineStart > pos) break;
     lineIndex = i;
   }
-  return { line: lineIndex + 1, col: pos - module.lineStarts[lineIndex]! + 1 };
+  return { line: lineIndex + 1, col: pos - module.lineStarts[lineIndex] + 1 };
 }
 
 function validateImport(filePath: string, module: SourceModule, stmt: ImportDecl): void {
   if (stmt.isTypeOnly) {
-    throw new LoaderError(filePath, module, stmt.pos, "`import type` is unsupported (Phase 1.5-2)");
+    throw loaderErrorAt(filePath, module, stmt.pos, "`import type` is unsupported (Phase 1.5-2)");
   }
   if (stmt.defaultName !== undefined) {
-    throw new LoaderError(
+    throw loaderErrorAt(
       filePath,
       module,
       stmt.defaultNamePos,
@@ -101,7 +120,7 @@ function validateImport(filePath: string, module: SourceModule, stmt: ImportDecl
     );
   }
   if (stmt.namespaceName !== undefined) {
-    throw new LoaderError(
+    throw loaderErrorAt(
       filePath,
       module,
       stmt.namespaceNamePos,
@@ -115,10 +134,10 @@ function validateImport(filePath: string, module: SourceModule, stmt: ImportDecl
 
 function validateImportSpecifier(filePath: string, module: SourceModule, el: ImportSpecifier): void {
   if (el.isTypeOnly) {
-    throw new LoaderError(filePath, module, el.pos, "`import type` is unsupported (Phase 1.5-2)");
+    throw loaderErrorAt(filePath, module, el.pos, "`import type` is unsupported (Phase 1.5-2)");
   }
   if (el.importedName !== el.localName) {
-    throw new LoaderError(
+    throw loaderErrorAt(
       filePath,
       module,
       el.pos,
@@ -136,21 +155,52 @@ function validateImportSpecifier(filePath: string, module: SourceModule, el: Imp
 // `join` (1.5-6 prep #23)、
 // `node:child_process` から `execFileSync` (1.5-6 prep #24)、
 // `node:url` から `fileURLToPath` (1.5-6 prep #25) を受理。
-const STDLIB_SPECIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["node:fs", new Set(["readFileSync", "existsSync", "writeFileSync", "mkdirSync"])],
-  ["node:path", new Set(["dirname", "resolve", "basename", "extname", "join"])],
-  ["node:child_process", new Set(["execFileSync"])],
-  ["node:url", new Set(["fileURLToPath"])],
-]);
-
 function isStdlibSpecifier(spec: string): boolean {
-  return STDLIB_SPECIFIERS.has(spec);
+  if (spec === "node:fs") return true;
+  if (spec === "node:path") return true;
+  if (spec === "node:child_process") return true;
+  if (spec === "node:url") return true;
+  return false;
+}
+
+function isAllowedStdlibImport(spec: string, name: string): boolean {
+  if (spec === "node:fs") {
+    if (name === "readFileSync") return true;
+    if (name === "existsSync") return true;
+    if (name === "writeFileSync") return true;
+    if (name === "mkdirSync") return true;
+    return false;
+  }
+  if (spec === "node:path") {
+    if (name === "dirname") return true;
+    if (name === "resolve") return true;
+    if (name === "basename") return true;
+    if (name === "extname") return true;
+    if (name === "join") return true;
+    return false;
+  }
+  if (spec === "node:child_process") {
+    if (name === "execFileSync") return true;
+    return false;
+  }
+  if (spec === "node:url") {
+    if (name === "fileURLToPath") return true;
+    return false;
+  }
+  return false;
+}
+
+function allowedStdlibNames(spec: string): string {
+  if (spec === "node:fs") return "readFileSync, existsSync, writeFileSync, mkdirSync";
+  if (spec === "node:path") return "dirname, resolve, basename, extname, join";
+  if (spec === "node:child_process") return "execFileSync";
+  if (spec === "node:url") return "fileURLToPath";
+  return "";
 }
 
 function validateStdlibImport(filePath: string, module: SourceModule, stmt: ImportDecl, spec: string): void {
-  const allowed = STDLIB_SPECIFIERS.get(spec)!;
   if (stmt.specifiers.length === 0 && stmt.defaultName === undefined && stmt.namespaceName === undefined) {
-    throw new LoaderError(
+    throw loaderErrorAt(
       filePath,
       module,
       stmt.pos,
@@ -158,10 +208,10 @@ function validateStdlibImport(filePath: string, module: SourceModule, stmt: Impo
     );
   }
   if (stmt.isTypeOnly) {
-    throw new LoaderError(filePath, module, stmt.pos, "`import type` is unsupported (Phase 1.5-2)");
+    throw loaderErrorAt(filePath, module, stmt.pos, "`import type` is unsupported (Phase 1.5-2)");
   }
   if (stmt.defaultName !== undefined) {
-    throw new LoaderError(
+    throw loaderErrorAt(
       filePath,
       module,
       stmt.defaultNamePos,
@@ -169,7 +219,7 @@ function validateStdlibImport(filePath: string, module: SourceModule, stmt: Impo
     );
   }
   if (stmt.namespaceName !== undefined) {
-    throw new LoaderError(
+    throw loaderErrorAt(
       filePath,
       module,
       stmt.namespaceNamePos,
@@ -177,16 +227,16 @@ function validateStdlibImport(filePath: string, module: SourceModule, stmt: Impo
     );
   }
   if (stmt.specifiers.length === 0) {
-    throw new LoaderError(filePath, module, stmt.pos, `stdlib import from '${spec}' requires named bindings`);
+    throw loaderErrorAt(filePath, module, stmt.pos, `stdlib import from '${spec}' requires named bindings`);
   }
   for (const el of stmt.specifiers) {
     validateImportSpecifier(filePath, module, el);
-    if (!allowed.has(el.importedName)) {
-      throw new LoaderError(
+    if (!isAllowedStdlibImport(spec, el.importedName)) {
+      throw loaderErrorAt(
         filePath,
         module,
         el.pos,
-        `unsupported named import '${el.importedName}' from stdlib specifier '${spec}' (allowed: ${Array.from(allowed).join(", ")})`,
+        `unsupported named import '${el.importedName}' from stdlib specifier '${spec}' (allowed: ${allowedStdlibNames(spec)})`,
       );
     }
   }
@@ -194,7 +244,7 @@ function validateStdlibImport(filePath: string, module: SourceModule, stmt: Impo
 
 function resolveSpecifier(fromFile: string, module: SourceModule, stmt: ImportDecl, spec: string): string {
   if (!spec.startsWith("./") && !spec.startsWith("../")) {
-    throw new LoaderError(
+    throw loaderErrorAt(
       fromFile,
       module,
       stmt.modulePathPos,
@@ -202,13 +252,11 @@ function resolveSpecifier(fromFile: string, module: SourceModule, stmt: ImportDe
     );
   }
   const fromDir = dirname(fromFile);
-  let candidate: string;
   if (spec.endsWith(".js")) {
-    candidate = resolve(fromDir, spec.slice(0, -3) + ".ts");
-  } else if (spec.endsWith(".ts")) {
-    candidate = resolve(fromDir, spec);
-  } else {
-    candidate = resolve(fromDir, spec + ".ts");
+    return resolve(fromDir, spec.slice(0, -3) + ".ts");
   }
-  return candidate;
+  if (spec.endsWith(".ts")) {
+    return resolve(fromDir, spec);
+  }
+  return resolve(fromDir, spec + ".ts");
 }
