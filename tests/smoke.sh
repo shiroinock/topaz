@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-npm run build > /dev/null
+pnpm run build > /dev/null
 
 mkdir -p build
 

@@ -12,9 +12,10 @@ TypeScript 構文を frontend にした AOT ネイティブコンパイラ。JS 
 
 ## Commands
 
-- `npm run build` — `tsc` で `src/` → `dist/`
-- `npm test` — `tests/smoke.sh`。`examples/*.ts` を順にコンパイル→実行して期待値検証。新しいサンプルを足したら `run_case` 行を追加
-- `npm run topaz -- <input.ts> [-o out]` — CLI 起動(npm 越し)
+- `pnpm install` — 依存関係セットアップ
+- `pnpm run build` — `tsc` で `src/` → `dist/`
+- `pnpm test` — `tests/smoke.sh`。`examples/*.ts` を順にコンパイル→実行して期待値検証。新しいサンプルを足したら `run_case` 行を追加
+- `pnpm run topaz <input.ts> [-o out]` — CLI 起動(pnpm 越し)
 - `node dist/cli.js <input.ts> [-o out] [--emit-c-only]` — 直接起動。`--emit-c-only` は cc を呼ばずに生成 C を残す
 
 cc のパス / フラグ変更は `src/cli.ts` の `execFileSync("cc", ...)` を直接編集。
