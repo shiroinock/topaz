@@ -1075,7 +1075,13 @@ class Emitter {
   }
 
   private isAnonClassName(name: string): boolean {
-    return /^anon_\d+$/.test(name);
+    if (!name.startsWith("anon_")) return false;
+    if (name.length <= 5) return false;
+    for (let i = 5; i < name.length; i++) {
+      const ch = name.charCodeAt(i);
+      if (ch < 48 || ch > 57) return false;
+    }
+    return true;
   }
 
   private recordDunionMonomorph(t: TopazType): void {
@@ -2597,7 +2603,7 @@ class Emitter {
         // SourceFile is set by the enclosing collectClassMembers' withSf.
         throw this.typeErr(
           info.ctor.decl ?? info.decl,
-          `field '${info.name}.${fname}' is not definitely assigned in the constructor (assign it directly under the constructor body, or add a field initializer 'x: T = init;' — control-flow inside if/for/while/try is not analyzed yet)`,
+          `field '${info.name}.${fname}' is not definitely assigned in the constructor (assign it directly under the constructor body, or add a field initializer 'x: T = init;' - control-flow inside if/for/while/try is not analyzed yet)`,
         );
       }
     }
@@ -4820,7 +4826,7 @@ class Emitter {
         if (methods.has(fname)) {
           throw new CodegenError(
             b,
-            `'${fname}' is a method of '${receiverName}', not a field — methods cannot be destructured (method-as-value is unsupported)`,
+            `'${fname}' is a method of '${receiverName}', not a field - methods cannot be destructured (method-as-value is unsupported)`,
           );
         }
         throw new CodegenError(
@@ -8038,7 +8044,7 @@ class Emitter {
       if (baseType.kind === "union") {
         throw new CodegenError(
           expr,
-          `cannot access '.${expr.name}' on union type ${typeIdent(baseType)} — narrow it first with \`if (x !== undefined)\``,
+          `cannot access '.${expr.name}' on union type ${typeIdent(baseType)} - narrow it first with \`if (x !== undefined)\``,
         );
       }
       // Phase 1.5-3f: unknown values (catch payload) need `instanceof` to
@@ -8047,7 +8053,7 @@ class Emitter {
       if (baseType.kind === "unknown") {
         throw new CodegenError(
           expr,
-          `cannot access '.${expr.name}' on \`unknown\` — narrow it first with \`if (x instanceof ClassName)\``,
+          `cannot access '.${expr.name}' on \`unknown\` - narrow it first with \`if (x instanceof ClassName)\``,
         );
       }
       // Phase 1.5-3e: dunion exposes only the discriminator field; everything
@@ -8064,7 +8070,7 @@ class Emitter {
         if (common) return common;
         throw new CodegenError(
           expr,
-          `cannot access '.${expr.name}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``,
+          `cannot access '.${expr.name}' on discriminated union ${typeIdent(baseType)} - narrow it first with \`switch (x.${baseType.discriminator})\``,
         );
       }
       if (baseType.kind === "string" && expr.name === "length") {
@@ -8765,7 +8771,7 @@ class Emitter {
       // dunion, but a write would have to pick a variant (the field sits at a
       // variant-specific offset), so narrowing is required first.
       if (baseType.kind === "dunion") {
-        throw new CodegenError(target, `cannot assign to '.${target.name}' on discriminated union ${typeIdent(baseType)} — narrow it first with \`switch (x.${baseType.discriminator})\``);
+        throw new CodegenError(target, `cannot assign to '.${target.name}' on discriminated union ${typeIdent(baseType)} - narrow it first with \`switch (x.${baseType.discriminator})\``);
       }
       if (!isClassType(baseType)) {
         throw new CodegenError(target, `property assignment is only supported on class instances or interface values (got ${typeIdent(baseType)})`);
@@ -9002,7 +9008,7 @@ class Emitter {
         if (!this.isAnonClassName(matchedVariant)) {
           throw new CodegenError(
             expr,
-            `cannot use object literal for ${typeIdent(expected)} variant '${matchedVariant}' — concrete class variant requires \`new ${matchedVariant}(...)\``,
+            `cannot use object literal for ${typeIdent(expected)} variant '${matchedVariant}' - concrete class variant requires \`new ${matchedVariant}(...)\``,
           );
         }
         const variantType: TopazType = { kind: "class", name: matchedVariant };

@@ -2,7 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { codegen } from "./codegen.js";
@@ -24,34 +23,82 @@ function die(msg: string): never {
   process.exit(1);
 }
 
-function main(): void {
-  const parsed = parseArgs({
-    args: process.argv.slice(2),
-    options: {
-      output: { type: "string", short: "o" },
-      "emit-c-only": { type: "boolean" },
-      "lex-only": { type: "boolean" },
-      "parse-only": { type: "boolean" },
-      help: { type: "boolean", short: "h" },
-    },
-    allowPositionals: true,
-  });
+class CliOptions {
+  input: string | undefined;
+  output: string | undefined;
+  emitCOnly: boolean;
+  lexOnly: boolean;
+  parseOnly: boolean;
+  help: boolean;
 
-  if (parsed.values.help) {
+  constructor() {
+    this.input = undefined;
+    this.output = undefined;
+    this.emitCOnly = false;
+    this.lexOnly = false;
+    this.parseOnly = false;
+    this.help = false;
+  }
+}
+
+function argvStartIndex(argv: Array<string>): number {
+  if (argv.length >= 2) {
+    const script = argv[1];
+    if (script.endsWith(".js")) return 2;
+  }
+  return 1;
+}
+
+function parseCliOptions(argv: Array<string>): CliOptions {
+  const opts = new CliOptions();
+  let i = argvStartIndex(argv);
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "-h" || arg === "--help") {
+      opts.help = true;
+      i = i + 1;
+    } else if (arg === "--emit-c-only") {
+      opts.emitCOnly = true;
+      i = i + 1;
+    } else if (arg === "--lex-only") {
+      opts.lexOnly = true;
+      i = i + 1;
+    } else if (arg === "--parse-only") {
+      opts.parseOnly = true;
+      i = i + 1;
+    } else if (arg === "-o" || arg === "--output") {
+      if (i + 1 >= argv.length) die(`${arg} expects a value`);
+      opts.output = argv[i + 1];
+      i = i + 2;
+    } else if (arg.startsWith("-")) {
+      die(`unknown option ${arg}`);
+    } else {
+      if (opts.input !== undefined) die(`unexpected positional argument ${arg}`);
+      opts.input = arg;
+      i = i + 1;
+    }
+  }
+  return opts;
+}
+
+function main(): void {
+  const parsed = parseCliOptions(process.argv);
+
+  if (parsed.help) {
     console.log(USAGE);
     return;
   }
-  if (parsed.positionals.length !== 1) {
+  if (parsed.input === undefined) {
     console.error(USAGE);
     process.exit(2);
   }
 
-  const input = resolve(parsed.positionals[0]!);
+  const input = resolve(parsed.input);
   if (extname(input) !== ".ts") {
     die(`expected a .ts file, got ${input}`);
   }
 
-  if (parsed.values["lex-only"]) {
+  if (parsed.lexOnly) {
     const source = readFileSync(input, "utf8");
     const tokens = tokenize(source, input);
     for (const t of tokens) {
@@ -60,14 +107,14 @@ function main(): void {
     return;
   }
 
-  if (parsed.values["parse-only"]) {
+  if (parsed.parseOnly) {
     const mod = topazParseFile(input);
     process.stdout.write(JSON.stringify(mod, null, 2) + "\n");
     return;
   }
 
-  const output = parsed.values.output
-    ? resolve(parsed.values.output)
+  const output = parsed.output !== undefined
+    ? resolve(parsed.output)
     : join(dirname(input), basename(input, ".ts"));
 
   const cPath = `${output}.c`;
@@ -79,7 +126,7 @@ function main(): void {
   const cSource = codegen(graph.files);
   writeFileSync(cPath, cSource);
 
-  if (parsed.values["emit-c-only"]) {
+  if (parsed.emitCOnly) {
     console.log(cPath);
     return;
   }

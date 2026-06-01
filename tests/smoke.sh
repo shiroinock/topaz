@@ -93,7 +93,52 @@ run_cc_warnfree_case() {
   echo "PASS [$name cc-warnfree]"
 }
 
+run_cli_fail_case() {
+  local label="$1"
+  local expected_substring="$2"
+  shift 2
+  local err
+  if err=$(node dist/cli.js "$@" 2>&1); then
+    echo "FAIL [$label]: expected CLI error, got success" >&2
+    echo "  stdout:" >&2
+    printf '%s\n' "$err" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$err" != *"$expected_substring"* ]]; then
+    echo "FAIL [$label]: error did not contain expected substring" >&2
+    echo "  expected substring: $expected_substring" >&2
+    echo "  got:" >&2
+    printf '%s\n' "$err" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [$label]"
+}
+
+run_cli_smoke() {
+  node dist/cli.js examples/fib.ts --emit-c-only -o build/cli_emit_probe > /dev/null
+  if [[ ! -f build/cli_emit_probe.c ]]; then
+    echo "FAIL [cli_emit_c_only]: expected build/cli_emit_probe.c" >&2
+    exit 1
+  fi
+  echo "PASS [cli_emit_c_only]"
+
+  node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
+  local out
+  out=$(./build/cli_output_probe)
+  if [[ "$out" != "5702887" ]]; then
+    echo "FAIL [cli_output_long_flag]:" >&2
+    echo "  expected: 5702887" >&2
+    echo "  got: $out" >&2
+    exit 1
+  fi
+  echo "PASS [cli_output_long_flag]"
+
+  run_cli_fail_case cli_unknown_option "unknown option --bogus" --bogus examples/fib.ts
+  run_cli_fail_case cli_missing_output_value "-o expects a value" examples/fib.ts -o
+}
+
 run_case fib "5702887"
+run_cli_smoke
 run_case loop_sum "5050"
 run_case while_count "10"
 run_case for_infinite $'10\n24\n4\n25'
