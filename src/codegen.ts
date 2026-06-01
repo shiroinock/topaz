@@ -928,8 +928,8 @@ class Emitter {
   private functionSigs: Map<string, FunctionSig> = new Map<string, FunctionSig>();
   private classes: Map<string, ClassInfo> = new Map<string, ClassInfo>();
   private interfaces: Map<string, InterfaceInfo> = new Map<string, InterfaceInfo>();
-  private currentClass: string | undefined;
-  private currentReturnType: TopazType | undefined;
+  private currentClass: string | undefined = undefined;
+  private currentReturnType: TopazType | undefined = undefined;
   // Phase 1.5-6i prep: enclosing-construct stack for `continue` validation.
   // Topaz nodes carry no `.parent`, so we maintain the nearest loop / switch
   // context explicitly with linked frames. A nested arrow is a function
@@ -977,7 +977,7 @@ class Emitter {
   private genericFunctions: Map<string, GenericFunctionInfo> = new Map<string, GenericFunctionInfo>();
   private genericMonomorphs: Map<string, MonomorphInfo> = new Map<string, MonomorphInfo>();
   private genericWorklist: string[] = [];
-  private typeParamScope: Map<string, TopazType> | undefined;
+  private typeParamScope: Map<string, TopazType> | undefined = undefined;
   // Phase 1.4c-3: generic class declarations and their realized monomorphs.
   // The mangled name (e.g. "Box__number") is the key into `this.classes` for
   // the substituted ClassInfo; the worklist accumulates monomorphs whose
@@ -1012,7 +1012,7 @@ class Emitter {
   // lowered by `typeFromAnnotation` (and the helpers it calls). Set/restored at
   // every `typeFromAnnotation` entry so `typeErr` can turn a Topaz node's `pos`
   // into `file:line:col`. Undefined outside type-machine execution.
-  private currentTypeModule: SourceModule | undefined;
+  private currentTypeModule: SourceModule | undefined = undefined;
   // Phase 1.5-3.5e: each arrow expression lowers to (a) a static C function
   // `__topaz_arrow_<N>` and (b) optionally an env struct `__topaz_env_<N>`
   // for its captures. arrowDefLines accumulates both halves in source order
@@ -1024,7 +1024,7 @@ class Emitter {
   private arrowDefLines: Array<string> = [];
   private captureContext:
     | { envType: string; envIsEmpty: boolean; captures: Map<string, TopazType> }
-    | undefined;
+    | undefined = undefined;
 
   private recordArrayMonomorph(t: TopazType): void {
     if (!isArrayType(t)) return;
