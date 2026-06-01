@@ -1,4 +1,4 @@
-import type {
+import {
   TypeNode,
   TypeLiteralNode,
   SourceModule,
@@ -79,10 +79,14 @@ type TopazType =
   | { kind: "set"; elem: TopazType }
   | { kind: "class"; name: string }
   | { kind: "iface"; name: string }
-  | { kind: "dunion"; variants: readonly string[]; discriminator: string }
-  | { kind: "union"; variants: readonly TopazType[] }
-  | { kind: "fn"; params: readonly ParamInfo[]; returnType: TopazType }
-  | { kind: "iter"; elem: TopazType };
+  | DunionType
+  | { kind: "union"; variants: Array<TopazType> }
+  | FnType
+  | IterType;
+
+type DunionType = { kind: "dunion"; variants: Array<string>; discriminator: string };
+type FnType = { kind: "fn"; params: Array<ParamInfo>; returnType: TopazType };
+type IterType = { kind: "iter"; elem: TopazType };
 
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
@@ -216,7 +220,6 @@ function setOf(elem: TopazType): TopazType | undefined {
 // Structural equality. Replaces the old string `===` comparisons; do not use
 // `===` directly on TopazType (objects compare by reference).
 function typeEq(a: TopazType, b: TopazType): boolean {
-  if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "number":
     case "boolean":
@@ -224,36 +227,44 @@ function typeEq(a: TopazType, b: TopazType): boolean {
     case "undefined":
     case "unknown":
     case "void":
-      return true;
+      return a.kind === b.kind;
     case "string_literal":
-      return a.value === (b as Extract<TopazType, { kind: "string_literal" }>).value;
+      if (b.kind !== "string_literal") return false;
+      return a.value === b.value;
     case "array":
-      return typeEq(a.elem, (b as Extract<TopazType, { kind: "array" }>).elem);
+      if (b.kind !== "array") return false;
+      return typeEq(a.elem, b.elem);
     case "map": {
-      const bm = b as Extract<TopazType, { kind: "map" }>;
-      return typeEq(a.key, bm.key) && typeEq(a.value, bm.value);
+      if (b.kind !== "map") return false;
+      return typeEq(a.key, b.key) && typeEq(a.value, b.value);
     }
-    case "set":
-      return typeEq(a.elem, (b as Extract<TopazType, { kind: "set" }>).elem);
-    case "class":
-      return a.name === (b as Extract<TopazType, { kind: "class" }>).name;
-    case "iface":
-      return a.name === (b as Extract<TopazType, { kind: "iface" }>).name;
+    case "set": {
+      if (b.kind !== "set") return false;
+      return typeEq(a.elem, b.elem);
+    }
+    case "class": {
+      if (b.kind !== "class") return false;
+      return a.name === b.name;
+    }
+    case "iface": {
+      if (b.kind !== "iface") return false;
+      return a.name === b.name;
+    }
     case "dunion": {
-      const bd = b as Extract<TopazType, { kind: "dunion" }>;
-      if (a.discriminator !== bd.discriminator) return false;
-      if (a.variants.length !== bd.variants.length) return false;
+      if (b.kind !== "dunion") return false;
+      if (a.discriminator !== b.discriminator) return false;
+      if (a.variants.length !== b.variants.length) return false;
       for (let i = 0; i < a.variants.length; i++) {
-        if (a.variants[i] !== bd.variants[i]) return false;
+        if (a.variants[i] !== b.variants[i]) return false;
       }
       return true;
     }
     case "union": {
-      const bu = b as Extract<TopazType, { kind: "union" }>;
-      if (a.variants.length !== bu.variants.length) return false;
+      if (b.kind !== "union") return false;
+      if (a.variants.length !== b.variants.length) return false;
       // variants are canonical-sorted by makeUnion, so positional compare.
       for (let i = 0; i < a.variants.length; i++) {
-        if (!typeEq(a.variants[i]!, bu.variants[i]!)) return false;
+        if (!typeEq(a.variants[i]!, b.variants[i]!)) return false;
       }
       return true;
     }
@@ -261,22 +272,24 @@ function typeEq(a: TopazType, b: TopazType): boolean {
       // Phase 1.5-3.5e: positional param comparison; param names are
       // informational only. Two fn types are equal when arity matches, each
       // param type is equal positionally, and return types are equal.
-      const bf = b as Extract<TopazType, { kind: "fn" }>;
-      if (a.params.length !== bf.params.length) return false;
+      if (b.kind !== "fn") return false;
+      if (a.params.length !== b.params.length) return false;
       for (let i = 0; i < a.params.length; i++) {
-        if (!typeEq(a.params[i]!.type, bf.params[i]!.type)) return false;
+        if (!typeEq(a.params[i]!.type, b.params[i]!.type)) return false;
       }
-      return typeEq(a.returnType, bf.returnType);
+      return typeEq(a.returnType, b.returnType);
     }
-    case "iter":
-      return typeEq(a.elem, (b as Extract<TopazType, { kind: "iter" }>).elem);
+    case "iter": {
+      if (b.kind !== "iter") return false;
+      return typeEq(a.elem, b.elem);
+    }
   }
 }
 
 // Phase 1.5-3b: build a union, flattening nested unions, deduplicating by
 // typeKey, and sorting variants for canonical comparison. Single-variant
 // "unions" collapse to the inner type. Throws on empty input.
-function makeUnion(variants: readonly TopazType[]): TopazType {
+function makeUnion(variants: Array<TopazType>): TopazType {
   const flat: TopazType[] = [];
   for (const v of variants) {
     if (v.kind === "union") {
@@ -339,7 +352,7 @@ function elemTag(t: TopazType): string {
       // ownership semantics we don't model. Always reject at container site.
       throw new Error(`elemTag: iterator type ${typeIdent(t)} cannot be a container element (1.5-3.5g)`);
     default:
-      throw new Error(`elemTag: container element kind=${(t as TopazType).kind} is unsupported (no nested containers yet)`);
+      throw new Error("elemTag: unsupported container element kind (no nested containers yet)");
   }
 }
 
@@ -431,6 +444,14 @@ function stringLitText(e: Expr): string | undefined {
   if (e.kind === "str_lit") return e.value;
   if (e.kind === "template_lit" && e.subs.length === 0) return e.head;
   return undefined;
+}
+
+function hasDecimalOrExponent(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    if (ch === 46 || ch === 69 || ch === 101) return true;
+  }
+  return false;
 }
 
 function isBuiltinName(name: string): boolean {
@@ -564,7 +585,8 @@ function posToLineCol(module: SourceModule, pos: number): { line: number; col: n
   let hi = starts.length - 1;
   let line = 0;
   while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
+    const sum = lo + hi;
+    const mid = (sum - (sum % 2)) / 2;
     if (starts[mid]! <= pos) {
       line = mid;
       lo = mid + 1;
@@ -575,22 +597,24 @@ function posToLineCol(module: SourceModule, pos: number): { line: number; col: n
   return { line, col: pos - starts[line]! };
 }
 
-class CodegenError extends Error {
+export class CodegenError {
+  message: string;
+
   // Phase 1.5-6e-4: accept a Topaz node `{ pos }` (resolved against the ambient
   // SourceModule's lineStarts) or an already-formatted `file:line:col: message`
   // string. The string form lets the type machine — which walks Topaz `TypeNode`
   // that don't carry their module — build positions via `Emitter.typeErr`.
   constructor(nodeOrFormatted: { pos: number } | string, message?: string) {
     if (typeof nodeOrFormatted === "string") {
-      super(nodeOrFormatted);
+      this.message = nodeOrFormatted;
       return;
     }
     const module = g_currentModule;
     if (module) {
       const { line, col } = posToLineCol(module, nodeOrFormatted.pos);
-      super(`${module.filePath}:${line + 1}:${col + 1}: ${message}`);
+      this.message = `${module.filePath}:${line + 1}:${col + 1}: ${message}`;
     } else {
-      super(message ?? "");
+      this.message = message ?? "";
     }
   }
 }
@@ -633,13 +657,13 @@ class Scope {
   // Phase 1.5-6e-4: every caller passes a Topaz node `{ pos }`. The
   // redeclaration error never fires in practice (recordAnonClass guarantees
   // unique anon-class field names), so it keeps its historical position-less
-  // message; `_node` is retained only as the diagnostic-anchor slot.
-  declare(name: string, type: TopazType, isConst: boolean, _node: { pos: number }): void {
+  // message; `anchor` is retained only as the diagnostic-anchor slot.
+  declareBinding(name: string, bindingType: TopazType, isConst: boolean, anchor: { pos: number }): void {
     const top = this.stack[this.stack.length - 1]!;
     if (top.has(name)) {
-      throw new CodegenError(`redeclaration of '${name}'`);
+      throw new CodegenError(anchor, `redeclaration of '${name}'`);
     }
-    top.set(name, { type, isConst });
+    top.set(name, { type: bindingType, isConst });
   }
 
   lookup(name: string): Binding | undefined {
@@ -701,8 +725,8 @@ class Scope {
   // Phase 1.5-3d: install a narrowed type for an existing identifier on the
   // current top frame. Caller is responsible for pushing a new frame first
   // (typically via `push()` before entering an if-branch).
-  narrow(name: string, type: TopazType): void {
-    this.narrowings[this.narrowings.length - 1]!.set(name, type);
+  narrow(name: string, narrowedType: TopazType): void {
+    this.narrowings[this.narrowings.length - 1]!.set(name, narrowedType);
   }
 }
 
@@ -716,7 +740,7 @@ class Scope {
 // surface — see `typeEq` for the `fn` case).
 type ParamInfo = { name: string; type: TopazType; isOptional: boolean };
 
-function requiredParamCount(params: readonly ParamInfo[]): number {
+function requiredParamCount(params: Array<ParamInfo>): number {
   let n = params.length;
   while (n > 0 && params[n - 1]!.isOptional) n--;
   return n;
@@ -838,6 +862,23 @@ type ClassMonomorphInfo = {
   subs: Map<string, TopazType>;
 };
 
+type TypeAliasInfo = {
+  body: TypeNode;
+  sf: SourceModule;
+  resolved?: TopazType;
+  resolving: boolean;
+  recursive: boolean;
+};
+
+type SwitchGroup = { conds: Array<Expr>; body: Array<Stmt> };
+
+type IterNextInfo = {
+  containerType: TopazType;
+  source: "map_values" | "map_keys" | "set_values";
+  elemType: TopazType;
+  field: "key" | "value";
+};
+
 // Mangling: stripped of the `topaz_` prefix, joined with `__`. Class/iface
 // names already carry a `class_` / `iface_` prefix, so the resulting C
 // identifier is unambiguous (e.g. `identity__number`, `pair__class_Box`,
@@ -846,15 +887,15 @@ function mangleTypeArg(t: TopazType): string {
   return typeIdent(t).slice("topaz_".length);
 }
 
-function mangleMonomorph(origName: string, args: readonly TopazType[]): string {
+function mangleMonomorph(origName: string, args: Array<TopazType>): string {
   return `${origName}__${args.map(mangleTypeArg).join("__")}`;
 }
 
 class Emitter {
-  private scope = new Scope();
-  private functionSigs = new Map<string, FunctionSig>();
-  private classes = new Map<string, ClassInfo>();
-  private interfaces = new Map<string, InterfaceInfo>();
+  private scope: Scope = new Scope();
+  private functionSigs: Map<string, FunctionSig> = new Map<string, FunctionSig>();
+  private classes: Map<string, ClassInfo> = new Map<string, ClassInfo>();
+  private interfaces: Map<string, InterfaceInfo> = new Map<string, InterfaceInfo>();
   private currentClass: string | undefined;
   private currentReturnType: TopazType | undefined;
   // Phase 1.5-6e-2: enclosing-construct stack for `continue` validation. Topaz
@@ -872,48 +913,48 @@ class Emitter {
   // `topaz_try_pop()` calls before the C return so the frame stack stays
   // balanced. Reset to 0 at every function boundary (nested fn/arrow returns
   // don't cross the outer try).
-  private liveTryFrames = 0;
-  private switchCounter = 0;
-  private tmpCounter = 0;
+  private liveTryFrames: number = 0;
+  private switchCounter: number = 0;
+  private tmpCounter: number = 0;
   // Phase 1.4c-1a: each Array<class>/Array<interface> referenced in user code
   // gets a TOPAZ_ARRAY_DEFINE() expansion in the generated C, since the runtime
   // header only preexpands the scalar monomorphs. Keyed by typeKey() so we
   // de-duplicate structurally (TopazType objects compare by reference).
-  private arrayMonomorphs = new Map<string, TopazType>();
+  private arrayMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.5-3.5g-array-fn: Array<fn> monomorphs live in a separate slot
   // because the TOPAZ_ARRAY_DEFINE expansion references the fn typedef, which
   // is itself emitted after the regular container slot. Splitting them keeps
   // the existing slot ordering invariants intact (container monomorphs ->
   // arrayJoinHelpers -> iter -> fn typedef -> Array<fn> container).
-  private arrayFnMonomorphs = new Map<string, TopazType>();
+  private arrayFnMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.5-3.5f-join: Array monomorphs that need a per-(elem) `_join` helper
   // emitted. Keyed by typeKey() of the Array<elem> type. Helpers are generated
   // for scalar elems (number / boolean / string) only; class / iface / nested
   // container elems are rejected at the call site so they never land here.
-  private arrayJoinMonomorphs = new Map<string, TopazType>();
+  private arrayJoinMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.4c-1b: same idea for Map<K, class|interface> and Set<class|interface>.
   // Maps are tracked by full (K, V) tuple so we get one expansion per combo.
-  private mapMonomorphs = new Map<string, TopazType>();
-  private setMonomorphs = new Map<string, TopazType>();
+  private mapMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
+  private setMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.5-3e: discriminated class unions like `Circle | Square` are
   // emitted as a fat pointer `{ topaz_string kind; void *data; }`. Recorded
   // when typeFromAnnotation lowers the union, expanded in the container slot.
-  private dunionMonomorphs = new Map<string, TopazType>();
+  private dunionMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.4c-2: generic function declarations (registered but not signed
   // until a call site supplies type arguments), realized monomorphs keyed by
   // mangled name, and a worklist for monomorphs whose body still needs to be
   // emitted. typeParamScope binds the active substitution while emitting a
   // monomorph body (or while resolving its signature).
-  private genericFunctions = new Map<string, GenericFunctionInfo>();
-  private genericMonomorphs = new Map<string, MonomorphInfo>();
+  private genericFunctions: Map<string, GenericFunctionInfo> = new Map<string, GenericFunctionInfo>();
+  private genericMonomorphs: Map<string, MonomorphInfo> = new Map<string, MonomorphInfo>();
   private genericWorklist: string[] = [];
   private typeParamScope: Map<string, TopazType> | undefined;
   // Phase 1.4c-3: generic class declarations and their realized monomorphs.
   // The mangled name (e.g. "Box__number") is the key into `this.classes` for
   // the substituted ClassInfo; the worklist accumulates monomorphs whose
   // typedef/struct/methods still need to be emitted in the late slots.
-  private genericClasses = new Map<string, GenericClassInfo>();
-  private classMonomorphs = new Map<string, ClassMonomorphInfo>();
+  private genericClasses: Map<string, GenericClassInfo> = new Map<string, GenericClassInfo>();
+  private classMonomorphs: Map<string, ClassMonomorphInfo> = new Map<string, ClassMonomorphInfo>();
   private classMonomorphWorklist: string[] = [];
   // Phase 1.5-6 prep: `type X = T;` declarations. The RHS is parsed lazily on
   // first reference so a forward-declared alias works; `resolving` flips on
@@ -932,26 +973,17 @@ class Emitter {
   // the converted `TypeAliasDecl.body`) and `sf` (for error positions when
   // resolving the body, which may live in a different module than the reference
   // site). The original `decl` anchor was never read and is dropped.
-  private typeAliases = new Map<
-    string,
-    {
-      body: TypeNode;
-      sf: SourceModule;
-      resolved?: TopazType;
-      resolving: boolean;
-      recursive: boolean;
-    }
-  >();
+  private typeAliases: Map<string, TypeAliasInfo> = new Map<string, TypeAliasInfo>();
   // Phase 1.5-6 prep #14: TypeLiteralNode -> mangled anon class name. Populated
   // by preAllocateRecursiveAnons() walking the bodies of recursive aliases. A
   // hit in typeFromAnnotation's TypeLiteralNode branch returns classOf(name)
   // directly without recomputing the structural key (since fields aren't
   // resolved yet at first reference and the canonical key would mismatch).
-  private preAllocatedAnons = new Map<TypeLiteralNode, string>();
+  private preAllocatedAnons: Map<TypeLiteralNode, string> = new Map<TypeLiteralNode, string>();
   // Phase 1.5-6e-1: the SourceFile each pre-allocated Topaz `TypeLiteralNode`
   // was converted from, so `fillPreAllocatedAnonFields` can position its
   // diagnostics (the Topaz node carries `pos` but not its file).
-  private preAllocatedAnonSf = new Map<TypeLiteralNode, SourceModule>();
+  private preAllocatedAnonSf: Map<TypeLiteralNode, SourceModule> = new Map<TypeLiteralNode, SourceModule>();
   // Phase 1.5-6e-1: the SourceFile of the Topaz type tree currently being
   // lowered by `typeFromAnnotation` (and the helpers it calls). Set/restored at
   // every `typeFromAnnotation` entry so `typeErr` can turn a Topaz node's `pos`
@@ -963,9 +995,9 @@ class Emitter {
   // and is spliced into the arrowDefSlot at end of emit(). captureContext is
   // active only while emitting an arrow body — body identifier lookups
   // consult it after scope.lookup fails.
-  private arrowCounter = 0;
-  private arrowFwdLines: string[] = [];
-  private arrowDefLines: string[] = [];
+  private arrowCounter: number = 0;
+  private arrowFwdLines: Array<string> = [];
+  private arrowDefLines: Array<string> = [];
   private captureContext:
     | { envType: string; envIsEmpty: boolean; captures: Map<string, TopazType> }
     | undefined;
@@ -1019,8 +1051,8 @@ class Emitter {
   // carries a positional all-fields constructor (`decl: undefined` + params
   // in sorted order); emitConstructorDefinition has a branch to fill that
   // ctor body with per-param `this->f = f;` writes.
-  private anonClassByKey = new Map<string, string>(); // canonical key -> mangled name
-  private anonClassCounter = 0;
+  private anonClassByKey: Map<string, string> = new Map<string, string>(); // canonical key -> mangled name
+  private anonClassCounter: number = 0;
   private recordAnonClass(
     fields: Map<string, TopazType>,
     optionalFields: Set<string>,
@@ -1093,7 +1125,7 @@ class Emitter {
   // or arrow expression) gets a typedef + struct expansion emitted in the
   // fn-typedef slot. fn-in-fn signatures are rejected at the annotation site
   // so we never have to chase nested monomorphs.
-  private fnMonomorphs = new Map<string, TopazType>();
+  private fnMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
   private recordFnMonomorph(t: TopazType): void {
     if (t.kind !== "fn") return;
     this.fnMonomorphs.set(typeKey(t), t);
@@ -1108,17 +1140,9 @@ class Emitter {
   // Map.values() and Map.keys() share the state struct but have different
   // _next functions; Set.values() and Set.keys() share both (Set yields the
   // element for either, matching JS semantics).
-  private iterTypedefMonomorphs = new Map<string, TopazType>();
-  private iterStateMonomorphs = new Map<string, TopazType>();
-  private iterNextMonomorphs = new Map<
-    string,
-    {
-      containerType: TopazType;
-      source: "map_values" | "map_keys" | "set_values";
-      elemType: TopazType;
-      field: "key" | "value";
-    }
-  >();
+  private iterTypedefMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
+  private iterStateMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
+  private iterNextMonomorphs: Map<string, IterNextInfo> = new Map<string, IterNextInfo>();
   private recordIterMonomorph(
     elemType: TopazType,
     containerType: TopazType,
@@ -1139,7 +1163,7 @@ class Emitter {
   // discriminator collapses into a `dunion`. Returns undefined if the union
   // is not a discriminated class union (caller falls back to general union).
   private tryMakeDiscriminatedUnion(
-    variants: readonly TopazType[],
+    variants: Array<TopazType>,
     anchor: { pos: number },
   ): TopazType | undefined {
     if (variants.length < 2) return undefined;
@@ -1148,7 +1172,8 @@ class Emitter {
     const classNames: string[] = [];
     const seenLiterals = new Set<string>();
     for (const v of variants) {
-      const name = (v as Extract<TopazType, { kind: "class" }>).name;
+      if (v.kind !== "class") return undefined;
+      const name = v.name;
       const cls = this.classes.get(name);
       if (!cls) return undefined;
       const field = cls.fields.get(discriminator);
@@ -1189,7 +1214,7 @@ class Emitter {
   // some variant, differs in type across variants, or is the discriminator
   // (handled inline as the fat struct's own `kind` slot).
   private dunionCommonFieldType(
-    t: Extract<TopazType, { kind: "dunion" }>,
+    t: DunionType,
     field: string,
   ): TopazType | undefined {
     if (field === t.discriminator) return undefined;
@@ -1213,7 +1238,7 @@ class Emitter {
   // guarantees `.data` wraps one of the variants.
   private emitDunionCommonFieldAccess(
     expr: PropAccessExpr,
-    t: Extract<TopazType, { kind: "dunion" }>,
+    t: DunionType,
   ): string {
     const field = expr.name;
     const id = this.tmpCounter++;
@@ -1280,7 +1305,7 @@ class Emitter {
   private markRecursiveAliases(): void {
     if (this.typeAliases.size === 0) return;
     const deps = new Map<string, string[]>();
-    for (const [name, info] of this.typeAliases) {
+    for (const [name, info] of this.typeAliases.entries()) {
       const out = new Set<string>();
       this.collectAliasRefs(info.body, out);
       deps.set(name, [...out]);
@@ -1419,7 +1444,7 @@ class Emitter {
     // into typeFromAnnotation — direct AST inspection only. Non-field members
     // and non-string-literal field types are skipped here; sub-pass B performs
     // the full validation.
-    for (const [literalNode, anonName] of this.preAllocatedAnons) {
+    for (const [literalNode, anonName] of this.preAllocatedAnons.entries()) {
       const cls = this.classes.get(anonName)!;
       for (const m of literalNode.members) {
         if (m.kind !== "type_lit_field") continue;
@@ -1439,7 +1464,7 @@ class Emitter {
     // TypeLiteralNode branch of typeFromAnnotation. `currentTypeModule` is set per
     // literal node so the validation / typeFromAnnotation diagnostics position
     // against the module the recursive alias was declared in.
-    for (const [literalNode, anonName] of this.preAllocatedAnons) {
+    for (const [literalNode, anonName] of this.preAllocatedAnons.entries()) {
       const cls = this.classes.get(anonName)!;
       const sf = this.preAllocatedAnonSf.get(literalNode)!;
       const savedSf = this.currentTypeModule;
@@ -1491,7 +1516,7 @@ class Emitter {
   // (file-static lowering) — anything else is rejected, exactly as before.
   // Each entry is paired with the declaring `sf` so later passes can set the
   // ambient position oracle (Topaz nodes carry `pos`/`end` but not their file).
-  private extractDecls(sourceFiles: readonly SourceModule[]): {
+  private extractDecls(sourceFiles: Array<SourceModule>): {
     functions: Array<{ decl: FunctionDecl; sf: SourceModule }>;
     classes: Array<{ decl: ClassDecl; sf: SourceModule }>;
     interfaces: Array<{ decl: InterfaceDecl; sf: SourceModule }>;
@@ -1535,7 +1560,7 @@ class Emitter {
         }
         // Phase 1.5-6 prep #13: a non-root module may still carry a hoistable
         // `const NAME: T = LIT;`; anything else executable is rejected.
-        this.withSf(sf, () => {
+        this.withSfVoid(sf, () => {
           if (this.canHoistModuleConst(stmt, sf)) {
             topLevel.push({ stmt, sf });
           } else {
@@ -1550,7 +1575,7 @@ class Emitter {
     return { functions, classes, interfaces, aliases, topLevel };
   }
 
-  emit(sourceFiles: readonly SourceModule[]): string {
+  emit(sourceFiles: Array<SourceModule>): string {
     if (sourceFiles.length === 0) {
       throw new Error("codegen: at least one source file is required");
     }
@@ -1566,8 +1591,10 @@ class Emitter {
     // other regardless of source order. Generic classes (`class Box<T>`) are
     // held aside in `genericClasses`; their substituted ClassInfo is built
     // lazily under the mangled name on first use.
-    for (const { decl: cls, sf } of classes) {
-      this.withSf(sf, () => {
+    for (const classEntry of classes) {
+      const cls = classEntry.decl;
+      const sf = classEntry.sf;
+      this.withSfVoid(sf, () => {
       const name = cls.name;
       if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
         throw new CodegenError(cls, `cannot redefine built-in '${name}'`);
@@ -1612,8 +1639,10 @@ class Emitter {
     }
 
     // Pass 1b: register interface names.
-    for (const { decl: iface, sf } of interfaces) {
-      this.withSf(sf, () => {
+    for (const ifaceEntry of interfaces) {
+      const iface = ifaceEntry.decl;
+      const sf = ifaceEntry.sf;
+      this.withSfVoid(sf, () => {
       const name = iface.name;
       if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
         throw new CodegenError(iface, `cannot redefine built-in '${name}'`);
@@ -1640,8 +1669,10 @@ class Emitter {
     // are checked eagerly against built-ins, classes, generic classes, and
     // interfaces — the alias lookup in typeFromAnnotation otherwise sits
     // alongside those tables at the same scoping priority.
-    for (const { decl: alias, sf } of aliases) {
-      this.withSf(sf, () => {
+    for (const aliasEntry of aliases) {
+      const alias = aliasEntry.decl;
+      const sf = aliasEntry.sf;
+      this.withSfVoid(sf, () => {
       const name = alias.name;
       if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
         throw new CodegenError(alias, `cannot redefine built-in '${name}'`);
@@ -1686,20 +1717,26 @@ class Emitter {
 
     // Pass 2a: parse interface members (so classes can reference interfaces in
     // field/method types).
-    for (const { decl: iface, sf } of interfaces) {
+    for (const ifaceEntry of interfaces) {
+      const iface = ifaceEntry.decl;
+      const sf = ifaceEntry.sf;
       this.collectInterfaceMembers(iface, sf);
     }
 
     // Pass 2b: parse class members + verify implements. Generic classes are
     // deferred — their substituted ClassInfo is built on demand when a use
     // site instantiates them via instantiateGenericClass.
-    for (const { decl: cls, sf } of classes) {
+    for (const classEntry of classes) {
+      const cls = classEntry.decl;
+      const sf = classEntry.sf;
       if (cls.typeParams.length > 0) continue;
       this.collectClassMembers(cls, sf);
     }
 
-    for (const { decl: fn, sf } of functions) {
-      this.withSf(sf, () => {
+    for (const fnEntry of functions) {
+      const fn = fnEntry.decl;
+      const sf = fnEntry.sf;
+      this.withSfVoid(sf, () => {
       const fname = fn.name;
       if (this.functionSigs.has(fname) || this.genericFunctions.has(fname)) {
         throw new CodegenError(fn, `redeclaration of function '${fname}'`);
@@ -1749,7 +1786,8 @@ class Emitter {
     const classMonoTypedefSlot = out.length;
     out.push("");
     if (interfaces.length > 0) {
-      for (const { decl: iface } of interfaces) {
+      for (const ifaceEntry of interfaces) {
+        const iface = ifaceEntry.decl;
         const n = iface.name;
         out.push(`struct topaz_iface_${n}_vt;`);
         out.push(
@@ -1790,7 +1828,8 @@ class Emitter {
     const classMonoStructSlot = out.length;
     out.push("");
     if (interfaces.length > 0) {
-      for (const { decl: iface } of interfaces) {
+      for (const ifaceEntry of interfaces) {
+        const iface = ifaceEntry.decl;
         out.push(this.emitInterfaceVtableStruct(this.interfaces.get(iface.name)!));
       }
       out.push("");
@@ -1836,7 +1875,9 @@ class Emitter {
     const arrowFwdSlot = out.length;
     out.push("");
 
-    for (const { decl: fn, sf } of functions) {
+    for (const fnEntry of functions) {
+      const fn = fnEntry.decl;
+      const sf = fnEntry.sf;
       if (fn.typeParams.length > 0) continue;
       out.push(`${this.formatSignature(fn, sf)};`);
     }
@@ -1875,7 +1916,9 @@ class Emitter {
     const hoistedTopLevel: Set<Stmt> = new Set();
     {
       const hoistLines: string[] = [];
-      for (const { stmt, sf } of topLevel) {
+      for (const topEntry of topLevel) {
+        const stmt = topEntry.stmt;
+        const sf = topEntry.sf;
         const line = this.tryHoistModuleConst(stmt, sf);
         if (line !== undefined) {
           hoistedTopLevel.add(stmt);
@@ -1903,7 +1946,9 @@ class Emitter {
       }
     }
 
-    for (const { decl: fn, sf } of functions) {
+    for (const fnEntry of functions) {
+      const fn = fnEntry.decl;
+      const sf = fnEntry.sf;
       if (fn.typeParams.length > 0) continue;
       out.push(this.emitFunctionDefinition(fn, sf));
       out.push("");
@@ -1946,7 +1991,9 @@ class Emitter {
     out.push("int main(int __topaz_argc, char **__topaz_argv) {");
     out.push("  topaz_runtime_init_argv(__topaz_argc, __topaz_argv);");
     this.scope.push();
-    for (const { stmt, sf } of topLevel) {
+    for (const topEntry of topLevel) {
+      const stmt = topEntry.stmt;
+      const sf = topEntry.sf;
       // Phase 1.5-6 prep #9: hoisted module consts are already emitted at
       // file scope and registered in scope.stack[0]; emitting them again as
       // local decls would shadow the hoisted bindings inside main() body and
@@ -2470,7 +2517,7 @@ class Emitter {
   // method params / returns). `readonly` on interface fields is accepted as a
   // no-op (carried as `isReadonly` on the member, unused here).
   private collectInterfaceMembers(iface: InterfaceDecl, sf: SourceModule): void {
-    this.withSf(sf, () => {
+    this.withSfVoid(sf, () => {
       const info = this.interfaces.get(iface.name)!;
       for (const m of iface.members) {
         if (m.kind === "interface_field") {
@@ -2516,7 +2563,7 @@ class Emitter {
   // is the declaring module (set ambient for member type resolution); the
   // generic-monomorph path passes the generic class's `sf` via `infoOverride`.
   private collectClassMembers(cls: ClassDecl, sf: SourceModule, infoOverride?: ClassInfo): void {
-    this.withSf(sf, () => {
+    this.withSfVoid(sf, () => {
     // infoOverride is set when collecting members for a generic class
     // monomorph (the ClassInfo lives under the mangled name, not cls.name);
     // otherwise we look up by the source name.
@@ -2738,7 +2785,7 @@ class Emitter {
   // default / rest, parameter-property modifiers, and the optional-trailing rule
   // are all enforced in convert; `?` arrives as `isOptional` and `type` is always
   // present. `sf` positions the param's type-annotation diagnostics.
-  private collectParams(params: readonly FunctionParam[], sf: SourceModule): ParamInfo[] {
+  private collectParams(params: Array<FunctionParam>, sf: SourceModule): ParamInfo[] {
     const out: ParamInfo[] = [];
     for (const p of params) {
       const annot = this.typeFromAnnotation(p.type, p, sf);
@@ -2775,7 +2822,7 @@ class Emitter {
     if (info.ctor) {
       lines.push(this.constructorSignature(info));
     }
-    for (const [, method] of info.methods) {
+    for (const method of info.methods.values()) {
       lines.push(this.methodSignature(info, method));
     }
     return lines;
@@ -2784,7 +2831,7 @@ class Emitter {
   private emitClassMemberDefinitions(info: ClassInfo): string[] {
     const out: string[] = [];
     if (info.ctor) out.push(this.emitConstructorDefinition(info));
-    for (const [, method] of info.methods) {
+    for (const method of info.methods.values()) {
       out.push(this.emitMethodDefinition(info, method));
     }
     return out;
@@ -2823,7 +2870,7 @@ class Emitter {
     try {
       const anchor = ctor.decl ?? info.decl;
       for (const p of ctor.params) {
-        this.scope.declare(p.name, p.type, /* isConst */ false, anchor);
+        this.scope.declareBinding(p.name, p.type, /* isConst */ false, anchor);
       }
       const bodyLines: string[] = [];
       bodyLines.push("{");
@@ -2895,7 +2942,7 @@ class Emitter {
     this.scope.push();
     try {
       for (const p of method.params) {
-        this.scope.declare(p.name, p.type, /* isConst */ false, method.decl);
+        this.scope.declareBinding(p.name, p.type, /* isConst */ false, method.decl);
       }
       // Methods only exist on user-declared classes, so `info.sf` is defined.
       const body = this.emitBlockBoundary(method.decl.body, info.sf!);
@@ -3007,7 +3054,33 @@ class Emitter {
   // `g_currentModule` (so CodegenError can resolve Topaz-node positions) and
   // `currentTypeModule` (so typeFromAnnotation reached from the SCC has a module
   // for inline annotation positions), runs the SCC, and restores.
-  private withSf<T>(sf: SourceModule, fn: () => T): T {
+  private withSfVoid(sf: SourceModule, fn: () => void): void {
+    const savedG = g_currentModule;
+    const savedT = this.currentTypeModule;
+    g_currentModule = sf;
+    this.currentTypeModule = sf;
+    try {
+      fn();
+    } finally {
+      g_currentModule = savedG;
+      this.currentTypeModule = savedT;
+    }
+  }
+
+  private withSfString(sf: SourceModule, fn: () => string): string {
+    const savedG = g_currentModule;
+    const savedT = this.currentTypeModule;
+    g_currentModule = sf;
+    this.currentTypeModule = sf;
+    try {
+      return fn();
+    } finally {
+      g_currentModule = savedG;
+      this.currentTypeModule = savedT;
+    }
+  }
+
+  private withSfFunctionSig(sf: SourceModule, fn: () => FunctionSig): FunctionSig {
     const savedG = g_currentModule;
     const savedT = this.currentTypeModule;
     g_currentModule = sf;
@@ -3023,11 +3096,11 @@ class Emitter {
   // The statement / block is a Topaz node; set the ambient SourceModule so the
   // SCC can resolve positions, then emit directly.
   private emitStatementBoundary(stmt: Stmt, sf: SourceModule): string {
-    return this.withSf(sf, () => this.emitStatement(stmt, 1));
+    return this.withSfString(sf, () => this.emitStatement(stmt, 1));
   }
 
   private emitBlockBoundary(block: BlockStmt, sf: SourceModule): string {
-    return this.withSf(sf, () => this.emitBlock(block, 0));
+    return this.withSfString(sf, () => this.emitBlock(block, 0));
   }
 
   // Phase 1.5-6e-1: the type machine consumes Topaz `TypeNode` (ast.ts). `sf` is
@@ -3329,7 +3402,7 @@ class Emitter {
       // `T | undefined`), not the raw annotation — otherwise narrowing would
       // disagree with the actual C parameter type.
       for (const p of sig.params) {
-        this.scope.declare(p.name, p.type, /* isConst */ false, fn);
+        this.scope.declareBinding(p.name, p.type, /* isConst */ false, fn);
       }
       const body = this.emitBlockBoundary(fn.body, sf);
       return `${this.formatSignature(fn, sf)} ${body}`;
@@ -3361,7 +3434,7 @@ class Emitter {
     this.scope.push();
     try {
       for (const p of mono.sig.params) {
-        this.scope.declare(p.name, p.type, /* isConst */ false, mono.decl);
+        this.scope.declareBinding(p.name, p.type, /* isConst */ false, mono.decl);
       }
       const body = this.emitBlockBoundary(mono.decl.body, mono.sf);
       return `${this.formatMonomorphSignature(mono.mangled, mono.sig)} ${body}`;
@@ -3426,9 +3499,9 @@ class Emitter {
   // call argument types are checked).
   private inferCallbackFn(
     cb: Expr,
-    paramTypes: readonly TopazType[],
+    paramTypes: Array<TopazType>,
     label: string,
-  ): Extract<TopazType, { kind: "fn" }> {
+  ): FnType {
     if (cb.kind === "arrow_expr") {
       if (cb.params.length !== paramTypes.length) {
         throw new CodegenError(
@@ -3468,7 +3541,7 @@ class Emitter {
         this.scope.push();
         try {
           for (const p of params) {
-            this.scope.declare(p.name, p.type, /* isConst */ false, cb);
+            this.scope.declareBinding(p.name, p.type, /* isConst */ false, cb);
           }
           returnType = this.inferType(cb.body.expr);
         } finally {
@@ -3611,9 +3684,16 @@ class Emitter {
     this.collectCaptures(arrow, new Set(params.map((p) => p.name)), captures);
 
     const envIsEmpty = captures.size === 0;
-    const envTypedef = envIsEmpty
-      ? ""
-      : `typedef struct ${envName} {\n${[...captures.entries()].map(([n, t]) => `  ${cTypeName(t)} ${n};`).join("\n")}\n} ${envName};`;
+    let envTypedef = "";
+    if (!envIsEmpty) {
+      const fieldLines: string[] = [];
+      for (const captureEntry of captures.entries()) {
+        const n = captureEntry[0];
+        const t = captureEntry[1];
+        fieldLines.push(`  ${cTypeName(t)} ${n};`);
+      }
+      envTypedef = `typedef struct ${envName} {\n${fieldLines.join("\n")}\n} ${envName};`;
+    }
 
     // Emit the body with a barrier in place. Set captureContext so identifier
     // emission can route reads through `((${envName} *)__topaz_env)->name`
@@ -3635,7 +3715,7 @@ class Emitter {
     this.scope.push();
     try {
       for (const p of params) {
-        this.scope.declare(p.name, p.type, /* isConst */ false, arrow);
+        this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrow);
       }
       let bodyText: string;
       if (arrow.body.kind === "arrow_block_body") {
@@ -3681,7 +3761,9 @@ class Emitter {
       return `((${fnTypeName}){ .fn = (${cTypeName(returnType)}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = NULL })`;
     }
     const envExprParts: string[] = [];
-    for (const [name, t] of captures) {
+    for (const captureEntry of captures.entries()) {
+      const name = captureEntry[0];
+      const t = captureEntry[1];
       // Emit each capture using the *outer* scope. The barrier is already
       // popped, so a plain emitExpression reads from the correct frame.
       // Use a fresh tmp-free expression: re-emit the identifier the same way
@@ -3728,7 +3810,7 @@ class Emitter {
   // scope before we leave outer's emit.
   private collectCaptures(
     arrow: ArrowExpr,
-    paramNames: ReadonlySet<string>,
+    paramNames: Set<string>,
     captures: Map<string, TopazType>,
   ): void {
     const locals = new Set<string>(paramNames);
@@ -3975,7 +4057,7 @@ class Emitter {
     this.typeParamScope = subs;
     let sig: FunctionSig;
     try {
-      sig = this.withSf(generic.sf, () => {
+      sig = this.withSfFunctionSig(generic.sf, () => {
         const returnType = this.typeFromAnnotation(generic.decl.returnType, generic.decl, generic.sf);
         const params = this.collectParams(generic.decl.params, generic.sf);
         return { params, returnType };
@@ -4005,7 +4087,7 @@ class Emitter {
   // `this.genericClasses.has(refName)` before invoking).
   private instantiateGenericClass(
     refName: string,
-    typeArgNodes: readonly TypeNode[] | undefined,
+    typeArgNodes: Array<TypeNode> | undefined,
     anchor: { pos: number },
     sf: SourceModule,
   ): TopazType {
@@ -4273,22 +4355,21 @@ class Emitter {
     op: string,
     polarity: boolean,
   ): { name: string; type: TopazType } | undefined {
-    const isIdPA = (e: Expr): e is PropAccessExpr =>
-      e.kind === "prop_access" && !e.optional && e.receiver.kind === "ident";
     let pa: PropAccessExpr;
     let litText: string;
     const leftLit = stringLitText(cond.lhs);
     const rightLit = stringLitText(cond.rhs);
-    if (isIdPA(cond.lhs) && rightLit !== undefined) {
+    if (cond.lhs.kind === "prop_access" && !cond.lhs.optional && cond.lhs.receiver.kind === "ident" && rightLit !== undefined) {
       pa = cond.lhs;
       litText = rightLit;
-    } else if (isIdPA(cond.rhs) && leftLit !== undefined) {
+    } else if (cond.rhs.kind === "prop_access" && !cond.rhs.optional && cond.rhs.receiver.kind === "ident" && leftLit !== undefined) {
       pa = cond.rhs;
       litText = leftLit;
     } else {
       return undefined;
     }
-    const idName = (pa.receiver as IdentExpr).name;
+    if (pa.receiver.kind !== "ident") return undefined;
+    const idName = pa.receiver.name;
     const b = this.scope.lookup(idName);
     if (!b || b.type.kind !== "dunion") return undefined;
     const dunion = b.type;
@@ -4353,8 +4434,8 @@ class Emitter {
     }
 
     if (stmt.kind === "var_decl") {
-      const { type, cName, initStr } = this.declareVar(stmt, stmt.declKind === "const");
-      return `${pad}${cTypeName(type)} ${cName}${initStr};`;
+      const declaredVar = this.declareVar(stmt, stmt.declKind === "const");
+      return `${pad}${cTypeName(declaredVar.type)} ${declaredVar.cName}${declaredVar.initStr};`;
     }
 
     if (stmt.kind === "var_destr_decl") {
@@ -4522,7 +4603,7 @@ class Emitter {
     this.scope.push();
     let catchBodyStr: string;
     try {
-      this.scope.declare(eName, errType, /* isConst */ false, catchClause);
+      this.scope.declareBinding(eName, errType, /* isConst */ false, catchClause);
       const catchBodyLines = catchClause.body.stmts.map((s) =>
         this.emitStatement(s, indent + 2),
       );
@@ -4708,12 +4789,13 @@ class Emitter {
   // inside main() body.
   private tryHoistModuleConst(stmt: Stmt, sf: SourceModule): string | undefined {
     if (!this.canHoistModuleConst(stmt, sf)) return undefined;
-    const d = stmt as VarDeclStmt;
+    if (stmt.kind !== "var_decl") return undefined;
+    const d = stmt;
     const lit = this.tryScalarLiteralInit(d.init!)!;
-    let type: TopazType = lit.type;
-    if (d.type) type = this.typeFromAnnotation(d.type, d, sf);
-    this.scope.declare(d.name, type, /* isConst */ true, d);
-    return `static const ${cTypeName(type)} ${d.name} = ${lit.cExpr};`;
+    let varType: TopazType = lit.type;
+    if (d.type) varType = this.typeFromAnnotation(d.type, d, sf);
+    this.scope.declareBinding(d.name, varType, /* isConst */ true, d);
+    return `static const ${cTypeName(varType)} ${d.name} = ${lit.cExpr};`;
   }
 
   // Phase 1.5-6 prep #9: recognize the set of initializers that are
@@ -4728,7 +4810,7 @@ class Emitter {
   ): { type: TopazType; cExpr: string } | undefined {
     if (expr.kind === "num_lit") {
       const t = expr.text;
-      return { type: T_NUMBER, cExpr: /[.eE]/.test(t) ? t : `${t}.0` };
+      return { type: T_NUMBER, cExpr: hasDecimalOrExponent(t) ? t : `${t}.0` };
     }
     if (expr.kind === "bool_lit") {
       return { type: T_BOOLEAN, cExpr: expr.value ? "true" : "false" };
@@ -4739,7 +4821,7 @@ class Emitter {
       expr.operand.kind === "num_lit"
     ) {
       const t = expr.operand.text;
-      const num = /[.eE]/.test(t) ? t : `${t}.0`;
+      const num = hasDecimalOrExponent(t) ? t : `${t}.0`;
       return { type: T_NUMBER, cExpr: `${expr.op}${num}` };
     }
     return undefined;
@@ -4852,7 +4934,7 @@ class Emitter {
         ? `${tmp}->${fname}`
         : `${tmp}.vt->get_${fname}(${tmp}.data)`;
       lines.push(`${pad}${cTypeName(fty)} ${fname} = ${accessor};`);
-      this.scope.declare(fname, fty, isConst, b);
+      this.scope.declareBinding(fname, fty, isConst, b);
     }
     return lines.join("\n");
   }
@@ -4870,14 +4952,14 @@ class Emitter {
     const name = decl.name;
     const init = decl.init;
 
-    let type: TopazType;
+    let varType: TopazType;
     let initExpr: string;
     if (decl.type) {
-      type = this.typeFromAnnotation(decl.type, decl, g_currentModule!);
-      this.assertNotVoid(type, decl, "variable type");
-      // emitWithExpected threads `type` through ArrayLiteral / NewExpression
+      varType = this.typeFromAnnotation(decl.type, decl, g_currentModule!);
+      this.assertNotVoid(varType, decl, "variable type");
+      // emitWithExpected threads `varType` through ArrayLiteral / NewExpression
       // context typing and applies class -> interface coercion when needed.
-      initExpr = this.emitWithExpected(init, type);
+      initExpr = this.emitWithExpected(init, varType);
       // Phase 1.5-6 prep: initializer narrowing. `const x: U = init` where U is
       // a discriminated union and init's static type is a concrete variant
       // keeps the narrowed variant for subsequent reads (tsc CFA narrows the
@@ -4896,12 +4978,12 @@ class Emitter {
         init.kind !== "object_lit" &&
         init.kind !== "array_lit" &&
         init.kind !== "arrow_expr";
-      if (isConst && type.kind === "dunion" && initBareTypeable) {
+      if (isConst && varType.kind === "dunion" && initBareTypeable) {
         const initType = this.inferType(init);
-        if (isClassType(initType) && type.variants.includes(classNameOf(initType)!)) {
-          this.scope.declare(name, type, isConst, decl);
+        if (isClassType(initType) && varType.variants.includes(classNameOf(initType)!)) {
+          this.scope.declareBinding(name, varType, isConst, decl);
           this.scope.narrow(name, initType);
-          return { type, cName: name, initStr: ` = ${initExpr}` };
+          return { type: varType, cName: name, initStr: ` = ${initExpr}` };
         }
       }
     } else {
@@ -4916,18 +4998,18 @@ class Emitter {
           "cannot infer constructor type arguments; write `new Map<K, V>()` / `new Set<T>()` or annotate the binding",
         );
       }
-      type = this.inferType(init);
-      this.assertNotVoid(type, decl, "variable initializer (void-returning call cannot be stored)");
+      varType = this.inferType(init);
+      this.assertNotVoid(varType, decl, "variable initializer (void-returning call cannot be stored)");
       if (init.kind === "array_lit") {
-        initExpr = this.emitArrayLiteral(init, type);
+        initExpr = this.emitArrayLiteral(init, varType);
       } else if (init.kind === "new_expr") {
-        initExpr = this.emitNewExpression(init, type);
+        initExpr = this.emitNewExpression(init, varType);
       } else {
         initExpr = this.emitExpression(init);
       }
     }
-    this.scope.declare(name, type, isConst, decl);
-    return { type, cName: name, initStr: ` = ${initExpr}` };
+    this.scope.declareBinding(name, varType, isConst, decl);
+    return { type: varType, cName: name, initStr: ` = ${initExpr}` };
   }
 
   private emitForStatement(stmt: ForStmt, indent: number): string {
@@ -4940,8 +5022,8 @@ class Emitter {
           // `for_init_decl.decl` is a single `var_decl`; convert already split
           // out / rejected destructuring and multi-decl for-init.
           const d = stmt.init.decl;
-          const { type, cName, initStr: vInit } = this.declareVar(d, d.declKind === "const");
-          initStr = `${cTypeName(type)} ${cName}${vInit}`;
+          const declaredVar = this.declareVar(d, d.declKind === "const");
+          initStr = `${cTypeName(declaredVar.type)} ${declaredVar.cName}${declaredVar.initStr}`;
         } else {
           initStr = this.emitExpression(stmt.init.expr);
         }
@@ -5174,7 +5256,7 @@ class Emitter {
     // the body itself so any narrowing inside the loop pops cleanly.
     this.scope.push();
     try {
-      this.scope.declare(bindName, elemType, isConst, stmt);
+      this.scope.declareBinding(bindName, elemType, isConst, stmt);
       this.scope.push();
       this.loopCtx.push("loop");
       try {
@@ -5257,10 +5339,10 @@ class Emitter {
     this.scope.push();
     try {
       if (bindSpec.kind === "single") {
-        this.scope.declare(bindSpec.name, bindSpec.type, isConst, stmt);
+        this.scope.declareBinding(bindSpec.name, bindSpec.type, isConst, stmt);
       } else {
-        this.scope.declare(bindSpec.firstName, bindSpec.firstType, isConst, stmt);
-        this.scope.declare(bindSpec.secondName, bindSpec.secondType, isConst, stmt);
+        this.scope.declareBinding(bindSpec.firstName, bindSpec.firstType, isConst, stmt);
+        this.scope.declareBinding(bindSpec.secondName, bindSpec.secondType, isConst, stmt);
       }
       this.scope.push();
       this.loopCtx.push("loop");
@@ -5315,7 +5397,7 @@ class Emitter {
   private emitForOfIteratorLowering(
     stmt: ForOfStmt,
     indent: number,
-    iterType: Extract<TopazType, { kind: "iter" }>,
+    iterType: IterType,
     recvExpr: Expr,
     bindName: string,
     bindingType: TypeNode | undefined,
@@ -5345,7 +5427,7 @@ class Emitter {
 
     this.scope.push();
     try {
-      this.scope.declare(bindName, bindType, isConst, stmt);
+      this.scope.declareBinding(bindName, bindType, isConst, stmt);
       this.scope.push();
       this.loopCtx.push("loop");
       try {
@@ -5390,7 +5472,7 @@ class Emitter {
     // identifier. When matched, each case body sees `<id>` narrowed to the
     // class whose discriminator literal equals the case label. Reuses the
     // ordinary scope.narrow path so identifier emit casts via `.data`.
-    let dunionTarget: { name: string; dunion: Extract<TopazType, { kind: "dunion" }> } | undefined;
+    let dunionTarget: { name: string; dunion: DunionType } | undefined;
     const disc = stmt.discriminant;
     if (disc.kind === "prop_access" && !disc.optional && disc.receiver.kind === "ident") {
       const idName = disc.receiver.name;
@@ -5411,8 +5493,7 @@ class Emitter {
       }
     }
 
-    type Group = { conds: Expr[]; body: readonly Stmt[] };
-    const groups: Group[] = [];
+    const groups: SwitchGroup[] = [];
     let pending: Expr[] = [];
     for (const c of clauses) {
       if (c.test !== undefined) {
@@ -5447,7 +5528,7 @@ class Emitter {
     // under tryMakeDiscriminatedUnion's uniqueness check) or none falls back
     // to no narrowing. Multi-label fall-through groups only narrow if every
     // label points at the same class.
-    const groupNarrowClass: (string | undefined)[] = [];
+    const groupNarrowClass: Array<string | undefined> = [];
     if (dunionTarget) {
       const literalToClass = new Map<string, string>();
       for (const cname of dunionTarget.dunion.variants) {
@@ -5558,7 +5639,7 @@ class Emitter {
   private emitExpression(expr: Expr): string {
     if (expr.kind === "num_lit") {
       const t = expr.text;
-      return /[.eE]/.test(t) ? t : `${t}.0`;
+      return hasDecimalOrExponent(t) ? t : `${t}.0`;
     }
     if (expr.kind === "bool_lit") return expr.value ? "true" : "false";
     if (expr.kind === "null_lit") {
@@ -5774,7 +5855,8 @@ class Emitter {
       // 0, set by the constructor to a per-class sentinel address; the check
       // dereferences the void* payload through that field.
       this.inferType(expr); // type-check
-      const cls = (expr.rhs as IdentExpr).name;
+      if (expr.rhs.kind !== "ident") throw new CodegenError(expr, "`instanceof` right-hand side must be a concrete class name");
+      const cls = expr.rhs.name;
       const id = this.tmpCounter++;
       const tmp = `__topaz_io_${id}`;
       const left = this.emitExpression(expr.lhs);
@@ -5991,10 +6073,24 @@ class Emitter {
   // dance the `if` / `&&` / `||` handlers do, factored out so the ternary's
   // two branches can each be inferred / emitted under the polarity-correct
   // narrowing read off the condition.
-  private underNarrowing<T>(
+  private underNarrowingString(
     n: { name: string; type: TopazType } | undefined,
-    fn: () => T,
-  ): T {
+    fn: () => string,
+  ): string {
+    if (!n) return fn();
+    this.scope.push();
+    try {
+      this.scope.narrow(n.name, n.type);
+      return fn();
+    } finally {
+      this.scope.pop();
+    }
+  }
+
+  private underNarrowingType(
+    n: { name: string; type: TopazType } | undefined,
+    fn: () => TopazType,
+  ): TopazType {
     if (!n) return fn();
     this.scope.push();
     try {
@@ -6022,8 +6118,8 @@ class Emitter {
     const nFalse = this.extractNarrowing(expr.cond, false);
     const cond = this.emitExpression(expr.cond);
     const target = expected ?? this.conditionalResultType(expr, nTrue, nFalse);
-    const a = this.underNarrowing(nTrue, () => this.emitWithExpected(expr.thenBranch, target));
-    const b = this.underNarrowing(nFalse, () => this.emitWithExpected(expr.elseBranch, target));
+    const a = this.underNarrowingString(nTrue, () => this.emitWithExpected(expr.thenBranch, target));
+    const b = this.underNarrowingString(nFalse, () => this.emitWithExpected(expr.elseBranch, target));
     return `(${cond} ? (${a}) : (${b}))`;
   }
 
@@ -6038,8 +6134,8 @@ class Emitter {
     nTrue: { name: string; type: TopazType } | undefined,
     nFalse: { name: string; type: TopazType } | undefined,
   ): TopazType {
-    const tt = this.underNarrowing(nTrue, () => this.inferType(expr.thenBranch));
-    const tf = this.underNarrowing(nFalse, () => this.inferType(expr.elseBranch));
+    const tt = this.underNarrowingType(nTrue, () => this.inferType(expr.thenBranch));
+    const tf = this.underNarrowingType(nFalse, () => this.inferType(expr.elseBranch));
     if (typeEq(tt, tf)) return tt;
     if (this.isAssignableTo(tf, tt)) return tt;
     if (this.isAssignableTo(tt, tf)) return tf;
@@ -6332,9 +6428,9 @@ class Emitter {
       );
     };
 
-    let acc: string | null = null;
-    const append = (piece: string) => {
-      acc = acc === null ? piece : `topaz_string_concat(${acc}, ${piece})`;
+    let acc: string | undefined = undefined;
+    const append = (piece: string): void => {
+      acc = acc === undefined ? piece : `topaz_string_concat(${acc}, ${piece})`;
     };
 
     if (expr.head !== "") append(this.emitStringLiteralText(expr.head, expr));
@@ -6345,7 +6441,7 @@ class Emitter {
     // All-empty template (`${a}` with empty head + empty tail) still needs to
     // yield a `topaz_string` value; fall back to the first substitution which
     // is already stringified.
-    if (acc === null) {
+    if (acc === undefined) {
       // Unreachable: templateSpans is non-empty for TemplateExpression and
       // we've already appended at least one stringified span above. Defensive
       // return keeps the type signature honest.
@@ -9113,8 +9209,8 @@ class Emitter {
   // [requiredParamCount, params.length] is rejected with the canonical
   // "expects N got M" message; the caller passes the human-readable name.
   private emitCallArgs(
-    args: readonly Expr[],
-    params: readonly ParamInfo[],
+    args: Array<Expr>,
+    params: Array<ParamInfo>,
     label: string,
     anchor: { pos: number },
   ): string[] {
@@ -9276,7 +9372,10 @@ class Emitter {
   }
 }
 
-export function codegen(sourceFiles: SourceModule | readonly SourceModule[]): string {
-  const files = Array.isArray(sourceFiles) ? (sourceFiles as readonly SourceModule[]) : [sourceFiles as SourceModule];
-  return new Emitter().emit(files);
+export function codegen(sourceFiles: SourceModule | Array<SourceModule>): string {
+  const emitter = new Emitter();
+  if (Array.isArray(sourceFiles)) {
+    return emitter.emit(sourceFiles);
+  }
+  return emitter.emit([sourceFiles]);
 }

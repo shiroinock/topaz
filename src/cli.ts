@@ -4,10 +4,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { codegen } from "./codegen.js";
-import { computeLineStarts, LexError, tokenize, type Token } from "./lexer.js";
+import { CodegenError, codegen } from "./codegen.js";
+import { computeLineStarts, LexError, tokenize, Token } from "./lexer.js";
 import { LoaderError, loadModuleGraph } from "./loader.js";
-import { ParseError, parseFile as topazParseFile } from "./topaz_parser.js";
+import { ParseError, parseFile } from "./topaz_parser.js";
 
 const USAGE = `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
 
@@ -108,7 +108,7 @@ function main(): void {
   }
 
   if (parsed.parseOnly) {
-    const mod = topazParseFile(input);
+    const mod = parseFile(input);
     process.stdout.write(JSON.stringify(mod, null, 2) + "\n");
     return;
   }
@@ -185,6 +185,7 @@ try {
   if (err instanceof ParseError) die(formatSourceError(err.file, err.pos, err.message));
   if (err instanceof LexError) die(formatSourceError(err.file, err.pos, err.message));
   if (err instanceof LoaderError) die(err.message);
+  if (err instanceof CodegenError) die(err.message);
   if (err instanceof Error) die(err.message);
   throw err;
 }
