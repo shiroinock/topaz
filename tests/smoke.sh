@@ -221,6 +221,7 @@ run_case array_method_join $'1,2,3\n5\n1, 2, 3\n7\n123\n3\n1 -> 2 -> 3\nalpha-be
 
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
+run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
 run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
 run_fail_case import_type_clause_fail examples/import_type_clause_fail.ts "\`import type\` is unsupported"
 run_fail_case import_type_specifier_fail examples/import_type_specifier_fail.ts "\`import type\` is unsupported"

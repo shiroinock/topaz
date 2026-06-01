@@ -43,7 +43,7 @@ import {
 // → SCC boundary, save/restore-style). The Topaz `pos` equals the tsc
 // `getStart(sf)` recorded by convert, so positions are byte-identical to the
 // pre-migration tsc-anchored errors.
-let g_currentModule: SourceModule | undefined;
+let g_currentModule: SourceModule | undefined = undefined;
 
 // Phase 1.4c-3: TopazType is a structured tagged-union. Until 1.4c-2 we used a
 // string-union ("topaz_array_class_Box" etc.) keyed by canonical C identifier,
@@ -100,7 +100,7 @@ const T_UNKNOWN: TopazType = { kind: "unknown" };
 // the symmetric rule (no `return expr;` from void, no `return;` from non-void).
 const T_VOID: TopazType = { kind: "void" };
 
-const TOPAZ_THIS = "__topaz_this";
+const TOPAZ_THIS: string = "__topaz_this";
 
 function isScalarType(t: TopazType): boolean {
   return t.kind === "number" || t.kind === "boolean" || t.kind === "string";
@@ -598,7 +598,7 @@ function posToLineCol(module: SourceModule, pos: number): { line: number; col: n
 }
 
 export class CodegenError {
-  message: string;
+  message: string = "";
 
   // Phase 1.5-6e-4: accept a Topaz node `{ pos }` (resolved against the ambient
   // SourceModule's lineStarts) or an already-formatted `file:line:col: message`
@@ -870,6 +870,8 @@ type TypeAliasInfo = {
   recursive: boolean;
 };
 
+type TopLevelEntry = { stmt: Stmt; sf: SourceModule; isRoot: boolean };
+
 type SwitchGroup = { conds: Array<Expr>; body: Array<Stmt> };
 
 type IterNextInfo = {
@@ -974,6 +976,7 @@ class Emitter {
   // resolving the body, which may live in a different module than the reference
   // site). The original `decl` anchor was never read and is dropped.
   private typeAliases: Map<string, TypeAliasInfo> = new Map<string, TypeAliasInfo>();
+  private moduleGlobalTypes: Map<Stmt, TopazType> = new Map<Stmt, TopazType>();
   // Phase 1.5-6 prep #14: TypeLiteralNode -> mangled anon class name. Populated
   // by preAllocateRecursiveAnons() walking the bodies of recursive aliases. A
   // hit in typeFromAnnotation's TypeLiteralNode branch returns classOf(name)
@@ -1512,8 +1515,8 @@ class Emitter {
   // global namespace, so name
   // imports carry no codegen meaning). Module-level statements land in
   // `topLevel`: the root module accepts any statement (they become `main()`
-  // body); a non-root module only accepts a hoistable scalar-literal `const`
-  // (file-static lowering) — anything else is rejected, exactly as before.
+  // body); a non-root module accepts hoistable scalar-literal `const` and
+  // annotated module-global var declarations (file-scope decl + main init).
   // Each entry is paired with the declaring `sf` so later passes can set the
   // ambient position oracle (Topaz nodes carry `pos`/`end` but not their file).
   private extractDecls(sourceFiles: Array<SourceModule>): {
@@ -1521,13 +1524,13 @@ class Emitter {
     classes: Array<{ decl: ClassDecl; sf: SourceModule }>;
     interfaces: Array<{ decl: InterfaceDecl; sf: SourceModule }>;
     aliases: Array<{ decl: TypeAliasDecl; sf: SourceModule }>;
-    topLevel: Array<{ stmt: Stmt; sf: SourceModule }>;
+    topLevel: Array<TopLevelEntry>;
   } {
     const functions: Array<{ decl: FunctionDecl; sf: SourceModule }> = [];
     const classes: Array<{ decl: ClassDecl; sf: SourceModule }> = [];
     const interfaces: Array<{ decl: InterfaceDecl; sf: SourceModule }> = [];
     const aliases: Array<{ decl: TypeAliasDecl; sf: SourceModule }> = [];
-    const topLevel: Array<{ stmt: Stmt; sf: SourceModule }> = [];
+    const topLevel: Array<TopLevelEntry> = [];
     const rootSf = sourceFiles[sourceFiles.length - 1]!;
     for (const sf of sourceFiles) {
       const isRoot = sf === rootSf;
@@ -1555,18 +1558,19 @@ class Emitter {
         }
         const stmt = item.stmt;
         if (isRoot) {
-          topLevel.push({ stmt, sf });
+          topLevel.push({ stmt, sf, isRoot });
           continue;
         }
-        // Phase 1.5-6 prep #13: a non-root module may still carry a hoistable
-        // `const NAME: T = LIT;`; anything else executable is rejected.
+        // Phase 1.5-6 prep #13 + 6i: a non-root module may carry file-scope
+        // globals that are visible to emitted functions. Everything else stays
+        // rejected so imported modules cannot run arbitrary statement bodies.
         this.withSfVoid(sf, () => {
-          if (this.canHoistModuleConst(stmt, sf)) {
-            topLevel.push({ stmt, sf });
+          if (this.canHoistModuleConst(stmt, sf) || this.canModuleGlobalVar(stmt)) {
+            topLevel.push({ stmt, sf, isRoot });
           } else {
             throw new CodegenError(
               stmt,
-              "non-root module may only contain import / class / interface / function / type alias declarations or hoistable scalar-literal `const` (Phase 1.5-2)",
+              "non-root module may only contain import / class / interface / function / type alias declarations, hoistable scalar-literal `const`, or annotated module-global variables",
             );
           }
         });
@@ -1930,6 +1934,30 @@ class Emitter {
       }
     }
 
+    // Phase 1.5-6i prep: non-root module globals need file-scope storage so
+    // imported functions can read them. Initializers still run from main()
+    // after runtime setup, preserving one process-wide initialization point.
+    const moduleGlobalSlot = out.length;
+    out.push("");
+    const moduleGlobalTopLevel: Set<Stmt> = new Set();
+    {
+      const globalLines: string[] = [];
+      for (const topEntry of topLevel) {
+        if (topEntry.isRoot) continue;
+        const stmt = topEntry.stmt;
+        if (hoistedTopLevel.has(stmt)) continue;
+        const sf = topEntry.sf;
+        const line = this.tryEmitModuleGlobalDecl(stmt, sf);
+        if (line !== undefined) {
+          moduleGlobalTopLevel.add(stmt);
+          globalLines.push(line);
+        }
+      }
+      if (globalLines.length > 0) {
+        out[moduleGlobalSlot] = globalLines.join("\n") + "\n";
+      }
+    }
+
     // Emit per-(interface, implementing-class) wrapper functions and the
     // static const vtable instances. These must come before user function /
     // class method definitions so coercion sites (`&topaz_iface_I_for_C_vt`)
@@ -1993,12 +2021,17 @@ class Emitter {
     this.scope.push();
     for (const topEntry of topLevel) {
       const stmt = topEntry.stmt;
+      if (!moduleGlobalTopLevel.has(stmt)) continue;
+      out.push(this.emitModuleGlobalInit(stmt, topEntry.sf, 1));
+    }
+    for (const topEntry of topLevel) {
+      const stmt = topEntry.stmt;
       const sf = topEntry.sf;
       // Phase 1.5-6 prep #9: hoisted module consts are already emitted at
       // file scope and registered in scope.stack[0]; emitting them again as
       // local decls would shadow the hoisted bindings inside main() body and
       // duplicate the storage.
-      if (hoistedTopLevel.has(stmt)) continue;
+      if (hoistedTopLevel.has(stmt) || moduleGlobalTopLevel.has(stmt)) continue;
       // Phase 1.5-6e-3: emit the Topaz top-level statement under the declaring
       // module's SourceFile (ambient position oracle for the SCC).
       out.push(this.emitStatementBoundary(stmt, sf));
@@ -4780,6 +4813,12 @@ class Emitter {
     return true;
   }
 
+  private canModuleGlobalVar(stmt: Stmt): boolean {
+    if (stmt.kind !== "var_decl") return false;
+    if (stmt.init === undefined) return false;
+    return stmt.type !== undefined;
+  }
+
   // Phase 1.5-6 prep #9: try to hoist a top-level `const NAME: T = LIT;` to
   // a file-static `static const T NAME = LIT;`. Returns the C declaration
   // line on success (and registers the binding in scope.stack[0] as a
@@ -4796,6 +4835,32 @@ class Emitter {
     if (d.type) varType = this.typeFromAnnotation(d.type, d, sf);
     this.scope.declareBinding(d.name, varType, /* isConst */ true, d);
     return `static const ${cTypeName(varType)} ${d.name} = ${lit.cExpr};`;
+  }
+
+  private tryEmitModuleGlobalDecl(stmt: Stmt, sf: SourceModule): string | undefined {
+    if (!this.canModuleGlobalVar(stmt)) return undefined;
+    if (stmt.kind !== "var_decl") return undefined;
+    const d = stmt;
+    if (d.type === undefined) return undefined;
+    const varType = this.typeFromAnnotation(d.type, d, sf);
+    this.assertNotVoid(varType, d, "module global type");
+    this.scope.declareBinding(d.name, varType, d.declKind === "const", d);
+    this.moduleGlobalTypes.set(d, varType);
+    return `static ${cTypeName(varType)} ${d.name};`;
+  }
+
+  private emitModuleGlobalInit(stmt: Stmt, sf: SourceModule, indent: number): string {
+    return this.withSfString(sf, () => {
+      if (stmt.kind !== "var_decl" || stmt.init === undefined) {
+        throw new Error("emitModuleGlobalInit: expected initialized var_decl");
+      }
+      const varType = this.moduleGlobalTypes.get(stmt);
+      if (varType === undefined) {
+        throw new Error("emitModuleGlobalInit: missing module global type");
+      }
+      const pad = "  ".repeat(indent);
+      return `${pad}${stmt.name} = ${this.emitWithExpected(stmt.init, varType)};`;
+    });
   }
 
   // Phase 1.5-6 prep #9: recognize the set of initializers that are
