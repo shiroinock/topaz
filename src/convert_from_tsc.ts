@@ -1317,6 +1317,8 @@ class Converter {
       }
       case ts.SyntaxKind.UndefinedKeyword:
         return { kind: "type_ref", name: "undefined", typeArgs: [], ...this.span(t) };
+      case ts.SyntaxKind.NeverKeyword:
+        return { kind: "type_ref", name: "never", typeArgs: [], ...this.span(t) };
     }
     if (ts.isTypeReferenceNode(t)) {
       if (!ts.isIdentifier(t.typeName)) {

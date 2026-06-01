@@ -274,6 +274,7 @@ run_fail_case access_modifier_static_fail examples/access_modifier_static_fail.t
 
 run_case void_return $'hello\nhello\non\n7\n0\n0\n[log] via iface'
 run_case void_fn_type $'3\n10\ndone'
+run_case never_return_annotation alive
 run_fail_case void_return_bare_in_nonvoid_fail examples/void_return_bare_in_nonvoid_fail.ts "\`return;\` is only allowed in a void-returning function"
 run_fail_case void_return_value_in_void_fail examples/void_return_value_in_void_fail.ts "\`return <expr>;\` is not allowed in a void-returning function"
 run_fail_case void_value_assign_fail examples/void_value_assign_fail.ts "\`void\` is only allowed as a function / method return type"
@@ -282,6 +283,7 @@ run_fail_case void_array_fail examples/void_array_fail.ts "\`void\` is only allo
 run_fail_case void_fn_type_fail examples/void_fn_type_fail.ts "used in fn-type parameter"
 run_fail_case void_fn_expr_body_fail examples/void_fn_expr_body_fail.ts "void-returning arrows require block bodies"
 run_fail_case void_fn_call_value_fail examples/void_fn_call_value_fail.ts "cannot use a \`void\` value"
+run_fail_case never_call_value_fail examples/never_call_value_fail.ts "cannot use a \`void\` value"
 run_fail_case array_map_void_callback_fail examples/array_map_void_callback_fail.ts "Array.map callback cannot return \`void\`"
 
 run_case field_initializer $'0\ntrue\ndefault\n2\n2\n2\n0\n0\n0\n(unset)\n1\n10\nhi!\n100\nalpha\n100\n0\n5\n7\n16\n2\n11\n22\n101\nDEFAULT:ok'

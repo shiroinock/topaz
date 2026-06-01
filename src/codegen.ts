@@ -3237,6 +3237,7 @@ class Emitter {
         if (refName === "boolean") return T_BOOLEAN;
         if (refName === "string") return T_STRING;
         if (refName === "undefined") return T_UNDEFINED;
+        if (refName === "never") return T_VOID;
         // Phase 1.4c-2: when emitting under an active type-parameter scope,
         // bare type references like `T` resolve through the substitution. Must
         // come before the class/interface lookup so that a class declared with
