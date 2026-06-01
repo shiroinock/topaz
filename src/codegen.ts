@@ -836,6 +836,14 @@ type InterfaceInfo = {
 
 type FunctionSig = { params: ParamInfo[]; returnType: TopazType };
 
+type TopLevelFunctionSig = {
+  name: string;
+  sf: SourceModule;
+  cName: string;
+  params: ParamInfo[];
+  returnType: TopazType;
+};
+
 // Phase 1.4c-2: generic top-level functions. Type parameters live in the AST
 // only; we don't resolve param/return types until a call site supplies concrete
 // type arguments (explicit or inferred). One MonomorphInfo per realized
@@ -923,9 +931,32 @@ function mangleMonomorph(origName: string, args: Array<TopazType>): string {
   return `${origName}__${args.map(mangleTypeArg).join("__")}`;
 }
 
+function cIdentFragment(raw: string): string {
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (
+      (ch >= "A" && ch <= "Z") ||
+      (ch >= "a" && ch <= "z") ||
+      (ch >= "0" && ch <= "9") ||
+      ch === "_"
+    ) {
+      out += ch;
+    } else {
+      out += `_${raw.charCodeAt(i).toString(16)}_`;
+    }
+  }
+  if (out.length === 0) return "_";
+  if (out[0]! >= "0" && out[0]! <= "9") return `_${out}`;
+  return out;
+}
+
 class Emitter {
   private scope: Scope = new Scope();
-  private functionSigs: Map<string, FunctionSig> = new Map<string, FunctionSig>();
+  private moduleIdModules: Array<SourceModule> = [];
+  private moduleIdValues: Array<string> = [];
+  private functionSigs: Array<TopLevelFunctionSig> = [];
+  private functionSigDecls: Array<FunctionDecl> = [];
   private classes: Map<string, ClassInfo> = new Map<string, ClassInfo>();
   private interfaces: Map<string, InterfaceInfo> = new Map<string, InterfaceInfo>();
   private currentClass: string | undefined = undefined;
@@ -1022,6 +1053,7 @@ class Emitter {
   private arrowCounter: number = 0;
   private arrowFwdLines: Array<string> = [];
   private arrowDefLines: Array<string> = [];
+  private fnValueWrappers: Set<string> = new Set<string>();
   private captureContext:
     | { envType: string; envIsEmpty: boolean; captures: Map<string, TopazType> }
     | undefined = undefined;
@@ -1617,9 +1649,66 @@ class Emitter {
     return { functions, classes, interfaces, aliases, topLevel };
   }
 
+  private moduleId(sf: SourceModule): string {
+    for (let i = 0; i < this.moduleIdModules.length; i++) {
+      if (this.moduleIdModules[i] === sf) return this.moduleIdValues[i]!;
+    }
+    throw new Error(`missing module id for ${sf.filePath}`);
+  }
+
+  private functionCName(sf: SourceModule, name: string): string {
+    return `topaz_fn_${this.moduleId(sf)}_${cIdentFragment(name)}`;
+  }
+
+  private functionSigInModule(name: string, sf: SourceModule): TopLevelFunctionSig | undefined {
+    for (const sig of this.functionSigs) {
+      if (sig.name === name && sig.sf === sf) return sig;
+    }
+    return undefined;
+  }
+
+  private registerFunctionSig(decl: FunctionDecl, sig: TopLevelFunctionSig): void {
+    this.functionSigs.push(sig);
+    this.functionSigDecls.push(decl);
+  }
+
+  private functionSigForDecl(decl: FunctionDecl): TopLevelFunctionSig {
+    for (let i = 0; i < this.functionSigDecls.length; i++) {
+      if (this.functionSigDecls[i] === decl) return this.functionSigs[i]!;
+    }
+    throw new Error(`missing signature for function ${decl.name}`);
+  }
+
+  private resolveFunctionSig(name: string, anchor: { pos: number }): TopLevelFunctionSig | undefined {
+    const matches: Array<TopLevelFunctionSig> = [];
+    for (const sig of this.functionSigs) {
+      if (sig.name === name) matches.push(sig);
+    }
+    if (matches.length === 0) return undefined;
+    const current = g_currentModule;
+    if (current) {
+      const local = matches.filter((sig) => sig.sf === current);
+      if (local.length > 1) {
+        throw new CodegenError(anchor, `redeclaration of function '${name}'`);
+      }
+      if (local.length === 1) return local[0]!;
+    }
+    if (matches.length === 1) return matches[0]!;
+    throw new CodegenError(
+      anchor,
+      `ambiguous top-level function '${name}' across modules; declare a local wrapper or use a unique imported function name`,
+    );
+  }
+
   emit(sourceFiles: Array<SourceModule>): string {
     if (sourceFiles.length === 0) {
       throw new Error("codegen: at least one source file is required");
+    }
+    this.moduleIdModules = [];
+    this.moduleIdValues = [];
+    for (let i = 0; i < sourceFiles.length; i++) {
+      this.moduleIdModules.push(sourceFiles[i]!);
+      this.moduleIdValues.push(`m${i}`);
     }
     // Phase 1.5-6e-4: codegen consumes Topaz `SourceModule[]` directly (the
     // `convertFromTsc` bridge now lives in cli.ts). `extractDecls` flattens
@@ -1780,13 +1869,17 @@ class Emitter {
       const sf = fnEntry.sf;
       this.withSfVoid(sf, () => {
       const fname = fn.name;
-      if (this.functionSigs.has(fname) || this.genericFunctions.has(fname)) {
+      const existingGeneric = this.genericFunctions.get(fname);
+      if (this.functionSigInModule(fname, sf) || (existingGeneric && existingGeneric.sf === sf)) {
         throw new CodegenError(fn, `redeclaration of function '${fname}'`);
       }
       if (fn.typeParams.length > 0) {
         // Generic function: defer signature resolution until call sites
         // supply concrete type arguments. Constraint / default rejection
         // already happened in convert; only the duplicate-name check remains.
+        if (this.genericFunctions.has(fname)) {
+          throw new CodegenError(fn, `redeclaration of function '${fname}'`);
+        }
         const typeParams: string[] = [];
         for (const tp of fn.typeParams) {
           if (typeParams.includes(tp.name)) {
@@ -1799,7 +1892,13 @@ class Emitter {
       }
       const ret = this.typeFromAnnotation(fn.returnType, fn, sf);
       const params = this.collectParams(fn.params, sf);
-      this.functionSigs.set(fname, { params, returnType: ret });
+      this.registerFunctionSig(fn, {
+        name: fname,
+        sf,
+        cName: this.functionCName(sf, fname),
+        params,
+        returnType: ret,
+      });
       });
     }
 
@@ -1919,9 +2018,8 @@ class Emitter {
 
     for (const fnEntry of functions) {
       const fn = fnEntry.decl;
-      const sf = fnEntry.sf;
       if (fn.typeParams.length > 0) continue;
-      out.push(`${this.formatSignature(fn, sf)};`);
+      out.push(`${this.formatSignature(this.functionSigForDecl(fn))};`);
     }
     for (const cls of concreteClasses) {
       const info = this.classes.get(cls.name)!;
@@ -3440,20 +3538,15 @@ class Emitter {
     }
   }
 
-  private formatSignature(fn: FunctionDecl, sf: SourceModule): string {
-    const ret = this.typeFromAnnotation(fn.returnType, fn, sf);
-    // Phase 1.5-6 prep: `formatSignature` is the early C declaration pass; it
-    // must agree with `collectParams` on the lowered C type for each param
-    // (otherwise `int f(...)` and `int f(double, topaz_opt_number)` would
-    // disagree). Run the same `?` -> `T | undefined` rewrite here.
-    const params = this.collectParams(fn.params, sf)
+  private formatSignature(sig: TopLevelFunctionSig): string {
+    const params = sig.params
       .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
-    return `static ${cReturnTypeName(ret)} ${fn.name}(${params || "void"})`;
+    return `static ${cReturnTypeName(sig.returnType)} ${sig.cName}(${params || "void"})`;
   }
 
   private emitFunctionDefinition(fn: FunctionDecl, sf: SourceModule): string {
-    const sig = this.functionSigs.get(fn.name)!;
+    const sig = this.functionSigForDecl(fn);
     const prevRet = this.currentReturnType;
     const prevLive = this.liveTryFrames;
     this.currentReturnType = sig.returnType;
@@ -3468,7 +3561,7 @@ class Emitter {
         this.scope.declareBinding(p.name, p.type, /* isConst */ false, fn);
       }
       const body = this.emitBlockBoundary(fn.body, sf);
-      return `${this.formatSignature(fn, sf)} ${body}`;
+      return `${this.formatSignature(sig)} ${body}`;
     } finally {
       this.scope.pop();
       this.currentReturnType = prevRet;
@@ -3650,6 +3743,47 @@ class Emitter {
       ? "void *"
       : ["void *", ...t.params.map((p) => cTypeName(p.type))].join(", ");
     return `typedef struct ${name} {\n  ${ret} (*fn)(${paramList});\n  void *env;\n} ${name};`;
+  }
+
+  private fnValueWrapperName(sig: TopLevelFunctionSig): string {
+    return `topaz_fn_value_${sig.cName}`;
+  }
+
+  private fnValueWrapperSignature(sig: TopLevelFunctionSig): string {
+    const params = sig.params
+      .map((p) => `${cTypeName(p.type)} ${p.name}`)
+      .join(", ");
+    return `static ${cReturnTypeName(sig.returnType)} ${this.fnValueWrapperName(sig)}(void *__topaz_env${params ? ", " + params : ""})`;
+  }
+
+  private recordTopLevelFunctionValueWrapper(sig: TopLevelFunctionSig): string {
+    const wrapperName = this.fnValueWrapperName(sig);
+    if (this.fnValueWrappers.has(wrapperName)) return wrapperName;
+    this.fnValueWrappers.add(wrapperName);
+    const args = sig.params.map((p) => p.name).join(", ");
+    const call = `${sig.cName}(${args})`;
+    const lines: string[] = [];
+    lines.push(`${this.fnValueWrapperSignature(sig)} {`);
+    lines.push("  (void)__topaz_env;");
+    if (sig.returnType.kind === "void") {
+      lines.push(`  ${call};`);
+    } else {
+      lines.push(`  return ${call};`);
+    }
+    lines.push("}");
+    this.arrowFwdLines.push(`${this.fnValueWrapperSignature(sig)};`);
+    this.arrowDefLines.push(lines.join("\n"));
+    return wrapperName;
+  }
+
+  private emitTopLevelFunctionValue(sig: TopLevelFunctionSig): string {
+    const fnType: TopazType = { kind: "fn", params: sig.params, returnType: sig.returnType };
+    this.recordFnMonomorph(fnType);
+    const wrapperName = this.recordTopLevelFunctionValueWrapper(sig);
+    const fnTypeName = typeIdent(fnType);
+    const retCType = cReturnTypeName(sig.returnType);
+    const paramCasts = sig.params.map((p) => ", " + cTypeName(p.type)).join("");
+    return `((${fnTypeName}){ .fn = (${retCType}(*)(void *${paramCasts}))${wrapperName}, .env = NULL })`;
   }
 
   private pushLoopCtx(kind: string): void {
@@ -5781,6 +5915,8 @@ class Emitter {
       }
       const b = local;
       if (!b) {
+        const sig = this.resolveFunctionSig(expr.name, expr);
+        if (sig) return this.emitTopLevelFunctionValue(sig);
         throw new CodegenError(expr, `unknown identifier '${expr.name}'`);
       }
       // Phase 1.5-3c: when the binding's C representation is the scalar opt
@@ -6818,10 +6954,10 @@ class Emitter {
         ).join(", ");
         return `${resolved.mangled}(${args})`;
       }
-      const sig = this.functionSigs.get(callee.name);
+      const sig = this.resolveFunctionSig(callee.name, callee);
       if (sig) {
         const args = this.emitCallArgs(expr.args, sig.params, `${callee.name}()`, expr).join(", ");
-        return `${callee.name}(${args})`;
+        return `${sig.cName}(${args})`;
       }
       // Phase 1.5-3.5e: fn-typed local (a binding holding an arrow / fn
       // value). Resolve the fn type from the scope (or captureContext) and
@@ -8220,9 +8356,10 @@ class Emitter {
       // values when referenced by name (`seeds.map(makeAdder)`). Generic
       // functions need a call-site type-arg list to monomorphize, so they
       // stay rejected here.
-      const sig = this.functionSigs.get(expr.name);
+      const sig = this.resolveFunctionSig(expr.name, expr);
       if (sig) {
         const fnType: TopazType = { kind: "fn", params: sig.params, returnType: sig.returnType };
+        this.recordFnMonomorph(fnType);
         return fnType;
       }
       throw new CodegenError(expr, `unknown identifier '${expr.name}'`);
@@ -8883,7 +9020,7 @@ class Emitter {
           const resolved = this.resolveGenericCall(callee, expr)!;
           return resolved.sig.returnType;
         }
-        const sig = this.functionSigs.get(callee.name);
+        const sig = this.resolveFunctionSig(callee.name, callee);
         if (sig) return sig.returnType;
         // Phase 1.5-3.5e: fn-typed local — look up its inferred type and use
         // its declared return type.
