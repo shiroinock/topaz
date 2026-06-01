@@ -996,7 +996,7 @@ class Emitter {
   // resolving the body, which may live in a different module than the reference
   // site). The original `decl` anchor was never read and is dropped.
   private typeAliases: Map<string, TypeAliasInfo> = new Map<string, TypeAliasInfo>();
-  private moduleGlobalTypes: Map<Stmt, TopazType> = new Map<Stmt, TopazType>();
+  private moduleGlobalTypes: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.5-6 prep #14: TypeLiteralNode -> mangled anon class name. Populated
   // by preAllocateRecursiveAnons() walking the bodies of recursive aliases. A
   // hit in typeFromAnnotation's TypeLiteralNode branch returns classOf(name)
@@ -4887,7 +4887,7 @@ class Emitter {
     const varType = this.typeFromAnnotation(d.type, d, sf);
     this.assertNotVoid(varType, d, "module global type");
     this.scope.declareBinding(d.name, varType, d.declKind === "const", d);
-    this.moduleGlobalTypes.set(d, varType);
+    this.moduleGlobalTypes.set(d.name, varType);
     return `static ${cTypeName(varType)} ${d.name};`;
   }
 
@@ -4896,7 +4896,7 @@ class Emitter {
       if (stmt.kind !== "var_decl" || stmt.init === undefined) {
         throw new Error("emitModuleGlobalInit: expected initialized var_decl");
       }
-      const varType = this.moduleGlobalTypes.get(stmt);
+      const varType = this.moduleGlobalTypes.get(stmt.name);
       if (varType === undefined) {
         throw new Error("emitModuleGlobalInit: missing module global type");
       }
