@@ -138,6 +138,12 @@ Poll both:
 
 Recommended cadence: about 30 seconds between checks. Give short user updates while waiting.
 
+Do not interrupt a running worker before the chosen timeout merely because no
+JSON has appeared. A status ping is allowed, but it must be non-interrupting and
+must not ask the worker to stop unless the timeout has actually expired or the
+user explicitly asks to stop. The default timeout is 3600 seconds; shorter
+timeouts must be chosen explicitly at startup and reported to the user.
+
 If no JSON appears after the chosen timeout(既定 3600 秒), write or treat outcome as:
 
 ```json
@@ -153,6 +159,14 @@ Read `.topaz-orch/<NN>.json`.
 - `timed_out:true` → stop. Tell the user which phase and thread id stalled.
 - `committed:false` → stop. Summarize `last_msg` and the design/implementation question.
 - `committed:true` → record `commit_subject`, then run test gate.
+
+Special case: if `committed:false` says implementation and validation completed
+but `git add` / `git commit` failed because `.git/index.lock` could not be
+created under Codex sandbox permissions, treat this as an orchestration
+environment failure rather than an implementation failure. Stop and report it;
+do not mark the phase as landed unless the commit is actually created. On user
+approval, the next retry may perform only the missing git step with escalated
+permissions, then run the orchestrator test gate before continuing.
 
 ### 7. test gate
 
