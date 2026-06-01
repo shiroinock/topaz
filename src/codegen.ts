@@ -575,6 +575,13 @@ function zeroValueOfElem(elem: TopazType): string {
 
 type Binding = { type: TopazType; isConst: boolean };
 
+class ScopeFrame {
+  bindings: Map<string, Binding> = new Map<string, Binding>();
+  narrowings: Map<string, TopazType> = new Map<string, TopazType>();
+  parent: ScopeFrame | undefined = undefined;
+  depth: number = 0;
+}
+
 // Phase 1.5-6e-4: resolve a byte offset to 0-based { line, col } using the
 // module's lineStarts table (the byte offset of each line start). Mirrors
 // ts.SourceFile.getLineAndCharacterOfPosition so `file:line:col` diagnostics
@@ -624,34 +631,36 @@ function unsupported(node: { kind: string; pos: number }, what: string): never {
 }
 
 class Scope {
-  private stack: Map<string, Binding>[] = [new Map()];
-  // Phase 1.5-3d: parallel narrowing overlay. Each frame holds optional
-  // narrowed types for already-declared identifiers; lookup prefers the
-  // innermost narrowing at-or-above the binding's frame.
-  private narrowings: Map<string, TopazType>[] = [new Map()];
+  private current: ScopeFrame = new ScopeFrame();
+  // Phase 1.5-3d: each linked frame holds optional narrowed types for already
+  // declared identifiers; lookup prefers the innermost narrowing at-or-above
+  // the binding's frame.
   // Phase 1.5-3.5e: arrow function bodies push a barrier so their identifier
   // lookups don't accidentally pierce through to outer locals — captures must
-  // route through the env struct instead. The barrier records the frame index
+  // route through the env struct instead. The barrier records the minimum depth
   // below which `lookup` / `lookupBase` stop; capture analysis uses
   // `lookupAcrossBarrier` to look up outer types while the barrier is active.
-  private barriers: number[] = [];
+  private barrierDepths: number[] = [];
 
   push(): void {
-    this.stack.push(new Map());
-    this.narrowings.push(new Map());
+    const next = new ScopeFrame();
+    next.parent = this.current;
+    next.depth = this.current.depth + 1;
+    this.current = next;
   }
 
   pop(): void {
-    this.stack.pop();
-    this.narrowings.pop();
+    if (this.current.parent !== undefined) {
+      this.current = this.current.parent;
+    }
   }
 
   pushBarrier(): void {
-    this.barriers.push(this.stack.length);
+    this.barrierDepths.push(this.current.depth + 1);
   }
 
   popBarrier(): void {
-    this.barriers.pop();
+    this.barrierDepths.pop();
   }
 
   // Phase 1.5-6e-4: every caller passes a Topaz node `{ pos }`. The
@@ -659,24 +668,27 @@ class Scope {
   // unique anon-class field names), so it keeps its historical position-less
   // message; `anchor` is retained only as the diagnostic-anchor slot.
   declareBinding(name: string, bindingType: TopazType, isConst: boolean, anchor: { pos: number }): void {
-    const top = this.stack[this.stack.length - 1]!;
-    if (top.has(name)) {
+    if (this.current.bindings.has(name)) {
       throw new CodegenError(anchor, `redeclaration of '${name}'`);
     }
-    top.set(name, { type: bindingType, isConst });
+    this.current.bindings.set(name, { type: bindingType, isConst });
   }
 
   lookup(name: string): Binding | undefined {
-    const floor = this.barriers.length > 0 ? this.barriers[this.barriers.length - 1]! : 0;
-    for (let i = this.stack.length - 1; i >= floor; i--) {
-      const b = this.stack[i]!.get(name);
+    const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1]! : 0;
+    let frame: ScopeFrame | undefined = this.current;
+    while (frame !== undefined && frame.depth >= floor) {
+      const b = frame.bindings.get(name);
       if (b) {
-        for (let j = this.narrowings.length - 1; j >= i; j--) {
-          const n = this.narrowings[j]!.get(name);
+        let narrowFrame: ScopeFrame | undefined = this.current;
+        while (narrowFrame !== undefined && narrowFrame.depth >= frame.depth) {
+          const n = narrowFrame.narrowings.get(name);
           if (n) return { type: n, isConst: b.isConst };
+          narrowFrame = narrowFrame.parent;
         }
         return b;
       }
+      frame = frame.parent;
     }
     return undefined;
   }
@@ -686,10 +698,12 @@ class Scope {
   // the C representation (for scalar opt structs, narrowed reads append
   // `.value` while assignments target the whole struct).
   lookupBase(name: string): Binding | undefined {
-    const floor = this.barriers.length > 0 ? this.barriers[this.barriers.length - 1]! : 0;
-    for (let i = this.stack.length - 1; i >= floor; i--) {
-      const b = this.stack[i]!.get(name);
+    const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1]! : 0;
+    let frame: ScopeFrame | undefined = this.current;
+    while (frame !== undefined && frame.depth >= floor) {
+      const b = frame.bindings.get(name);
       if (b) return b;
+      frame = frame.parent;
     }
     return undefined;
   }
@@ -709,15 +723,19 @@ class Scope {
   // `emitCapturedIdentifier`, already narrowing-aware), and `inferType` reads
   // through `captureContext`.
   lookupAcrossBarrier(name: string): Binding | undefined {
-    for (let i = this.stack.length - 1; i >= 0; i--) {
-      const b = this.stack[i]!.get(name);
+    let frame: ScopeFrame | undefined = this.current;
+    while (frame !== undefined) {
+      const b = frame.bindings.get(name);
       if (b) {
-        for (let j = this.narrowings.length - 1; j >= i; j--) {
-          const n = this.narrowings[j]!.get(name);
+        let narrowFrame: ScopeFrame | undefined = this.current;
+        while (narrowFrame !== undefined && narrowFrame.depth >= frame.depth) {
+          const n = narrowFrame.narrowings.get(name);
           if (n) return { type: n, isConst: b.isConst };
+          narrowFrame = narrowFrame.parent;
         }
         return b;
       }
+      frame = frame.parent;
     }
     return undefined;
   }
@@ -726,7 +744,7 @@ class Scope {
   // current top frame. Caller is responsible for pushing a new frame first
   // (typically via `push()` before entering an if-branch).
   narrow(name: string, narrowedType: TopazType): void {
-    this.narrowings[this.narrowings.length - 1]!.set(name, narrowedType);
+    this.current.narrowings.set(name, narrowedType);
   }
 }
 
