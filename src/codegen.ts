@@ -582,6 +582,11 @@ class ScopeFrame {
   depth: number = 0;
 }
 
+class LoopCtxFrame {
+  kind: string = "";
+  prev: LoopCtxFrame | undefined = undefined;
+}
+
 // Phase 1.5-6e-4: resolve a byte offset to 0-based { line, col } using the
 // module's lineStarts table (the byte offset of each line start). Mirrors
 // ts.SourceFile.getLineAndCharacterOfPosition so `file:line:col` diagnostics
@@ -918,14 +923,11 @@ class Emitter {
   private interfaces: Map<string, InterfaceInfo> = new Map<string, InterfaceInfo>();
   private currentClass: string | undefined;
   private currentReturnType: TopazType | undefined;
-  // Phase 1.5-6e-2: enclosing-construct stack for `continue` validation. Topaz
-  // nodes carry no `.parent`, so we maintain the loop / switch nesting context
-  // explicitly: a `"loop"` frame is pushed around while / do / for / for-of
-  // bodies, a `"switch"` frame around switch case-body emission. A nested arrow
-  // is a function boundary and resets the stack (save / clear / restore).
-  // On a `continue`: empty stack → outside a loop; top is `"switch"` → inside
-  // switch (lowers to do/while(0)); top is `"loop"` → allowed.
-  private loopCtx: Array<"loop" | "switch"> = [];
+  // Phase 1.5-6i prep: enclosing-construct stack for `continue` validation.
+  // Topaz nodes carry no `.parent`, so we maintain the nearest loop / switch
+  // context explicitly with linked frames. A nested arrow is a function
+  // boundary and resets the stack (save / clear / restore).
+  private loopCtx: LoopCtxFrame | undefined = undefined;
   // Phase 1.5-X: number of `try` frames currently live on the C stack within
   // the function being emitted (incremented only around a try *body*, not the
   // catch body — topaz_throw / the normal-path pop already removed the frame by
@@ -3646,6 +3648,29 @@ class Emitter {
     return `typedef struct ${name} {\n  ${ret} (*fn)(${paramList});\n  void *env;\n} ${name};`;
   }
 
+  private pushLoopCtx(kind: string): void {
+    const next = new LoopCtxFrame();
+    next.kind = kind;
+    next.prev = this.loopCtx;
+    this.loopCtx = next;
+  }
+
+  private popLoopCtx(): void {
+    if (this.loopCtx !== undefined) {
+      this.loopCtx = this.loopCtx.prev;
+    }
+  }
+
+  private resetLoopCtx(): LoopCtxFrame | undefined {
+    const prev = this.loopCtx;
+    this.loopCtx = undefined;
+    return prev;
+  }
+
+  private restoreLoopCtx(prev: LoopCtxFrame | undefined): void {
+    this.loopCtx = prev;
+  }
+
   // Phase 1.5-3.5e: walk a Topaz arrow expression and emit it as a static C
   // function (named `__topaz_arrow_<N>`) plus, when needed, an env struct
   // typedef (`__topaz_env_<N>`) and arena allocation. Returns a compound
@@ -3754,11 +3779,10 @@ class Emitter {
     const prevLive = this.liveTryFrames;
     // Phase 1.5-6e-2: an arrow is a function boundary — `continue` inside the
     // body must not see the outer loop context. Save / clear / restore.
-    const prevLoopCtx = this.loopCtx;
+    const prevLoopCtx = this.resetLoopCtx();
     this.captureContext = { envType: envName, envIsEmpty, captures };
     this.currentReturnType = returnType;
     this.liveTryFrames = 0;
-    this.loopCtx = [];
     // Barrier must come BEFORE the scope.push so that the new (inner) frame
     // sits at the barrier floor and lookups within the body can still see
     // it. Outer frames remain hidden behind the barrier.
@@ -3801,7 +3825,7 @@ class Emitter {
       this.captureContext = prevCaptureContext;
       this.currentReturnType = prevRet;
       this.liveTryFrames = prevLive;
-      this.loopCtx = prevLoopCtx;
+      this.restoreLoopCtx(prevLoopCtx);
     }
 
     // Build the call-site compound literal. Allocate the env on the arena
@@ -4512,12 +4536,12 @@ class Emitter {
     if (stmt.kind === "while_stmt") {
       this.expectType(stmt.cond, T_BOOLEAN);
       const cond = this.emitExpression(stmt.cond);
-      this.loopCtx.push("loop");
+      this.pushLoopCtx("loop");
       let body: string;
       try {
         body = this.emitStatementAsBlock(stmt.body, indent);
       } finally {
-        this.loopCtx.pop();
+        this.popLoopCtx();
       }
       return `${pad}while (${cond}) ${body.trimStart()}`;
     }
@@ -4525,12 +4549,12 @@ class Emitter {
     if (stmt.kind === "do_while_stmt") {
       this.expectType(stmt.cond, T_BOOLEAN);
       const cond = this.emitExpression(stmt.cond);
-      this.loopCtx.push("loop");
+      this.pushLoopCtx("loop");
       let body: string;
       try {
         body = this.emitStatementAsBlock(stmt.body, indent);
       } finally {
-        this.loopCtx.pop();
+        this.popLoopCtx();
       }
       return `${pad}do ${body.trimStart()} while (${cond});`;
     }
@@ -5122,7 +5146,7 @@ class Emitter {
       }
       const incrStr = stmt.update ? this.emitExpression(stmt.update) : "";
 
-      this.loopCtx.push("loop");
+      this.pushLoopCtx("loop");
       let bodyStr: string;
       try {
         if (stmt.body.kind === "block_stmt") {
@@ -5136,7 +5160,7 @@ class Emitter {
           bodyStr = `${pad}{\n${inner}\n${pad}}`;
         }
       } finally {
-        this.loopCtx.pop();
+        this.popLoopCtx();
       }
       return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}`;
     } finally {
@@ -5341,7 +5365,7 @@ class Emitter {
     try {
       this.scope.declareBinding(bindName, elemType, isConst, stmt);
       this.scope.push();
-      this.loopCtx.push("loop");
+      this.pushLoopCtx("loop");
       try {
         const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
           ? stmt.body.stmts
@@ -5364,7 +5388,7 @@ class Emitter {
         lines.push(`${pad}}`);
         return lines.join("\n");
       } finally {
-        this.loopCtx.pop();
+        this.popLoopCtx();
         this.scope.pop();
       }
     } finally {
@@ -5428,7 +5452,7 @@ class Emitter {
         this.scope.declareBinding(bindSpec.secondName, bindSpec.secondType, isConst, stmt);
       }
       this.scope.push();
-      this.loopCtx.push("loop");
+      this.pushLoopCtx("loop");
       try {
         const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
           ? stmt.body.stmts
@@ -5465,7 +5489,7 @@ class Emitter {
         lines.push(`${pad}}`);
         return lines.join("\n");
       } finally {
-        this.loopCtx.pop();
+        this.popLoopCtx();
         this.scope.pop();
       }
     } finally {
@@ -5512,7 +5536,7 @@ class Emitter {
     try {
       this.scope.declareBinding(bindName, bindType, isConst, stmt);
       this.scope.push();
-      this.loopCtx.push("loop");
+      this.pushLoopCtx("loop");
       try {
         const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
           ? stmt.body.stmts
@@ -5538,7 +5562,7 @@ class Emitter {
         lines.push(`${pad}}`);
         return lines.join("\n");
       } finally {
-        this.loopCtx.pop();
+        this.popLoopCtx();
         this.scope.pop();
       }
     } finally {
@@ -5649,7 +5673,7 @@ class Emitter {
     // case body must be rejected (it would `continue` the synthetic loop). Push
     // a "switch" context around the case-body emission so checkContinueAllowed
     // sees it on top.
-    this.loopCtx.push("switch");
+    this.pushLoopCtx("switch");
     try {
       const cmp = (rhs: string): string =>
         discType.kind === "string"
@@ -5693,7 +5717,7 @@ class Emitter {
         }
       }
     } finally {
-      this.loopCtx.pop();
+      this.popLoopCtx();
       this.scope.pop();
     }
 
@@ -5704,14 +5728,14 @@ class Emitter {
 
   private checkContinueAllowed(stmt: ContinueStmt): void {
     // Phase 1.5-6e-2: Topaz nodes have no `.parent`, so consult the instance
-    // `loopCtx` stack maintained while emitting. The top of the stack is the
-    // nearest enclosing loop / switch (matching the old parent walk's nearest-
-    // first semantics).
-    if (this.loopCtx.length === 0) {
+    // `loopCtx` stack maintained while emitting. The top frame is the nearest
+    // enclosing loop / switch (matching the old parent walk's nearest-first
+    // semantics).
+    const top = this.loopCtx;
+    if (top === undefined) {
       throw new CodegenError(stmt, "`continue` outside of a loop");
     }
-    const top = this.loopCtx[this.loopCtx.length - 1]!;
-    if (top === "switch") {
+    if (top.kind === "switch") {
       throw new CodegenError(
         stmt,
         "`continue` inside `switch` is unsupported (switch lowers to do/while(0))",
