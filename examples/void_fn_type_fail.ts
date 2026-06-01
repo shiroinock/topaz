@@ -1,7 +1,7 @@
-// Phase 1.5-6 prep: fn types cannot return `void` (arrow void return is
-// gated together until Topaz needs callback-style void APIs).
-let f: (n: number) => void = (n) => {
-  console.log(n);
+// Phase 1.5-6i prep: fn types may return `void`, but `void` is still not a
+// value type and cannot be used as a fn parameter type.
+let f: (n: void) => number = (n): number => {
+  return 1;
 };
 
-f(1);
+console.log(f());

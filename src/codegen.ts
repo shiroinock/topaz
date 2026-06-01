@@ -3099,10 +3099,10 @@ class Emitter {
     return `static const struct topaz_iface_${iface.name}_vt ${prefix}_vt = {\n${body}};`;
   }
 
-  // Phase 1.5-6 prep: reject `void` outside of function / method return-type
+  // Phase 1.5-6 prep: reject `void` outside of function / method / fn return
   // slots. `void` has no value representation, so it cannot appear as a
   // parameter type, variable type, field type, container element / value /
-  // key, union variant, type argument, or fn-type return position.
+  // key, union variant, or type argument.
   private assertNotVoid(t: TopazType, anchor: { pos: number }, what: string): void {
     if (t.kind === "void") {
       throw this.typeErr(anchor, `\`void\` is only allowed as a function / method return type (used in ${what})`);
@@ -3379,15 +3379,6 @@ class Emitter {
           params.push({ name: p.name, type: pt, isOptional: false });
         }
         const ret = this.typeFromAnnotation(node.returnType, node.returnType, sf);
-        // Phase 1.5-6 prep: fn types cannot return void. emitFnTypedef would
-        // produce a struct holding a `void (*fn)(...)`, but the call-site
-        // dispatch wraps every call in a stmt-expression that yields the return
-        // value, and there's no representation for a void value at the call
-        // site. Reject here so error surfaces at the type annotation rather than
-        // emitFnTypedef's internal "cTypeName(void)" throw.
-        if (ret.kind === "void") {
-          throw this.typeErr(node, "fn types cannot return `void` (Phase 1.5-6 prep)");
-        }
         if (ret.kind === "fn") {
           throw this.typeErr(node, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
         }
@@ -3551,9 +3542,6 @@ class Emitter {
     } else {
       throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
-    if (returnType.kind === "void") {
-      throw new CodegenError(arrow, "arrow functions cannot return `void` (Phase 1.5-6 prep)");
-    }
     return { kind: "fn", params, returnType };
   }
 
@@ -3624,9 +3612,6 @@ class Emitter {
           `block-bodied arrow callback requires an explicit return type annotation`,
         );
       }
-      if (returnType.kind === "void") {
-        throw new CodegenError(cb, `${label} callback cannot return \`void\` (Phase 1.5-6 prep)`);
-      }
       return { kind: "fn", params, returnType };
     }
     const t = this.inferType(cb);
@@ -3659,7 +3644,7 @@ class Emitter {
   private emitFnTypedef(t: TopazType): string {
     if (t.kind !== "fn") throw new Error("emitFnTypedef: not a fn type");
     const name = typeIdent(t);
-    const ret = cTypeName(t.returnType);
+    const ret = cReturnTypeName(t.returnType);
     const paramList = t.params.length === 0
       ? "void *"
       : ["void *", ...t.params.map((p) => cTypeName(p.type))].join(", ");
@@ -3751,15 +3736,11 @@ class Emitter {
     } else {
       throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
-    // Phase 1.5-6 prep: void arrow return types are gated together with fn-
-    // type return voidness — the call-site dispatch yields a value, expression
-    // body becomes `return <expr>`, and we'd need to special-case both. Keep
-    // void confined to function / method declarations for now.
-    if (returnType.kind === "void") {
-      throw new CodegenError(arrow, "arrow functions cannot return `void` (Phase 1.5-6 prep)");
-    }
     if (returnType.kind === "fn") {
       throw new CodegenError(arrow, "nested fn types in arrow return position are unsupported (Phase 1.5-3.5e)");
+    }
+    if (returnType.kind === "void" && arrow.body.kind !== "arrow_block_body") {
+      throw new CodegenError(arrow, "void-returning arrows require block bodies");
     }
 
     const arrowType: TopazType = { kind: "fn", params, returnType };
@@ -3825,7 +3806,7 @@ class Emitter {
       // C function signature: env is `void *` so the same callable shape
       // works for both capturing and non-capturing arrows.
       const paramDecls = params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
-      const fnSig = `static ${cTypeName(returnType)} ${fnName}(void *__topaz_env${paramDecls.length > 0 ? ", " + paramDecls : ""})`;
+      const fnSig = `static ${cReturnTypeName(returnType)} ${fnName}(void *__topaz_env${paramDecls.length > 0 ? ", " + paramDecls : ""})`;
 
       // Splice the env typedef (if any) + the arrow's forward declaration
       // into the fwd slot; the full body goes into the def slot. This lets a
@@ -3850,8 +3831,9 @@ class Emitter {
     // and copy each captured value in. Non-capturing arrows just take a NULL
     // env pointer.
     const fnTypeName = typeIdent(arrowType);
+    const retCType = cReturnTypeName(returnType);
     if (envIsEmpty) {
-      return `((${fnTypeName}){ .fn = (${cTypeName(returnType)}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = NULL })`;
+      return `((${fnTypeName}){ .fn = (${retCType}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = NULL })`;
     }
     const envExprParts: string[] = [];
     for (const captureEntry of captures.entries()) {
@@ -3865,7 +3847,7 @@ class Emitter {
       envExprParts.push(`.${name} = ${captureExpr}`);
     }
     const envInit = `({ ${envName} *__e = topaz_arena_alloc(sizeof(${envName})); *__e = (${envName}){ ${envExprParts.join(", ")} }; __e; })`;
-    return `((${fnTypeName}){ .fn = (${cTypeName(returnType)}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = ${envInit} })`;
+    return `((${fnTypeName}){ .fn = (${retCType}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = ${envInit} })`;
   }
 
   // Phase 1.5-3.5e: emit an identifier as the outer scope sees it (for
@@ -6953,6 +6935,9 @@ class Emitter {
       const cb = expr.args[0]!;
       const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
       const u = fnType.returnType;
+      if (u.kind === "void") {
+        throw new CodegenError(cb, "Array.map callback cannot return `void` (no Array<void> monomorph)");
+      }
       // The result Array<U> reuses the same monomorph machinery as any other
       // container. undefined / union element types still lack a monomorph;
       // fn return type is now accepted (Array<fn> uses the post-fn-typedef
@@ -8669,6 +8654,9 @@ class Emitter {
             const cb = expr.args[0]!;
             const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
             const u = fnType.returnType;
+            if (u.kind === "void") {
+              throw new CodegenError(cb, "Array.map callback cannot return `void` (no Array<void> monomorph)");
+            }
             // Phase 1.5-3.5g-array-fn: fn return type now routes to Array<fn>
             // via recordArrayMonomorph -> arrayFnMonomorphs.
             if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
