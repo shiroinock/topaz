@@ -9623,10 +9623,7 @@ class Emitter {
   }
 }
 
-export function codegen(sourceFiles: SourceModule | Array<SourceModule>): string {
+export function codegen(sourceFiles: Array<SourceModule>): string {
   const emitter = new Emitter();
-  if (Array.isArray(sourceFiles)) {
-    return emitter.emit(sourceFiles);
-  }
-  return emitter.emit([sourceFiles]);
+  return emitter.emit(sourceFiles);
 }
