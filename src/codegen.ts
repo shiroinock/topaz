@@ -893,6 +893,13 @@ type TypeAliasInfo = {
   recursive: boolean;
 };
 
+type PreAllocatedAnon = {
+  key: string;
+  node: TypeLiteralNode;
+  anonName: string;
+  sf: SourceModule;
+};
+
 type TopLevelEntry = { stmt: Stmt; sf: SourceModule; isRoot: boolean };
 
 type SwitchGroup = { conds: Array<Expr>; body: Array<Stmt> };
@@ -997,16 +1004,10 @@ class Emitter {
   // site). The original `decl` anchor was never read and is dropped.
   private typeAliases: Map<string, TypeAliasInfo> = new Map<string, TypeAliasInfo>();
   private moduleGlobalTypes: Map<string, TopazType> = new Map<string, TopazType>();
-  // Phase 1.5-6 prep #14: TypeLiteralNode -> mangled anon class name. Populated
-  // by preAllocateRecursiveAnons() walking the bodies of recursive aliases. A
-  // hit in typeFromAnnotation's TypeLiteralNode branch returns classOf(name)
-  // directly without recomputing the structural key (since fields aren't
-  // resolved yet at first reference and the canonical key would mismatch).
-  private preAllocatedAnons: Map<TypeLiteralNode, string> = new Map<TypeLiteralNode, string>();
-  // Phase 1.5-6e-1: the SourceFile each pre-allocated Topaz `TypeLiteralNode`
-  // was converted from, so `fillPreAllocatedAnonFields` can position its
-  // diagnostics (the Topaz node carries `pos` but not its file).
-  private preAllocatedAnonSf: Map<TypeLiteralNode, SourceModule> = new Map<TypeLiteralNode, SourceModule>();
+  // Phase 1.5-6i prep: pre-allocated recursive-alias anonymous classes keyed by
+  // module-local source span. This preserves TypeLiteralNode identity without
+  // requiring a user-visible Map<class, V> monomorph.
+  private preAllocatedAnons: Array<PreAllocatedAnon> = [];
   // Phase 1.5-6e-1: the SourceFile of the Topaz type tree currently being
   // lowered by `typeFromAnnotation` (and the helpers it calls). Set/restored at
   // every `typeFromAnnotation` entry so `typeErr` can turn a Topaz node's `pos`
@@ -1383,6 +1384,21 @@ class Emitter {
     }
   }
 
+  private preAllocatedAnonKey(node: TypeLiteralNode, sf: SourceModule): string {
+    return `${sf.filePath}:${node.pos}:${node.end}`;
+  }
+
+  private findPreAllocatedAnonByKey(key: string): PreAllocatedAnon | undefined {
+    for (const entry of this.preAllocatedAnons) {
+      if (entry.key === key) return entry;
+    }
+    return undefined;
+  }
+
+  private findPreAllocatedAnon(node: TypeLiteralNode, sf: SourceModule): PreAllocatedAnon | undefined {
+    return this.findPreAllocatedAnonByKey(this.preAllocatedAnonKey(node, sf));
+  }
+
   // Phase 1.5-6 prep #14: walk every TypeLiteralNode reachable from a recursive
   // alias body and reserve an anon class name + placeholder ClassInfo. Skipping
   // structural dedupe is intentional here: dedupe would require canonical keys
@@ -1405,10 +1421,10 @@ class Emitter {
         return;
       }
       if (node.kind === "type_literal") {
-        if (!this.preAllocatedAnons.has(node)) {
+        const key = this.preAllocatedAnonKey(node, sf);
+        if (this.findPreAllocatedAnonByKey(key) === undefined) {
           const mangled = `anon_${this.anonClassCounter++}`;
-          this.preAllocatedAnons.set(node, mangled);
-          this.preAllocatedAnonSf.set(node, sf);
+          this.preAllocatedAnons.push({ key, node, anonName: mangled, sf });
           const info: ClassInfo = {
             name: mangled,
             fields: new Map(),
@@ -1447,8 +1463,8 @@ class Emitter {
       if (!info.recursive) continue;
       visit(info.body, info.sf);
       if (info.body.kind === "type_literal") {
-        const mangled = this.preAllocatedAnons.get(info.body)!;
-        info.resolved = classOf(mangled);
+        const entry = this.findPreAllocatedAnon(info.body, info.sf)!;
+        info.resolved = classOf(entry.anonName);
       }
     }
   }
@@ -1467,8 +1483,9 @@ class Emitter {
     // into typeFromAnnotation — direct AST inspection only. Non-field members
     // and non-string-literal field types are skipped here; sub-pass B performs
     // the full validation.
-    for (const [literalNode, anonName] of this.preAllocatedAnons.entries()) {
-      const cls = this.classes.get(anonName)!;
+    for (const entry of this.preAllocatedAnons) {
+      const literalNode = entry.node;
+      const cls = this.classes.get(entry.anonName)!;
       for (const m of literalNode.members) {
         if (m.kind !== "type_lit_field") continue;
         if (m.type.kind === "type_str_lit") {
@@ -1487,9 +1504,10 @@ class Emitter {
     // TypeLiteralNode branch of typeFromAnnotation. `currentTypeModule` is set per
     // literal node so the validation / typeFromAnnotation diagnostics position
     // against the module the recursive alias was declared in.
-    for (const [literalNode, anonName] of this.preAllocatedAnons.entries()) {
-      const cls = this.classes.get(anonName)!;
-      const sf = this.preAllocatedAnonSf.get(literalNode)!;
+    for (const entry of this.preAllocatedAnons) {
+      const literalNode = entry.node;
+      const cls = this.classes.get(entry.anonName)!;
+      const sf = entry.sf;
       const savedSf = this.currentTypeModule;
       this.currentTypeModule = sf;
       try {
@@ -3391,9 +3409,9 @@ class Emitter {
         // aliases short-circuit the dedupe path here. Field-fill has already
         // populated this anon (or will, if we're currently inside its own fill
         // pass). Either way the class type is the stable forward reference.
-        const preAllocated = this.preAllocatedAnons.get(node);
+        const preAllocated = this.findPreAllocatedAnon(node, sf);
         if (preAllocated !== undefined) {
-          return classOf(preAllocated);
+          return classOf(preAllocated.anonName);
         }
         if (node.members.length === 0) {
           throw this.typeErr(node, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
