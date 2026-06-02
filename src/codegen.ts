@@ -644,14 +644,14 @@ function posToLineCol(module: SourceModule, pos: number): { line: number; col: n
   while (lo <= hi) {
     const sum = lo + hi;
     const mid = (sum - (sum % 2)) / 2;
-    if (starts[mid]! <= pos) {
+    if (starts[mid] <= pos) {
       line = mid;
       lo = mid + 1;
     } else {
       hi = mid - 1;
     }
   }
-  return { line, col: pos - starts[line]! };
+  return { line, col: pos - starts[line] };
 }
 
 export class CodegenError {
