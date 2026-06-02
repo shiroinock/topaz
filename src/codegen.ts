@@ -1973,7 +1973,7 @@ class Emitter {
           throw new CodegenError(clsAnchor, `cannot redefine built-in '${name}'`);
         }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
-        throw new CodegenError(cls, `redeclaration of class '${name}'`);
+        throw new CodegenError(clsAnchor, `redeclaration of class '${name}'`);
       }
       if (cls.typeParams.length > 0) {
         // Validate the type-param declaration eagerly so errors fire even
