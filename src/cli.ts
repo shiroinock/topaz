@@ -115,9 +115,11 @@ function main(): void {
     return;
   }
 
-  const output = parsed.output !== undefined
-    ? resolve(parsed.output)
-    : join(dirname(input), basename(input, ".ts"));
+  let output = join(dirname(input), basename(input, ".ts"));
+  const outputArg = parsed.output ?? "";
+  if (parsed.output !== undefined) {
+    output = resolve(outputArg);
+  }
 
   const cPath = `${output}.c`;
   mkdirSync(dirname(output), { recursive: true });
