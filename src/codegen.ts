@@ -709,8 +709,9 @@ class Scope {
   }
 
   pop(): void {
-    if (this.current.parent !== undefined) {
-      this.current = this.current.parent;
+    const parent = this.current.parent;
+    if (parent !== undefined) {
+      this.current = parent;
     }
   }
 
