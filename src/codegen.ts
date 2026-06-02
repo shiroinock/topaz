@@ -660,12 +660,13 @@ export class CodegenError {
   // Phase 1.5-6e-4: accept a Topaz node `{ pos }` and resolve it against the
   // ambient SourceModule's lineStarts, mirroring tsc SourceFile diagnostics.
   constructor(node: { pos: number }, message?: string) {
+    const text = message ?? "";
     const module = g_currentModule;
     if (module !== undefined) {
       const { line, col } = posToLineCol(module, node.pos);
-      this.message = `${module.filePath}:${line + 1}:${col + 1}: ${message}`;
+      this.message = `${module.filePath}:${line + 1}:${col + 1}: ${text}`;
     } else {
-      this.message = message ?? "";
+      this.message = text;
     }
   }
 }
