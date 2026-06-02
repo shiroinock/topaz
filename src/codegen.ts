@@ -982,6 +982,100 @@ type PreAllocatedAnon = {
   sf: SourceModule;
 };
 
+class AliasRecursionMarker {
+  typeAliases: Map<string, TypeAliasInfo>;
+  depFrom: Array<string>;
+  depTo: Array<string>;
+  index: Map<string, number> = new Map<string, number>();
+  lowlink: Map<string, number> = new Map<string, number>();
+  onStack: Set<string> = new Set<string>();
+  stack: Array<string> = [];
+  counter: number = 0;
+
+  constructor(typeAliases: Map<string, TypeAliasInfo>, depFrom: Array<string>, depTo: Array<string>) {
+    this.typeAliases = typeAliases;
+    this.depFrom = depFrom;
+    this.depTo = depTo;
+  }
+
+  markAll(): void {
+    for (const name of this.typeAliases.keys()) {
+      if (!this.index.has(name)) this.strongconnect(name);
+    }
+  }
+
+  private numberAt(map: Map<string, number>, key: string): number {
+    const value = map.get(key);
+    if (value === undefined) throwInternalCodegenError(`markRecursiveAliases: missing number for '${key}'`);
+    return value;
+  }
+
+  private lowerLowlink(v: string, candidate: number): void {
+    const current = this.numberAt(this.lowlink, v);
+    if (candidate < current) this.lowlink.set(v, candidate);
+  }
+
+  private popStack(): string {
+    const last = this.stack.length - 1;
+    if (last < 0) throwInternalCodegenError("markRecursiveAliases: empty Tarjan stack");
+    const value = this.stack[last];
+    this.stack.pop();
+    return value;
+  }
+
+  private hasSelfEdge(name: string): boolean {
+    for (let edgeIndex = 0; edgeIndex < this.depFrom.length; edgeIndex++) {
+      if (this.depFrom[edgeIndex] === name && this.depTo[edgeIndex] === name) return true;
+    }
+    return false;
+  }
+
+  private markRecursive(name: string): void {
+    const info = this.typeAliases.get(name);
+    if (info === undefined) throwInternalCodegenError(`markRecursiveAliases: unknown alias '${name}'`);
+    info.recursive = true;
+  }
+
+  private strongconnect(v: string): void {
+    this.index.set(v, this.counter);
+    this.lowlink.set(v, this.counter);
+    this.counter = this.counter + 1;
+    this.stack.push(v);
+    this.onStack.add(v);
+
+    for (let edgeIndex = 0; edgeIndex < this.depFrom.length; edgeIndex++) {
+      if (this.depFrom[edgeIndex] === v) {
+        const w = this.depTo[edgeIndex];
+        if (!this.index.has(w)) {
+          this.strongconnect(w);
+          this.lowerLowlink(v, this.numberAt(this.lowlink, w));
+        } else if (this.onStack.has(w)) {
+          this.lowerLowlink(v, this.numberAt(this.index, w));
+        }
+      }
+    }
+
+    if (this.numberAt(this.lowlink, v) === this.numberAt(this.index, v)) {
+      const members: Array<string> = [];
+      let memberCount = 0;
+      let selfEdge = false;
+      while (true) {
+        const w = this.popStack();
+        this.onStack.delete(w);
+        members.push(w);
+        memberCount = memberCount + 1;
+        if (this.hasSelfEdge(w)) selfEdge = true;
+        if (w === v) break;
+      }
+      if (memberCount > 1 || selfEdge) {
+        for (const name of members) {
+          this.markRecursive(name);
+        }
+      }
+    }
+  }
+}
+
 type TopLevelEntry = { stmt: Stmt; sf: SourceModule; isRoot: boolean };
 
 type SwitchGroup = { conds: Array<Expr>; body: Array<Stmt> };
@@ -1531,56 +1625,7 @@ class Emitter {
         depTo.push(to);
       }
     }
-
-    // Tarjan's SCC.
-    const index = new Map<string, number>();
-    const lowlink = new Map<string, number>();
-    const onStack = new Set<string>();
-    const stack: string[] = [];
-    let counter = 0;
-
-    const strongconnect = (v: string): void => {
-      index.set(v, counter);
-      lowlink.set(v, counter);
-      counter++;
-      stack.push(v);
-      onStack.add(v);
-      for (let edgeIndex = 0; edgeIndex < depFrom.length; edgeIndex++) {
-        if (depFrom[edgeIndex] === v) {
-          const w = depTo[edgeIndex];
-          if (!index.has(w)) {
-            strongconnect(w);
-            lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
-          } else if (onStack.has(w)) {
-            lowlink.set(v, Math.min(lowlink.get(v)!, index.get(w)!));
-          }
-        }
-      }
-      if (lowlink.get(v) === index.get(v)) {
-        const members: string[] = [];
-        let memberCount = 0;
-        let selfEdge = false;
-        while (true) {
-          const w = stack.pop()!;
-          onStack.delete(w);
-          members.push(w);
-          memberCount++;
-          for (let edgeIndex = 0; edgeIndex < depFrom.length; edgeIndex++) {
-            if (depFrom[edgeIndex] === w && depTo[edgeIndex] === w) selfEdge = true;
-          }
-          if (w === v) break;
-        }
-        if (memberCount > 1 || selfEdge) {
-          for (const name of members) {
-            this.typeAliases.get(name)!.recursive = true;
-          }
-        }
-      }
-    };
-
-    for (const name of this.typeAliases.keys()) {
-      if (!index.has(name)) strongconnect(name);
-    }
+    new AliasRecursionMarker(this.typeAliases, depFrom, depTo).markAll();
   }
 
   private preAllocatedAnonKey(node: TypeLiteralNode, sf: SourceModule): string {
