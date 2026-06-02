@@ -1967,10 +1967,11 @@ class Emitter {
       const cls = classEntry.decl;
       const sf = classEntry.sf;
       this.withSfVoid(sf, () => {
-      const name = cls.name;
-      if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
-        throw new CodegenError(cls, `cannot redefine built-in '${name}'`);
-      }
+        const name = cls.name;
+        const clsAnchor: { pos: number } = { pos: cls.pos };
+        if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
+          throw new CodegenError(clsAnchor, `cannot redefine built-in '${name}'`);
+        }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
         throw new CodegenError(cls, `redeclaration of class '${name}'`);
       }
