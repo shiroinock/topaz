@@ -1948,7 +1948,7 @@ class Emitter {
     const emptyModuleIdValues: Array<string> = [];
     this.moduleIdValues = emptyModuleIdValues;
     for (let i = 0; i < sourceFiles.length; i++) {
-      this.moduleIdModules.push(sourceFiles[i]!);
+      this.moduleIdModules.push(sourceFiles[i]);
       this.moduleIdValues.push(`m${i}`);
     }
     // Phase 1.5-6e-4: codegen consumes Topaz `SourceModule[]` directly (the
