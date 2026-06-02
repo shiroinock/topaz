@@ -737,18 +737,24 @@ class Scope {
   lookup(name: string): Binding | undefined {
     const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1] : 0;
     let frame: ScopeFrame | undefined = this.current;
-    while (frame !== undefined && frame.depth >= floor) {
-      const b = frame.bindings.get(name);
-      if (b) {
+    while (true) {
+      if (frame === undefined) break;
+      const currentFrame: ScopeFrame = frame;
+      if (currentFrame.depth < floor) break;
+      const b = currentFrame.bindings.get(name);
+      if (b !== undefined) {
         let narrowFrame: ScopeFrame | undefined = this.current;
-        while (narrowFrame !== undefined && narrowFrame.depth >= frame.depth) {
-          const n = narrowFrame.narrowings.get(name);
-          if (n) return { type: n, isConst: b.isConst };
-          narrowFrame = narrowFrame.parent;
+        while (true) {
+          if (narrowFrame === undefined) break;
+          const currentNarrowFrame: ScopeFrame = narrowFrame;
+          if (currentNarrowFrame.depth < currentFrame.depth) break;
+          const n = currentNarrowFrame.narrowings.get(name);
+          if (n !== undefined) return { type: n, isConst: b.isConst };
+          narrowFrame = currentNarrowFrame.parent;
         }
         return b;
       }
-      frame = frame.parent;
+      frame = currentFrame.parent;
     }
     return undefined;
   }
@@ -760,10 +766,13 @@ class Scope {
   lookupBase(name: string): Binding | undefined {
     const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1] : 0;
     let frame: ScopeFrame | undefined = this.current;
-    while (frame !== undefined && frame.depth >= floor) {
-      const b = frame.bindings.get(name);
-      if (b) return b;
-      frame = frame.parent;
+    while (true) {
+      if (frame === undefined) break;
+      const currentFrame: ScopeFrame = frame;
+      if (currentFrame.depth < floor) break;
+      const b = currentFrame.bindings.get(name);
+      if (b !== undefined) return b;
+      frame = currentFrame.parent;
     }
     return undefined;
   }
@@ -784,18 +793,23 @@ class Scope {
   // through `captureContext`.
   lookupAcrossBarrier(name: string): Binding | undefined {
     let frame: ScopeFrame | undefined = this.current;
-    while (frame !== undefined) {
-      const b = frame.bindings.get(name);
-      if (b) {
+    while (true) {
+      if (frame === undefined) break;
+      const currentFrame: ScopeFrame = frame;
+      const b = currentFrame.bindings.get(name);
+      if (b !== undefined) {
         let narrowFrame: ScopeFrame | undefined = this.current;
-        while (narrowFrame !== undefined && narrowFrame.depth >= frame.depth) {
-          const n = narrowFrame.narrowings.get(name);
-          if (n) return { type: n, isConst: b.isConst };
-          narrowFrame = narrowFrame.parent;
+        while (true) {
+          if (narrowFrame === undefined) break;
+          const currentNarrowFrame: ScopeFrame = narrowFrame;
+          if (currentNarrowFrame.depth < currentFrame.depth) break;
+          const n = currentNarrowFrame.narrowings.get(name);
+          if (n !== undefined) return { type: n, isConst: b.isConst };
+          narrowFrame = currentNarrowFrame.parent;
         }
         return b;
       }
-      frame = frame.parent;
+      frame = currentFrame.parent;
     }
     return undefined;
   }
