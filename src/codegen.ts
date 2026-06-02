@@ -1653,65 +1653,69 @@ class Emitter {
   // runs. Non-recursive aliases continue to dedupe via the regular
   // recordAnonClass path so `type Pair = { a; b }` and `type Pair2 = { a; b }`
   // still collapse to one C struct.
-  private preAllocateRecursiveAnons(): void {
-    const visit = (node: TypeNode, sf: SourceModule): void => {
-      if (node.kind === "type_union") {
-        for (const t of node.variants) visit(t, sf);
-        return;
+  private preAllocateRecursiveAnonVisit(node: TypeNode, sf: SourceModule): void {
+    if (node.kind === "type_union") {
+      for (const t of node.variants) this.preAllocateRecursiveAnonVisit(t, sf);
+      return;
+    }
+    if (node.kind === "type_array") {
+      this.preAllocateRecursiveAnonVisit(node.elem, sf);
+      return;
+    }
+    if (node.kind === "type_ref") {
+      for (const t of node.typeArgs) this.preAllocateRecursiveAnonVisit(t, sf);
+      return;
+    }
+    if (node.kind === "type_literal") {
+      const key = this.preAllocatedAnonKey(node, sf);
+      if (this.findPreAllocatedAnonByKey(key) === undefined) {
+        const mangled = `anon_${this.anonClassCounter++}`;
+        this.preAllocatedAnons.push({ key, node, anonName: mangled, sf });
+        const info: ClassInfo = {
+          name: mangled,
+          fields: new Map(),
+          fieldOrder: [],
+          fieldInits: new Map(),
+          ctor: { params: [], decl: undefined },
+          methods: new Map(),
+          implements: [],
+          optionalFields: new Set(),
+          decl: node,
+          sf,
+        };
+        this.classes.set(mangled, info);
+        this.classMonomorphs.set(mangled, {
+          mangled,
+          origName: mangled,
+          typeArgs: [],
+          subs: new Map(),
+        });
+        this.classMonomorphWorklist.push(mangled);
       }
-      if (node.kind === "type_array") {
-        visit(node.elem, sf);
-        return;
+      // Mirror the pre-migration walk: only field-member types are visited.
+      for (const m of node.members) {
+        if (m.kind === "type_lit_field") this.preAllocateRecursiveAnonVisit(m.type, sf);
       }
-      if (node.kind === "type_ref") {
-        for (const t of node.typeArgs) visit(t, sf);
-        return;
-      }
-      if (node.kind === "type_literal") {
-        const key = this.preAllocatedAnonKey(node, sf);
-        if (this.findPreAllocatedAnonByKey(key) === undefined) {
-          const mangled = `anon_${this.anonClassCounter++}`;
-          this.preAllocatedAnons.push({ key, node, anonName: mangled, sf });
-          const info: ClassInfo = {
-            name: mangled,
-            fields: new Map(),
-            fieldOrder: [],
-            fieldInits: new Map(),
-            ctor: { params: [], decl: undefined },
-            methods: new Map(),
-            implements: [],
-            optionalFields: new Set(),
-            decl: node,
-            sf,
-          };
-          this.classes.set(mangled, info);
-          this.classMonomorphs.set(mangled, {
-            mangled,
-            origName: mangled,
-            typeArgs: [],
-            subs: new Map(),
-          });
-          this.classMonomorphWorklist.push(mangled);
-        }
-        // Mirror the pre-migration walk: only field-member types are visited.
-        for (const m of node.members) {
-          if (m.kind === "type_lit_field") visit(m.type, sf);
-        }
-        return;
-      }
-      if (node.kind === "type_fn") {
-        for (const p of node.params) visit(p.type, sf);
-        visit(node.returnType, sf);
-        return;
-      }
-    };
+      return;
+    }
+    if (node.kind === "type_fn") {
+      for (const p of node.params) this.preAllocateRecursiveAnonVisit(p.type, sf);
+      this.preAllocateRecursiveAnonVisit(node.returnType, sf);
+      return;
+    }
+  }
 
+  private preAllocateRecursiveAnons(): void {
     for (const info of this.typeAliases.values()) {
       if (!info.recursive) continue;
-      visit(info.body, info.sf);
+      this.preAllocateRecursiveAnonVisit(info.body, info.sf);
       if (info.body.kind === "type_literal") {
-        const entry = this.findPreAllocatedAnon(info.body, info.sf)!;
-        info.resolved = classOf(entry.anonName);
+        const entry = this.findPreAllocatedAnon(info.body, info.sf);
+        if (entry !== undefined) {
+          info.resolved = classOf(entry.anonName);
+        } else {
+          throwInternalCodegenError("preAllocateRecursiveAnons: missing root anon allocation");
+        }
       }
     }
   }
