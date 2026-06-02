@@ -151,7 +151,11 @@ function isReferenceType(t: TopazType): boolean {
 // Phase 1.5-3b: helpers for union/undefined.
 function containsUndefined(t: TopazType): boolean {
   if (t.kind === "undefined") return true;
-  if (t.kind === "union") return t.variants.some(isUndefinedType);
+  if (t.kind === "union") {
+    for (const v of t.variants) {
+      if (isUndefinedType(v)) return true;
+    }
+  }
   return false;
 }
 
@@ -170,8 +174,18 @@ function withoutUndefined(t: TopazType): TopazType | undefined {
 // `Point | undefined` and `Circle` do not.
 function typesOverlap(a: TopazType, b: TopazType): boolean {
   if (typeEq(a, b)) return true;
-  if (a.kind === "union") return a.variants.some((v) => typesOverlap(v, b));
-  if (b.kind === "union") return b.variants.some((v) => typesOverlap(a, v));
+  if (a.kind === "union") {
+    for (const v of a.variants) {
+      if (typesOverlap(v, b)) return true;
+    }
+    return false;
+  }
+  if (b.kind === "union") {
+    for (const v of b.variants) {
+      if (typesOverlap(a, v)) return true;
+    }
+    return false;
+  }
   return false;
 }
 
@@ -1230,7 +1244,9 @@ class Emitter {
     anchor: { pos: number },
   ): TopazType | undefined {
     if (variants.length < 2) return undefined;
-    if (!variants.every((v) => v.kind === "class")) return undefined;
+    for (const v of variants) {
+      if (v.kind !== "class") return undefined;
+    }
     const discriminator = "kind";
     const classNames: string[] = [];
     const seenLiterals = new Set<string>();
@@ -2780,7 +2796,13 @@ class Emitter {
       // assignments. Otherwise keep the historical error — at least one field
       // would be left untouched and we can't pick a sensible default for it
       // (and don't want to surprise callers with silent zero-init).
-      const allInitialized = info.fieldOrder.every((f) => info.fieldInits.has(f));
+      let allInitialized = true;
+      for (const f of info.fieldOrder) {
+        if (!info.fieldInits.has(f)) {
+          allInitialized = false;
+          break;
+        }
+      }
       if (allInitialized) {
         info.ctor = { params: [], decl: undefined };
       } else {
@@ -6406,7 +6428,13 @@ class Emitter {
     // Array<T> whose elem type matches the destination's elem type EXACTLY.
     // Set / Iterator sources stay rejected here (tracked in future sub-steps).
     // Holes in array literals are rejected in convert.
-    const hasSpread = expr.elems.some((e) => e.kind === "spread");
+    let hasSpread = false;
+    for (const elem of expr.elems) {
+      if (elem.kind === "spread") {
+        hasSpread = true;
+        break;
+      }
+    }
     let arrType: TopazType;
     if (expr.elems.length === 0) {
       if (!expected || !isArrayType(expected)) {
@@ -9187,10 +9215,16 @@ class Emitter {
   private isAssignableTo(actual: TopazType, expected: TopazType): boolean {
     if (typeEq(actual, expected)) return true;
     if (expected.kind === "union") {
-      return expected.variants.some((v) => this.isAssignableTo(actual, v));
+      for (const v of expected.variants) {
+        if (this.isAssignableTo(actual, v)) return true;
+      }
+      return false;
     }
     if (actual.kind === "union") {
-      return actual.variants.every((v) => this.isAssignableTo(v, expected));
+      for (const v of actual.variants) {
+        if (!this.isAssignableTo(v, expected)) return false;
+      }
+      return true;
     }
     if (isInterfaceType(expected) && isClassType(actual)) {
       return this.classImplements(classNameOf(actual)!, interfaceNameOf(expected)!);
@@ -9215,7 +9249,10 @@ class Emitter {
     // same kind + payload into the wider typedef.
     if (expected.kind === "dunion" && actual.kind === "dunion") {
       if (actual.discriminator !== expected.discriminator) return false;
-      return actual.variants.every((v) => expected.variants.includes(v));
+      for (const v of actual.variants) {
+        if (!expected.variants.includes(v)) return false;
+      }
+      return true;
     }
     return false;
   }
