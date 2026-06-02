@@ -2443,7 +2443,9 @@ class Emitter {
       this.genericWorklist.length > 0
     ) {
       while (this.classMonomorphWorklist.length > 0) {
-        const mangled = this.classMonomorphWorklist.shift()!;
+        const last = this.classMonomorphWorklist.length - 1;
+        const mangled = this.classMonomorphWorklist[last];
+        this.classMonomorphWorklist.pop();
         const info = this.classes.get(mangled)!;
         const mono = this.classMonomorphs.get(mangled)!;
         classMonoTypedefLines.push(`typedef struct topaz_class_${mangled} topaz_class_${mangled};`);
@@ -2463,7 +2465,9 @@ class Emitter {
         }
       }
       while (this.genericWorklist.length > 0) {
-        const mangled = this.genericWorklist.shift()!;
+        const last = this.genericWorklist.length - 1;
+        const mangled = this.genericWorklist[last];
+        this.genericWorklist.pop();
         const mono = this.genericMonomorphs.get(mangled)!;
         monoFwdLines.push(`${this.formatMonomorphSignature(mono.mangled, mono.sig)};`);
         monoDefLines.push(this.emitMonomorphDefinition(mono));
