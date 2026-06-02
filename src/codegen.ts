@@ -661,7 +661,7 @@ export class CodegenError {
   // ambient SourceModule's lineStarts, mirroring tsc SourceFile diagnostics.
   constructor(node: { pos: number }, message?: string) {
     const module = g_currentModule;
-    if (module) {
+    if (module !== undefined) {
       const { line, col } = posToLineCol(module, node.pos);
       this.message = `${module.filePath}:${line + 1}:${col + 1}: ${message}`;
     } else {
