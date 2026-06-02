@@ -1740,8 +1740,9 @@ class Emitter {
       const cls = this.classes.get(entry.anonName)!;
       for (const m of literalNode.members) {
         if (m.kind !== "type_lit_field") continue;
-        if (m.type.kind === "type_str_lit") {
-          const v = m.type.value;
+        const memberType = m.type;
+        if (memberType.kind === "type_str_lit") {
+          const v = memberType.value;
           let ascii = true;
           for (let i = 0; i < v.length; i++) {
             if (v.charCodeAt(i) > 0x7e) { ascii = false; break; }
