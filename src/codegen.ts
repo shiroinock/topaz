@@ -2064,7 +2064,7 @@ class Emitter {
       }
       if (alias.typeParams.length > 0) {
         throw new CodegenError(
-          alias,
+          aliasAnchor,
           `generic type alias '${name}' is unsupported (Phase 1.5-6 prep)`,
         );
       }
