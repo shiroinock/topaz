@@ -460,7 +460,7 @@ function typeIdent(t: TopazType): string {
     return `topaz_fn_a${t.params.length}${paramSection}__to__${retId}`;
   }
   if (t.kind === "iter") return `topaz_iter_${elemTag(t.elem)}`;
-  throw new Error("typeIdent: unsupported type kind");
+  throwInternalCodegenError("typeIdent: unsupported type kind");
 }
 
 // Stable key for using TopazType as a Map/Set key. Identical to typeIdent.
