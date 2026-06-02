@@ -1006,8 +1006,8 @@ class AliasRecursionMarker {
 
   private numberAt(map: Map<string, number>, key: string): number {
     const value = map.get(key);
-    if (value === undefined) throwInternalCodegenError(`markRecursiveAliases: missing number for '${key}'`);
-    return value;
+    if (value !== undefined) return value;
+    throwInternalCodegenError(`markRecursiveAliases: missing number for '${key}'`);
   }
 
   private lowerLowlink(v: string, candidate: number): void {
