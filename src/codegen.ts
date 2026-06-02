@@ -1892,7 +1892,7 @@ class Emitter {
     for (let i = 0; i < this.moduleIdModules.length; i++) {
       if (this.moduleIdModules[i] === sf) return this.moduleIdValues[i];
     }
-    throw new Error(`missing module id for ${sf.filePath}`);
+    throwInternalCodegenError(`missing module id for ${sf.filePath}`);
   }
 
   private functionCName(sf: SourceModule, name: string): string {
