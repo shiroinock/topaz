@@ -1925,7 +1925,7 @@ class Emitter {
     }
     if (matches.length === 0) return undefined;
     const current = g_currentModule;
-    if (current) {
+    if (current !== undefined) {
       const local = matches.filter((sig) => sig.sf === current);
       if (local.length > 1) {
         throw new CodegenError(anchor, `redeclaration of function '${name}'`);
