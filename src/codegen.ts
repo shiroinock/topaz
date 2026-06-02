@@ -1521,11 +1521,15 @@ class Emitter {
   // when the body (or a nested type position) is a TypeLiteralNode.
   private markRecursiveAliases(): void {
     if (this.typeAliases.size === 0) return;
-    const deps = new Map<string, string[]>();
+    const depFrom: string[] = [];
+    const depTo: string[] = [];
     for (const [name, info] of this.typeAliases.entries()) {
       const out = new Set<string>();
       this.collectAliasRefs(info.body, out);
-      deps.set(name, [...out]);
+      for (const to of out) {
+        depFrom.push(name);
+        depTo.push(to);
+      }
     }
 
     // Tarjan's SCC.
@@ -1534,7 +1538,6 @@ class Emitter {
     const onStack = new Set<string>();
     const stack: string[] = [];
     let counter = 0;
-    const sccs: string[][] = [];
 
     const strongconnect = (v: string): void => {
       index.set(v, counter);
@@ -1542,38 +1545,41 @@ class Emitter {
       counter++;
       stack.push(v);
       onStack.add(v);
-      const successors = deps.get(v) ?? [];
-      for (const w of successors) {
-        if (!index.has(w)) {
-          strongconnect(w);
-          lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
-        } else if (onStack.has(w)) {
-          lowlink.set(v, Math.min(lowlink.get(v)!, index.get(w)!));
+      for (let edgeIndex = 0; edgeIndex < depFrom.length; edgeIndex++) {
+        if (depFrom[edgeIndex] === v) {
+          const w = depTo[edgeIndex];
+          if (!index.has(w)) {
+            strongconnect(w);
+            lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
+          } else if (onStack.has(w)) {
+            lowlink.set(v, Math.min(lowlink.get(v)!, index.get(w)!));
+          }
         }
       }
       if (lowlink.get(v) === index.get(v)) {
-        const scc: string[] = [];
+        const members: string[] = [];
+        let memberCount = 0;
+        let selfEdge = false;
         while (true) {
           const w = stack.pop()!;
           onStack.delete(w);
-          scc.push(w);
+          members.push(w);
+          memberCount++;
+          for (let edgeIndex = 0; edgeIndex < depFrom.length; edgeIndex++) {
+            if (depFrom[edgeIndex] === w && depTo[edgeIndex] === w) selfEdge = true;
+          }
           if (w === v) break;
         }
-        sccs.push(scc);
+        if (memberCount > 1 || selfEdge) {
+          for (const name of members) {
+            this.typeAliases.get(name)!.recursive = true;
+          }
+        }
       }
     };
 
     for (const name of this.typeAliases.keys()) {
       if (!index.has(name)) strongconnect(name);
-    }
-
-    for (const scc of sccs) {
-      const isRecursive = scc.length > 1
-        || (scc.length === 1 && (deps.get(scc[0]!) ?? []).includes(scc[0]!));
-      if (!isRecursive) continue;
-      for (const name of scc) {
-        this.typeAliases.get(name)!.recursive = true;
-      }
     }
   }
 
