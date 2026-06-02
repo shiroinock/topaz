@@ -1229,12 +1229,16 @@ class Emitter {
     let key = "";
     for (let i = 0; i < sorted.length; i++) {
       const f = sorted[i];
-      const fieldType = fields.get(f);
-      if (fieldType === undefined) throwInternalCodegenError("recordAnonClass: missing field type");
-      const opt = optionalFields.has(f) ? "?" : "";
-      const part = `${f}${opt}:${typeIdent(fieldType)}`;
-      if (i === 0) key = part;
-      else key = `${key},${part}`;
+      const fieldTypeMaybe = fields.get(f);
+      if (fieldTypeMaybe !== undefined) {
+        const fieldType: TopazType = fieldTypeMaybe;
+        const opt = optionalFields.has(f) ? "?" : "";
+        const part = `${f}${opt}:${typeIdent(fieldType)}`;
+        if (i === 0) key = part;
+        else key = `${key},${part}`;
+      } else {
+        throwInternalCodegenError("recordAnonClass: missing field type");
+      }
     }
     const existing = this.anonClassByKey.get(key);
     if (existing !== undefined) return existing;
@@ -1243,14 +1247,18 @@ class Emitter {
     const params: ParamInfo[] = [];
     const fieldsOrdered = new Map<string, TopazType>();
     for (const f of sorted) {
-      const fieldType = fields.get(f);
-      if (fieldType === undefined) throwInternalCodegenError("recordAnonClass: missing field type");
-      params.push({
-        name: f,
-        type: fieldType,
-        isOptional: optionalFields.has(f),
-      });
-      fieldsOrdered.set(f, fieldType);
+      const fieldTypeMaybe = fields.get(f);
+      if (fieldTypeMaybe !== undefined) {
+        const fieldType: TopazType = fieldTypeMaybe;
+        params.push({
+          name: f,
+          type: fieldType,
+          isOptional: optionalFields.has(f),
+        });
+        fieldsOrdered.set(f, fieldType);
+      } else {
+        throwInternalCodegenError("recordAnonClass: missing field type");
+      }
     }
     const info: ClassInfo = {
       name: mangled,
