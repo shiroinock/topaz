@@ -602,7 +602,7 @@ function isScalarOptUnion(t: TopazType): boolean {
 function iterContainerTag(t: TopazType): string {
   if (isMapType(t)) return `map_${mapShortName(t)}`;
   if (isSetType(t)) return `set_${setShortName(t)}`;
-  throw new Error(`iterContainerTag: unsupported container kind=${t.kind}`);
+  throwInternalCodegenError(`iterContainerTag: unsupported container kind=${t.kind}`);
 }
 
 // Phase 1.5-3.5g-iterator: C expression for the "value to return when done"
