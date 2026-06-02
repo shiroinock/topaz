@@ -2023,7 +2023,7 @@ class Emitter {
         throw new CodegenError(ifaceAnchor, `cannot redefine built-in '${name}'`);
       }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
-        throw new CodegenError(iface, `interface '${name}' collides with a class of the same name`);
+        throw new CodegenError(ifaceAnchor, `interface '${name}' collides with a class of the same name`);
       }
       if (this.interfaces.has(name)) {
         throw new CodegenError(iface, `redeclaration of interface '${name}'`);
