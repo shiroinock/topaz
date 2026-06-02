@@ -2140,7 +2140,7 @@ class Emitter {
         this.genericFunctions.set(fname, { name: fname, typeParams, decl: fn, sf });
         return;
       }
-      const ret = this.typeFromAnnotation(fn.returnType, fn, sf);
+      const ret = this.typeFromAnnotation(fn.returnType, fnAnchor, sf);
       const params = this.collectParams(fn.params, sf);
       this.registerFunctionSig(fn, {
         name: fname,
