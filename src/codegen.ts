@@ -612,22 +612,26 @@ function posToLineCol(module: SourceModule, pos: number): { line: number; col: n
 export class CodegenError {
   message: string = "";
 
-  // Phase 1.5-6e-4: accept a Topaz node `{ pos }` (resolved against the ambient
-  // SourceModule's lineStarts) or an already-formatted `file:line:col: message`
-  // string. The string form lets the type machine — which walks Topaz `TypeNode`
-  // that don't carry their module — build positions via `Emitter.typeErr`.
-  constructor(nodeOrFormatted: { pos: number } | string, message?: string) {
-    if (typeof nodeOrFormatted === "string") {
-      this.message = nodeOrFormatted;
-      return;
-    }
+  // Phase 1.5-6e-4: accept a Topaz node `{ pos }` and resolve it against the
+  // ambient SourceModule's lineStarts, mirroring tsc SourceFile diagnostics.
+  constructor(node: { pos: number }, message?: string) {
     const module = g_currentModule;
     if (module) {
-      const { line, col } = posToLineCol(module, nodeOrFormatted.pos);
+      const { line, col } = posToLineCol(module, node.pos);
       this.message = `${module.filePath}:${line + 1}:${col + 1}: ${message}`;
     } else {
       this.message = message ?? "";
     }
+  }
+}
+
+class FormattedCodegenError {
+  value: CodegenError;
+
+  constructor(formatted: string) {
+    const err = new CodegenError({ pos: 0 }, formatted);
+    err.message = formatted;
+    this.value = err;
   }
 }
 
@@ -3214,9 +3218,9 @@ class Emitter {
   // the pre-migration tsc-anchored errors.
   private typeErr(anchor: { pos: number }, message: string): CodegenError {
     const module = this.currentTypeModule;
-    if (!module) return new CodegenError(message);
+    if (!module) return new FormattedCodegenError(message).value;
     const { line, col } = posToLineCol(module, anchor.pos);
-    return new CodegenError(`${module.filePath}:${line + 1}:${col + 1}: ${message}`);
+    return new FormattedCodegenError(`${module.filePath}:${line + 1}:${col + 1}: ${message}`).value;
   }
 
   // decl-land → emit/infer SCC boundary helper. Sets the ambient
