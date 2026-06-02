@@ -2018,8 +2018,9 @@ class Emitter {
       const sf = ifaceEntry.sf;
       this.withSfVoid(sf, () => {
       const name = iface.name;
+      const ifaceAnchor: { pos: number } = { pos: iface.pos };
       if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
-        throw new CodegenError(iface, `cannot redefine built-in '${name}'`);
+        throw new CodegenError(ifaceAnchor, `cannot redefine built-in '${name}'`);
       }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
         throw new CodegenError(iface, `interface '${name}' collides with a class of the same name`);
