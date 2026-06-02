@@ -918,9 +918,9 @@ type SwitchGroup = { conds: Array<Expr>; body: Array<Stmt> };
 
 type IterNextInfo = {
   containerType: TopazType;
-  source: "map_values" | "map_keys" | "set_values";
+  source: string;
   elemType: TopazType;
-  field: "key" | "value";
+  field: string;
 };
 
 // Mangling: stripped of the `topaz_` prefix, joined with `__`. Class/iface
@@ -1206,8 +1206,8 @@ class Emitter {
   private recordIterMonomorph(
     elemType: TopazType,
     containerType: TopazType,
-    source: "map_values" | "map_keys" | "set_values",
-    field: "key" | "value",
+    source: string,
+    field: string,
   ): void {
     // Containers themselves need their _new / _set / _add / etc helpers, so
     // make sure the underlying monomorph is registered first.
@@ -2478,9 +2478,9 @@ class Emitter {
   // and returns the elem's zero value (caller ignores the value when done).
   private emitIterNextFunction(entry: {
     containerType: TopazType;
-    source: "map_values" | "map_keys" | "set_values";
+    source: string;
     elemType: TopazType;
-    field: "key" | "value";
+    field: string;
   }): string {
     const containerTag = iterContainerTag(entry.containerType);
     const cty = cTypeName(entry.elemType);
@@ -2510,9 +2510,9 @@ class Emitter {
   private emitIterConstruction(
     recvExpr: Expr,
     containerType: TopazType,
-    source: "map_values" | "map_keys" | "set_values",
+    source: string,
     elemType: TopazType,
-    field: "key" | "value",
+    field: string,
   ): string {
     this.recordIterMonomorph(elemType, containerType, source, field);
     const containerTag = iterContainerTag(containerType);
