@@ -1763,21 +1763,23 @@ class Emitter {
       const sf = entry.sf;
       const savedSf = this.currentTypeModule;
       this.currentTypeModule = sf;
+      const literalAnchor: { pos: number } = { pos: literalNode.pos };
       if (literalNode.members.length === 0) {
-        throw this.typeErr(literalNode, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
+        throw this.typeErr(literalAnchor, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
       }
       const fields = new Map<string, TopazType>();
       const optionalFields = new Set<string>();
       for (const m of literalNode.members) {
+        const memberAnchor: { pos: number } = { pos: m.pos };
         if (m.kind !== "type_lit_field") {
-          throw this.typeErr(m, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
+          throw this.typeErr(memberAnchor, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
         }
         const fname = m.name;
         if (fields.has(fname)) {
-          throw this.typeErr(m, `duplicate property '${fname}' in object literal type`);
+          throw this.typeErr(memberAnchor, `duplicate property '${fname}' in object literal type`);
         }
-        const annot = this.typeFromAnnotation(m.type, m, sf);
-        this.assertNotVoid(annot, m, "object literal type property");
+        const annot = this.typeFromAnnotation(m.type, memberAnchor, sf);
+        this.assertNotVoid(annot, memberAnchor, "object literal type property");
         const fty = m.isOptional ? makeUnion([annot, T_UNDEFINED]) : annot;
         if (m.isOptional) optionalFields.add(fname);
         fields.set(fname, fty);
