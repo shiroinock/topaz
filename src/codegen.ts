@@ -1839,7 +1839,7 @@ class Emitter {
     const interfaces: Array<{ decl: InterfaceDecl; sf: SourceModule }> = [];
     const aliases: Array<{ decl: TypeAliasDecl; sf: SourceModule }> = [];
     const topLevel: Array<TopLevelEntry> = [];
-    const rootSf = sourceFiles[sourceFiles.length - 1]!;
+    const rootSf = sourceFiles[sourceFiles.length - 1];
     for (const sf of sourceFiles) {
       const isRoot = sf === rootSf;
       const module: SourceModule = sf;
