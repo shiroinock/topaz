@@ -735,7 +735,7 @@ class Scope {
   }
 
   lookup(name: string): Binding | undefined {
-    const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1]! : 0;
+    const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1] : 0;
     let frame: ScopeFrame | undefined = this.current;
     while (frame !== undefined && frame.depth >= floor) {
       const b = frame.bindings.get(name);
@@ -758,7 +758,7 @@ class Scope {
   // the C representation (for scalar opt structs, narrowed reads append
   // `.value` while assignments target the whole struct).
   lookupBase(name: string): Binding | undefined {
-    const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1]! : 0;
+    const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1] : 0;
     let frame: ScopeFrame | undefined = this.current;
     while (frame !== undefined && frame.depth >= floor) {
       const b = frame.bindings.get(name);
