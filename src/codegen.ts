@@ -1402,17 +1402,16 @@ class Emitter {
       throwInternalCodegenError("dunionLiteralFor: not a dunion");
     }
     const infoMaybe = this.classes.get(cls);
-    if (infoMaybe === undefined) throwInternalCodegenError(`dunionLiteralFor: unknown class '${cls}'`);
-    const info: ClassInfo = infoMaybe;
-    const fieldMaybe = info.fields.get(unionType.discriminator);
-    if (fieldMaybe === undefined) {
-      throwInternalCodegenError(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
+    if (infoMaybe !== undefined) {
+      const info: ClassInfo = infoMaybe;
+      const fieldMaybe = info.fields.get(unionType.discriminator);
+      if (fieldMaybe !== undefined && fieldMaybe.kind === "string_literal") {
+        return fieldMaybe.value;
+      }
+    } else {
+      throwInternalCodegenError(`dunionLiteralFor: unknown class '${cls}'`);
     }
-    if (fieldMaybe.kind !== "string_literal") {
-      throwInternalCodegenError(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
-    }
-    const field = fieldMaybe;
-    return field.value;
+    throwInternalCodegenError(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
   }
 
   // Phase 1.5-6 prep #18: a dunion field shared by every variant with one
