@@ -393,18 +393,18 @@ function scalarTag(t: TopazType): string {
 // `topaz_array_<short>_push`). Each matches the substring after the container
 // prefix from the pre-1.4c-3 string union.
 function arrayShortName(t: TopazType): string {
-  if (t.kind !== "array") throwInternalCodegenError(`arrayShortName: not an array, kind=${t.kind}`);
-  return elemTag(t.elem);
+  if (t.kind === "array") return elemTag(t.elem);
+  throwInternalCodegenError(`arrayShortName: not an array, kind=${t.kind}`);
 }
 
 function mapShortName(t: TopazType): string {
-  if (t.kind !== "map") throwInternalCodegenError(`mapShortName: not a map, kind=${t.kind}`);
-  return `${scalarTag(t.key)}_${elemTag(t.value)}`;
+  if (t.kind === "map") return `${scalarTag(t.key)}_${elemTag(t.value)}`;
+  throwInternalCodegenError(`mapShortName: not a map, kind=${t.kind}`);
 }
 
 function setShortName(t: TopazType): string {
-  if (t.kind !== "set") throwInternalCodegenError(`setShortName: not a set, kind=${t.kind}`);
-  return elemTag(t.elem);
+  if (t.kind === "set") return elemTag(t.elem);
+  throwInternalCodegenError(`setShortName: not a set, kind=${t.kind}`);
 }
 
 // Canonical C identifier for a type — the same string the pre-1.4c-3 string
