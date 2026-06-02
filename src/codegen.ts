@@ -1941,7 +1941,7 @@ class Emitter {
 
   emit(sourceFiles: Array<SourceModule>): string {
     if (sourceFiles.length === 0) {
-      throw new Error("codegen: at least one source file is required");
+      throwInternalCodegenError("codegen: at least one source file is required");
     }
     this.moduleIdModules = [];
     this.moduleIdValues = [];
