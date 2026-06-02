@@ -2131,8 +2131,9 @@ class Emitter {
         }
         const typeParams: string[] = [];
         for (const tp of fn.typeParams) {
+          const tpAnchor: { pos: number } = { pos: tp.pos };
           if (typeParams.includes(tp.name)) {
-            throw new CodegenError(tp, `duplicate type parameter '${tp.name}'`);
+            throw new CodegenError(tpAnchor, `duplicate type parameter '${tp.name}'`);
           }
           typeParams.push(tp.name);
         }
