@@ -2654,7 +2654,7 @@ class Emitter {
   private emitArrayJoinHelper(t: TopazType): string {
     const tag = arrayShortName(t);
     const elem = arrayElem(t)!;
-    let toStringStmt: string;
+    let toStringStmt: string = "";
     if (elem.kind === "string") {
       toStringStmt = `topaz_string __e = src->data[i];`;
     } else if (elem.kind === "number") {
