@@ -523,7 +523,7 @@ function isBuiltinName(name: string): boolean {
 // narrowing strips the undefined variant.
 function cTypeName(t: TopazType): string {
   if (t.kind === "undefined") {
-    throw new Error("cTypeName: bare `undefined` has no C representation (only `T | undefined` does)");
+    throwInternalCodegenError("cTypeName: bare `undefined` has no C representation (only `T | undefined` does)");
   }
   // Phase 1.5-6 prep: `void` has no C value representation. cTypeName is the
   // value-type helper; return-type slots use cReturnTypeName below, which
@@ -533,7 +533,7 @@ function cTypeName(t: TopazType): string {
   // a CodegenError by the upstream check, but throwing here keeps the
   // invariant explicit.
   if (t.kind === "void") {
-    throw new Error("cTypeName: `void` is only valid as a function / method return type");
+    throwInternalCodegenError("cTypeName: `void` is only valid as a function / method return type");
   }
   // Phase 1.5-3f: `unknown` is only legal as a catch binding annotation, where
   // the throw payload is `void *`. Narrowing via `instanceof` casts to the
@@ -550,7 +550,7 @@ function cTypeName(t: TopazType): string {
   if (t.kind === "union") {
     const nonUndef = t.variants.filter((v) => v.kind !== "undefined");
     if (nonUndef.length !== 1) {
-      throw new Error(`cTypeName: union ${typeIdent(t)} is not \`T | undefined\` (1.5-3b only supports T | undefined)`);
+      throwInternalCodegenError(`cTypeName: union ${typeIdent(t)} is not \`T | undefined\` (1.5-3b only supports T | undefined)`);
     }
     const inner = nonUndef[0]!;
     if (isScalarType(inner)) {
@@ -561,7 +561,7 @@ function cTypeName(t: TopazType): string {
     // is the absent sentinel — identical shape to iface | undefined, so the
     // C representation for `dunion | undefined` is just the dunion struct.
     if (!isReferenceType(inner) && inner.kind !== "iface" && inner.kind !== "dunion") {
-      throw new Error(
+      throwInternalCodegenError(
         `cTypeName: \`T | undefined\` requires T to be a scalar, reference (array/map/set/class), interface, or dunion; got ${typeIdent(inner)}`,
       );
     }
