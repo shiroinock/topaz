@@ -426,7 +426,27 @@ function typeIdent(t: TopazType): string {
   if (t.kind === "set") return `topaz_set_${setShortName(t)}`;
   if (t.kind === "class") return `topaz_class_${t.name}`;
   if (t.kind === "iface") return `topaz_iface_${t.name}`;
-  if (t.kind === "dunion") return `topaz_dunion_${[...t.variants].sort().join("_or_")}`;
+  if (t.kind === "dunion") {
+    const sorted: Array<string> = [];
+    for (const v of t.variants) {
+      sorted.push(v);
+      let i = sorted.length - 1;
+      while (i > 0 && typeKeyLess(v, sorted[i - 1])) {
+        sorted[i] = sorted[i - 1];
+        i = i - 1;
+      }
+      sorted[i] = v;
+    }
+    let suffix = "";
+    for (let i = 0; i < sorted.length; i++) {
+      if (i === 0) {
+        suffix = sorted[i];
+      } else {
+        suffix = `${suffix}_or_${sorted[i]}`;
+      }
+    }
+    return `topaz_dunion_${suffix}`;
+  }
   if (t.kind === "union") {
     return `topaz_union_${t.variants.map((v) => typeIdent(v).slice("topaz_".length)).join("_or_")}`;
   }
