@@ -738,15 +738,17 @@ class Scope {
     const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1] : 0;
     let frame: ScopeFrame | undefined = this.current;
     while (true) {
-      if (frame === undefined) break;
-      const currentFrame: ScopeFrame = frame;
+      const frameCursor = frame;
+      if (frameCursor === undefined) break;
+      const currentFrame: ScopeFrame = frameCursor;
       if (currentFrame.depth < floor) break;
       const b = currentFrame.bindings.get(name);
       if (b !== undefined) {
         let narrowFrame: ScopeFrame | undefined = this.current;
         while (true) {
-          if (narrowFrame === undefined) break;
-          const currentNarrowFrame: ScopeFrame = narrowFrame;
+          const narrowFrameCursor = narrowFrame;
+          if (narrowFrameCursor === undefined) break;
+          const currentNarrowFrame: ScopeFrame = narrowFrameCursor;
           if (currentNarrowFrame.depth < currentFrame.depth) break;
           const n = currentNarrowFrame.narrowings.get(name);
           if (n !== undefined) return { type: n, isConst: b.isConst };
@@ -767,8 +769,9 @@ class Scope {
     const floor = this.barrierDepths.length > 0 ? this.barrierDepths[this.barrierDepths.length - 1] : 0;
     let frame: ScopeFrame | undefined = this.current;
     while (true) {
-      if (frame === undefined) break;
-      const currentFrame: ScopeFrame = frame;
+      const frameCursor = frame;
+      if (frameCursor === undefined) break;
+      const currentFrame: ScopeFrame = frameCursor;
       if (currentFrame.depth < floor) break;
       const b = currentFrame.bindings.get(name);
       if (b !== undefined) return b;
@@ -794,14 +797,16 @@ class Scope {
   lookupAcrossBarrier(name: string): Binding | undefined {
     let frame: ScopeFrame | undefined = this.current;
     while (true) {
-      if (frame === undefined) break;
-      const currentFrame: ScopeFrame = frame;
+      const frameCursor = frame;
+      if (frameCursor === undefined) break;
+      const currentFrame: ScopeFrame = frameCursor;
       const b = currentFrame.bindings.get(name);
       if (b !== undefined) {
         let narrowFrame: ScopeFrame | undefined = this.current;
         while (true) {
-          if (narrowFrame === undefined) break;
-          const currentNarrowFrame: ScopeFrame = narrowFrame;
+          const narrowFrameCursor = narrowFrame;
+          if (narrowFrameCursor === undefined) break;
+          const currentNarrowFrame: ScopeFrame = narrowFrameCursor;
           if (currentNarrowFrame.depth < currentFrame.depth) break;
           const n = currentNarrowFrame.narrowings.get(name);
           if (n !== undefined) return { type: n, isConst: b.isConst };
