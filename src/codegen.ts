@@ -1399,14 +1399,19 @@ class Emitter {
   // discriminator field. Validated at field collection (string_literal type).
   private dunionLiteralFor(unionType: TopazType, cls: string): string {
     if (unionType.kind !== "dunion") {
-      throw new Error("dunionLiteralFor: not a dunion");
+      throwInternalCodegenError("dunionLiteralFor: not a dunion");
     }
-    const info = this.classes.get(cls);
-    if (!info) throw new Error(`dunionLiteralFor: unknown class '${cls}'`);
-    const field = info.fields.get(unionType.discriminator);
-    if (!field || field.kind !== "string_literal") {
-      throw new Error(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
+    const infoMaybe = this.classes.get(cls);
+    if (infoMaybe === undefined) throwInternalCodegenError(`dunionLiteralFor: unknown class '${cls}'`);
+    const info: ClassInfo = infoMaybe;
+    const fieldMaybe = info.fields.get(unionType.discriminator);
+    if (fieldMaybe === undefined) {
+      throwInternalCodegenError(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
     }
+    if (fieldMaybe.kind !== "string_literal") {
+      throwInternalCodegenError(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
+    }
+    const field = fieldMaybe;
     return field.value;
   }
 
