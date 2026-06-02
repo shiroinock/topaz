@@ -237,70 +237,70 @@ function setOf(elem: TopazType): TopazType | undefined {
 // Structural equality. Replaces the old string `===` comparisons; do not use
 // `===` directly on TopazType (objects compare by reference).
 function typeEq(a: TopazType, b: TopazType): boolean {
-  switch (a.kind) {
-    case "number":
-    case "boolean":
-    case "string":
-    case "undefined":
-    case "unknown":
-    case "void":
-      return a.kind === b.kind;
-    case "string_literal":
-      if (b.kind !== "string_literal") return false;
-      return a.value === b.value;
-    case "array":
-      if (b.kind !== "array") return false;
-      return typeEq(a.elem, b.elem);
-    case "map": {
-      if (b.kind !== "map") return false;
-      return typeEq(a.key, b.key) && typeEq(a.value, b.value);
-    }
-    case "set": {
-      if (b.kind !== "set") return false;
-      return typeEq(a.elem, b.elem);
-    }
-    case "class": {
-      if (b.kind !== "class") return false;
-      return a.name === b.name;
-    }
-    case "iface": {
-      if (b.kind !== "iface") return false;
-      return a.name === b.name;
-    }
-    case "dunion": {
-      if (b.kind !== "dunion") return false;
-      if (a.discriminator !== b.discriminator) return false;
-      if (a.variants.length !== b.variants.length) return false;
-      for (let i = 0; i < a.variants.length; i++) {
-        if (a.variants[i] !== b.variants[i]) return false;
-      }
-      return true;
-    }
-    case "union": {
-      if (b.kind !== "union") return false;
-      if (a.variants.length !== b.variants.length) return false;
-      // variants are canonical-sorted by makeUnion, so positional compare.
-      for (let i = 0; i < a.variants.length; i++) {
-        if (!typeEq(a.variants[i]!, b.variants[i]!)) return false;
-      }
-      return true;
-    }
-    case "fn": {
-      // Phase 1.5-3.5e: positional param comparison; param names are
-      // informational only. Two fn types are equal when arity matches, each
-      // param type is equal positionally, and return types are equal.
-      if (b.kind !== "fn") return false;
-      if (a.params.length !== b.params.length) return false;
-      for (let i = 0; i < a.params.length; i++) {
-        if (!typeEq(a.params[i]!.type, b.params[i]!.type)) return false;
-      }
-      return typeEq(a.returnType, b.returnType);
-    }
-    case "iter": {
-      if (b.kind !== "iter") return false;
-      return typeEq(a.elem, b.elem);
-    }
+  if (a.kind === "number") return b.kind === "number";
+  if (a.kind === "boolean") return b.kind === "boolean";
+  if (a.kind === "string") return b.kind === "string";
+  if (a.kind === "undefined") return b.kind === "undefined";
+  if (a.kind === "unknown") return b.kind === "unknown";
+  if (a.kind === "void") return b.kind === "void";
+  if (a.kind === "string_literal") {
+    if (b.kind !== "string_literal") return false;
+    return a.value === b.value;
   }
+  if (a.kind === "array") {
+    if (b.kind !== "array") return false;
+    return typeEq(a.elem, b.elem);
+  }
+  if (a.kind === "map") {
+    if (b.kind !== "map") return false;
+    return typeEq(a.key, b.key) && typeEq(a.value, b.value);
+  }
+  if (a.kind === "set") {
+    if (b.kind !== "set") return false;
+    return typeEq(a.elem, b.elem);
+  }
+  if (a.kind === "class") {
+    if (b.kind !== "class") return false;
+    return a.name === b.name;
+  }
+  if (a.kind === "iface") {
+    if (b.kind !== "iface") return false;
+    return a.name === b.name;
+  }
+  if (a.kind === "dunion") {
+    if (b.kind !== "dunion") return false;
+    if (a.discriminator !== b.discriminator) return false;
+    if (a.variants.length !== b.variants.length) return false;
+    for (let i = 0; i < a.variants.length; i++) {
+      if (a.variants[i] !== b.variants[i]) return false;
+    }
+    return true;
+  }
+  if (a.kind === "union") {
+    if (b.kind !== "union") return false;
+    if (a.variants.length !== b.variants.length) return false;
+    // variants are canonical-sorted by makeUnion, so positional compare.
+    for (let i = 0; i < a.variants.length; i++) {
+      if (!typeEq(a.variants[i]!, b.variants[i]!)) return false;
+    }
+    return true;
+  }
+  if (a.kind === "fn") {
+    // Phase 1.5-3.5e: positional param comparison; param names are
+    // informational only. Two fn types are equal when arity matches, each
+    // param type is equal positionally, and return types are equal.
+    if (b.kind !== "fn") return false;
+    if (a.params.length !== b.params.length) return false;
+    for (let i = 0; i < a.params.length; i++) {
+      if (!typeEq(a.params[i]!.type, b.params[i]!.type)) return false;
+    }
+    return typeEq(a.returnType, b.returnType);
+  }
+  if (a.kind === "iter") {
+    if (b.kind !== "iter") return false;
+    return typeEq(a.elem, b.elem);
+  }
+  return false;
 }
 
 // Phase 1.5-3b: build a union, flattening nested unions, deduplicating by
@@ -335,42 +335,41 @@ function makeUnion(variants: Array<TopazType>): TopazType {
 // has no monomorph for `Array<T | undefined>` etc.); reject at this layer so
 // any caller hits a clear error rather than producing garbage identifiers.
 function elemTag(t: TopazType): string {
-  switch (t.kind) {
-    case "number":
-    case "boolean":
-    case "string":
-      return t.kind;
-    case "class":
-      return `class_${t.name}`;
-    case "iface":
-      return `iface_${t.name}`;
-    case "dunion":
-      // Phase 1.5-6 prep #8: discriminated class union as a container element.
-      // The dunion typedef is `{ topaz_string kind; void *data; }` (emitted in
-      // emitDunionTypedef), so storage is a single struct value — no nested
-      // pointer indirection. Variants are required to be concrete classes;
-      // recursive dunion/union variants are rejected at typeFromAnnotation.
-      // Tag is typeIdent stripped of the `topaz_` prefix so the resulting
-      // `topaz_array_dunion_A_or_B` / `topaz_map_<K>_dunion_A_or_B` /
-      // `topaz_set_dunion_A_or_B` mangle is unique per variant set.
-      return typeIdent(t).slice("topaz_".length);
-    case "undefined":
-      throw new Error("elemTag: bare undefined cannot be a container element");
-    case "union":
-      throw new Error(`elemTag: union ${typeIdent(t)} cannot be a container element (1.5-3b)`);
-    case "fn":
-      // Phase 1.5-3.5g-array-fn: fn elems are tagged like classes (the
-      // arity-prefixed identifier from typeIdent stripped of `topaz_`).
-      // Map / Set still reject fn at mapOf / setOf (eq / hash undefined).
-      return typeIdent(t).slice("topaz_".length);
-    case "iter":
-      // Phase 1.5-3.5g-iterator: Iterator<T> values are single-pass and own
-      // arena-allocated state — storing them in Array / Map / Set would need
-      // ownership semantics we don't model. Always reject at container site.
-      throw new Error(`elemTag: iterator type ${typeIdent(t)} cannot be a container element (1.5-3.5g)`);
-    default:
-      throw new Error("elemTag: unsupported container element kind (no nested containers yet)");
+  if (t.kind === "number") return "number";
+  if (t.kind === "boolean") return "boolean";
+  if (t.kind === "string") return "string";
+  if (t.kind === "class") return `class_${t.name}`;
+  if (t.kind === "iface") return `iface_${t.name}`;
+  if (t.kind === "dunion") {
+    // Phase 1.5-6 prep #8: discriminated class union as a container element.
+    // The dunion typedef is `{ topaz_string kind; void *data; }` (emitted in
+    // emitDunionTypedef), so storage is a single struct value — no nested
+    // pointer indirection. Variants are required to be concrete classes;
+    // recursive dunion/union variants are rejected at typeFromAnnotation.
+    // Tag is typeIdent stripped of the `topaz_` prefix so the resulting
+    // `topaz_array_dunion_A_or_B` / `topaz_map_<K>_dunion_A_or_B` /
+    // `topaz_set_dunion_A_or_B` mangle is unique per variant set.
+    return typeIdent(t).slice("topaz_".length);
   }
+  if (t.kind === "undefined") {
+    throw new Error("elemTag: bare undefined cannot be a container element");
+  }
+  if (t.kind === "union") {
+    throw new Error(`elemTag: union ${typeIdent(t)} cannot be a container element (1.5-3b)`);
+  }
+  if (t.kind === "fn") {
+    // Phase 1.5-3.5g-array-fn: fn elems are tagged like classes (the
+    // arity-prefixed identifier from typeIdent stripped of `topaz_`).
+    // Map / Set still reject fn at mapOf / setOf (eq / hash undefined).
+    return typeIdent(t).slice("topaz_".length);
+  }
+  if (t.kind === "iter") {
+    // Phase 1.5-3.5g-iterator: Iterator<T> values are single-pass and own
+    // arena-allocated state — storing them in Array / Map / Set would need
+    // ownership semantics we don't model. Always reject at container site.
+    throw new Error(`elemTag: iterator type ${typeIdent(t)} cannot be a container element (1.5-3.5g)`);
+  }
+  throw new Error("elemTag: unsupported container element kind (no nested containers yet)");
 }
 
 function scalarTag(t: TopazType): string {
@@ -405,45 +404,33 @@ function setShortName(t: TopazType): string {
 // canonical-sorted unions (used as a typeKey, not as a C type — the C side
 // for `T | undefined` collapses to T's representation in cTypeName).
 function typeIdent(t: TopazType): string {
-  switch (t.kind) {
-    case "number":
-    case "boolean":
-    case "string":
-      return `topaz_${t.kind}`;
-    case "undefined":
-      return `topaz_undefined`;
-    case "unknown":
-      return `topaz_unknown`;
-    case "void":
-      return `topaz_void`;
-    case "string_literal":
-      return `topaz_string_literal_${t.value}`;
-    case "array":
-      return `topaz_array_${arrayShortName(t)}`;
-    case "map":
-      return `topaz_map_${mapShortName(t)}`;
-    case "set":
-      return `topaz_set_${setShortName(t)}`;
-    case "class":
-      return `topaz_class_${t.name}`;
-    case "iface":
-      return `topaz_iface_${t.name}`;
-    case "dunion":
-      return `topaz_dunion_${[...t.variants].sort().join("_or_")}`;
-    case "union":
-      return `topaz_union_${t.variants.map((v) => typeIdent(v).slice("topaz_".length)).join("_or_")}`;
-    case "fn": {
-      // Phase 1.5-3.5e: arity prefix `a<N>` keeps different-arity signatures
-      // unambiguous even when param mangling contains `__`; the `__to__`
-      // separator splits param list from return type.
-      const paramIds = t.params.map((p) => typeIdent(p.type).slice("topaz_".length)).join("__");
-      const retId = typeIdent(t.returnType).slice("topaz_".length);
-      const paramSection = paramIds.length > 0 ? `__${paramIds}` : "";
-      return `topaz_fn_a${t.params.length}${paramSection}__to__${retId}`;
-    }
-    case "iter":
-      return `topaz_iter_${elemTag(t.elem)}`;
+  if (t.kind === "number") return "topaz_number";
+  if (t.kind === "boolean") return "topaz_boolean";
+  if (t.kind === "string") return "topaz_string";
+  if (t.kind === "undefined") return "topaz_undefined";
+  if (t.kind === "unknown") return "topaz_unknown";
+  if (t.kind === "void") return "topaz_void";
+  if (t.kind === "string_literal") return `topaz_string_literal_${t.value}`;
+  if (t.kind === "array") return `topaz_array_${arrayShortName(t)}`;
+  if (t.kind === "map") return `topaz_map_${mapShortName(t)}`;
+  if (t.kind === "set") return `topaz_set_${setShortName(t)}`;
+  if (t.kind === "class") return `topaz_class_${t.name}`;
+  if (t.kind === "iface") return `topaz_iface_${t.name}`;
+  if (t.kind === "dunion") return `topaz_dunion_${[...t.variants].sort().join("_or_")}`;
+  if (t.kind === "union") {
+    return `topaz_union_${t.variants.map((v) => typeIdent(v).slice("topaz_".length)).join("_or_")}`;
   }
+  if (t.kind === "fn") {
+    // Phase 1.5-3.5e: arity prefix `a<N>` keeps different-arity signatures
+    // unambiguous even when param mangling contains `__`; the `__to__`
+    // separator splits param list from return type.
+    const paramIds = t.params.map((p) => typeIdent(p.type).slice("topaz_".length)).join("__");
+    const retId = typeIdent(t.returnType).slice("topaz_".length);
+    const paramSection = paramIds.length > 0 ? `__${paramIds}` : "";
+    return `topaz_fn_a${t.params.length}${paramSection}__to__${retId}`;
+  }
+  if (t.kind === "iter") return `topaz_iter_${elemTag(t.elem)}`;
+  throw new Error("typeIdent: unsupported type kind");
 }
 
 // Stable key for using TopazType as a Map/Set key. Identical to typeIdent.
