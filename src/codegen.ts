@@ -1363,20 +1363,33 @@ class Emitter {
     for (const v of variants) {
       if (v.kind !== "class") return undefined;
       const name = v.name;
-      const cls = this.classes.get(name);
-      if (!cls) return undefined;
-      const field = cls.fields.get(discriminator);
-      if (!field || field.kind !== "string_literal") return undefined;
+      const clsMaybe = this.classes.get(name);
+      if (clsMaybe === undefined) return undefined;
+      const cls: ClassInfo = clsMaybe;
+      const fieldMaybe = cls.fields.get(discriminator);
+      if (fieldMaybe === undefined) return undefined;
+      if (fieldMaybe.kind !== "string_literal") return undefined;
+      const field = fieldMaybe;
       if (seenLiterals.has(field.value)) {
+        let seen = "";
+        for (const literal of seenLiterals) {
+          if (seen.length === 0) seen = literal;
+          else seen = `${seen}', '${literal}`;
+        }
         throw this.typeErr(
           anchor,
-          `discriminated union: classes '${[...seenLiterals].join("', '")}' and '${name}' both use kind=\"${field.value}\"`,
+          `discriminated union: classes '${seen}' and '${name}' both use kind=\"${field.value}\"`,
         );
       }
       seenLiterals.add(field.value);
       classNames.push(name);
+      let i = classNames.length - 1;
+      while (i > 0 && typeKeyLess(name, classNames[i - 1])) {
+        classNames[i] = classNames[i - 1];
+        i = i - 1;
+      }
+      classNames[i] = name;
     }
-    classNames.sort();
     const d: TopazType = { kind: "dunion", variants: classNames, discriminator };
     this.recordDunionMonomorph(d);
     return d;
