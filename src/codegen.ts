@@ -987,20 +987,21 @@ function mangleMonomorph(origName: string, args: Array<TopazType>): string {
 function cIdentFragment(raw: string): string {
   let out = "";
   for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i]!;
+    const code = raw.charCodeAt(i);
     if (
-      (ch >= "A" && ch <= "Z") ||
-      (ch >= "a" && ch <= "z") ||
-      (ch >= "0" && ch <= "9") ||
-      ch === "_"
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 95
     ) {
-      out += ch;
+      out += String.fromCharCode(code);
     } else {
-      out += `_${raw.charCodeAt(i).toString(16)}_`;
+      out += `_${code.toString(16)}_`;
     }
   }
   if (out.length === 0) return "_";
-  if (out[0]! >= "0" && out[0]! <= "9") return `_${out}`;
+  const first = out.charCodeAt(0);
+  if (first >= 48 && first <= 57) return `_${out}`;
   return out;
 }
 
