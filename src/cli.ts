@@ -9,7 +9,8 @@ import { computeLineStarts, LexError, tokenize, Token } from "./lexer.js";
 import { LoaderError, loadModuleGraph } from "./loader.js";
 import { ParseError, parseFile } from "./topaz_parser.js";
 
-const USAGE = `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
+function usageText(): string {
+  return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
 
 options:
   -o, --output <path>   output binary path (default: <input> with .ts stripped)
@@ -17,6 +18,7 @@ options:
   --lex-only            run only the Topaz lexer and dump tokens (skip parse/codegen/cc)
   --parse-only          run lexer + parser and dump AST as JSON (skip codegen/cc)
   -h, --help            show this help`;
+}
 
 function die(msg: string): never {
   console.error(`topaz: ${msg}`);
@@ -85,11 +87,11 @@ function main(): void {
   const parsed = parseCliOptions(process.argv);
 
   if (parsed.help) {
-    console.log(USAGE);
+    console.log(usageText());
     return;
   }
   if (parsed.input === undefined) {
-    console.error(USAGE);
+    console.error(usageText());
     process.exit(2);
   }
 
