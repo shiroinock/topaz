@@ -2662,7 +2662,7 @@ class Emitter {
     } else if (elem.kind === "boolean") {
       toStringStmt = `topaz_string __e = topaz_boolean_to_string(src->data[i]);`;
     } else {
-      throw new Error(`emitArrayJoinHelper: unsupported elem ${typeIdent(elem)}`);
+      throwInternalCodegenError(`emitArrayJoinHelper: unsupported elem ${typeIdent(elem)}`);
     }
     return [
       `static inline topaz_string topaz_array_${tag}_join(topaz_array_${tag} *src, topaz_string sep) {`,
