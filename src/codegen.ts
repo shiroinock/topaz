@@ -1915,7 +1915,7 @@ class Emitter {
     for (let i = 0; i < this.functionSigDecls.length; i++) {
       if (this.functionSigDecls[i] === decl) return this.functionSigs[i];
     }
-    throw new Error(`missing signature for function ${decl.name}`);
+    throwInternalCodegenError(`missing signature for function ${decl.name}`);
   }
 
   private resolveFunctionSig(name: string, anchor: { pos: number }): TopLevelFunctionSig | undefined {
