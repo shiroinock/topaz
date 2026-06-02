@@ -1032,8 +1032,11 @@ class AliasRecursionMarker {
 
   private markRecursive(name: string): void {
     const info = this.typeAliases.get(name);
-    if (info === undefined) throwInternalCodegenError(`markRecursiveAliases: unknown alias '${name}'`);
-    info.recursive = true;
+    if (info !== undefined) {
+      info.recursive = true;
+      return;
+    }
+    throwInternalCodegenError(`markRecursiveAliases: unknown alias '${name}'`);
   }
 
   private strongconnect(v: string): void {
