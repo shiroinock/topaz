@@ -90,12 +90,13 @@ function main(): void {
     console.log(usageText());
     return;
   }
+  const inputArg = parsed.input ?? "";
   if (parsed.input === undefined) {
     console.error(usageText());
     process.exit(2);
   }
 
-  const input = resolve(parsed.input);
+  const input = resolve(inputArg);
   if (extname(input) !== ".ts") {
     die(`expected a .ts file, got ${input}`);
   }
