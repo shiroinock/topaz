@@ -281,7 +281,9 @@ function typeEq(a: TopazType, b: TopazType): boolean {
     if (a.variants.length !== b.variants.length) return false;
     // variants are canonical-sorted by makeUnion, so positional compare.
     for (let i = 0; i < a.variants.length; i++) {
-      if (!typeEq(a.variants[i]!, b.variants[i]!)) return false;
+      const av = a.variants[i];
+      const bv = b.variants[i];
+      if (!typeEq(av, bv)) return false;
     }
     return true;
   }
@@ -292,7 +294,9 @@ function typeEq(a: TopazType, b: TopazType): boolean {
     if (b.kind !== "fn") return false;
     if (a.params.length !== b.params.length) return false;
     for (let i = 0; i < a.params.length; i++) {
-      if (!typeEq(a.params[i]!.type, b.params[i]!.type)) return false;
+      const ap = a.params[i];
+      const bp = b.params[i];
+      if (!typeEq(ap.type, bp.type)) return false;
     }
     return typeEq(a.returnType, b.returnType);
   }
