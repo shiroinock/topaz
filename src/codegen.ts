@@ -1398,20 +1398,21 @@ class Emitter {
   // Lookup the string literal value that class `cls` assigns to its
   // discriminator field. Validated at field collection (string_literal type).
   private dunionLiteralFor(unionType: TopazType, cls: string): string {
-    if (unionType.kind !== "dunion") {
-      throwInternalCodegenError("dunionLiteralFor: not a dunion");
-    }
-    const infoMaybe = this.classes.get(cls);
-    if (infoMaybe !== undefined) {
-      const info: ClassInfo = infoMaybe;
-      const fieldMaybe = info.fields.get(unionType.discriminator);
-      if (fieldMaybe !== undefined && fieldMaybe.kind === "string_literal") {
-        return fieldMaybe.value;
+    if (unionType.kind === "dunion") {
+      const discriminator = unionType.discriminator;
+      const infoMaybe = this.classes.get(cls);
+      if (infoMaybe !== undefined) {
+        const info: ClassInfo = infoMaybe;
+        const fieldMaybe = info.fields.get(discriminator);
+        if (fieldMaybe !== undefined && fieldMaybe.kind === "string_literal") {
+          return fieldMaybe.value;
+        }
+      } else {
+        throwInternalCodegenError(`dunionLiteralFor: unknown class '${cls}'`);
       }
-    } else {
-      throwInternalCodegenError(`dunionLiteralFor: unknown class '${cls}'`);
+      throwInternalCodegenError(`dunionLiteralFor: class '${cls}' has no string-literal '${discriminator}'`);
     }
-    throwInternalCodegenError(`dunionLiteralFor: class '${cls}' has no string-literal '${unionType.discriminator}'`);
+    throwInternalCodegenError("dunionLiteralFor: not a dunion");
   }
 
   // Phase 1.5-6 prep #18: a dunion field shared by every variant with one
