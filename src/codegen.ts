@@ -384,7 +384,7 @@ function elemTag(t: TopazType): string {
 
 function scalarTag(t: TopazType): string {
   if (t.kind !== "number" && t.kind !== "boolean" && t.kind !== "string") {
-    throw new Error(`scalarTag: expected scalar, got kind=${t.kind}`);
+    throwInternalCodegenError(`scalarTag: expected scalar, got kind=${t.kind}`);
   }
   return t.kind;
 }
@@ -393,17 +393,17 @@ function scalarTag(t: TopazType): string {
 // `topaz_array_<short>_push`). Each matches the substring after the container
 // prefix from the pre-1.4c-3 string union.
 function arrayShortName(t: TopazType): string {
-  if (t.kind !== "array") throw new Error(`arrayShortName: not an array, kind=${t.kind}`);
+  if (t.kind !== "array") throwInternalCodegenError(`arrayShortName: not an array, kind=${t.kind}`);
   return elemTag(t.elem);
 }
 
 function mapShortName(t: TopazType): string {
-  if (t.kind !== "map") throw new Error(`mapShortName: not a map, kind=${t.kind}`);
+  if (t.kind !== "map") throwInternalCodegenError(`mapShortName: not a map, kind=${t.kind}`);
   return `${scalarTag(t.key)}_${elemTag(t.value)}`;
 }
 
 function setShortName(t: TopazType): string {
-  if (t.kind !== "set") throw new Error(`setShortName: not a set, kind=${t.kind}`);
+  if (t.kind !== "set") throwInternalCodegenError(`setShortName: not a set, kind=${t.kind}`);
   return elemTag(t.elem);
 }
 
