@@ -321,11 +321,17 @@ function makeUnion(variants: Array<TopazType>): TopazType {
   }
   const dedup = new Map<string, TopazType>();
   for (const v of flat) dedup.set(typeKey(v), v);
-  const sorted = Array.from(dedup.values()).sort((a, b) => {
-    const ka = typeKey(a);
-    const kb = typeKey(b);
-    return ka < kb ? -1 : ka > kb ? 1 : 0;
-  });
+  const sorted: Array<TopazType> = [];
+  for (const v of dedup.values()) {
+    const key = typeKey(v);
+    sorted.push(v);
+    let i = sorted.length - 1;
+    while (i > 0 && typeKeyLess(key, typeKey(sorted[i - 1]))) {
+      sorted[i] = sorted[i - 1];
+      i = i - 1;
+    }
+    sorted[i] = v;
+  }
   if (sorted.length === 0) throw new Error("makeUnion: empty variants");
   if (sorted.length === 1) return sorted[0]!;
   return { kind: "union", variants: sorted };
@@ -440,6 +446,17 @@ function typeIdent(t: TopazType): string {
 // Stable key for using TopazType as a Map/Set key. Identical to typeIdent.
 function typeKey(t: TopazType): string {
   return typeIdent(t);
+}
+
+function typeKeyLess(a: string, b: string): boolean {
+  const limit = a.length < b.length ? a.length : b.length;
+  for (let i = 0; i < limit; i++) {
+    const ac = a.charCodeAt(i);
+    const bc = b.charCodeAt(i);
+    if (ac < bc) return true;
+    if (ac > bc) return false;
+  }
+  return a.length < b.length;
 }
 
 // Phase 1.5-3.5e: capture-analysis filter for identifiers that name compile-
