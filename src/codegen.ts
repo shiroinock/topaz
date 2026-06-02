@@ -1876,8 +1876,9 @@ class Emitter {
           if (this.canHoistModuleConst(stmt, sf) || this.canModuleGlobalVar(stmt)) {
             topLevel.push({ stmt, sf, isRoot });
           } else {
+            const stmtAnchor: { pos: number } = { pos: stmt.pos };
             throw new CodegenError(
-              stmt,
+              stmtAnchor,
               "non-root module may only contain import / class / interface / function / type alias declarations, hoistable scalar-literal `const`, or annotated module-global variables",
             );
           }
