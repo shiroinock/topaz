@@ -2060,7 +2060,7 @@ class Emitter {
         throw new CodegenError(aliasAnchor, `type alias '${name}' collides with an interface of the same name`);
       }
       if (this.typeAliases.has(name)) {
-        throw new CodegenError(alias, `redeclaration of type alias '${name}'`);
+        throw new CodegenError(aliasAnchor, `redeclaration of type alias '${name}'`);
       }
       if (alias.typeParams.length > 0) {
         throw new CodegenError(
