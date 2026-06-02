@@ -1404,8 +1404,10 @@ class Emitter {
       if (infoMaybe !== undefined) {
         const info: ClassInfo = infoMaybe;
         const fieldMaybe = info.fields.get(discriminator);
-        if (fieldMaybe !== undefined && fieldMaybe.kind === "string_literal") {
-          return fieldMaybe.value;
+        if (fieldMaybe !== undefined) {
+          if (fieldMaybe.kind === "string_literal") {
+            return fieldMaybe.value;
+          }
         }
       } else {
         throwInternalCodegenError(`dunionLiteralFor: unknown class '${cls}'`);
