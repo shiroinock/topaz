@@ -818,7 +818,7 @@ type ParamInfo = { name: string; type: TopazType; isOptional: boolean };
 
 function requiredParamCount(params: Array<ParamInfo>): number {
   let n = params.length;
-  while (n > 0 && params[n - 1]!.isOptional) n--;
+  while (n > 0 && params[n - 1].isOptional) n--;
   return n;
 }
 
