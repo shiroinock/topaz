@@ -362,10 +362,10 @@ function elemTag(t: TopazType): string {
     return typeIdent(t).slice("topaz_".length);
   }
   if (t.kind === "undefined") {
-    throw new Error("elemTag: bare undefined cannot be a container element");
+    throwInternalCodegenError("elemTag: bare undefined cannot be a container element");
   }
   if (t.kind === "union") {
-    throw new Error(`elemTag: union ${typeIdent(t)} cannot be a container element (1.5-3b)`);
+    throwInternalCodegenError(`elemTag: union ${typeIdent(t)} cannot be a container element (1.5-3b)`);
   }
   if (t.kind === "fn") {
     // Phase 1.5-3.5g-array-fn: fn elems are tagged like classes (the
@@ -377,9 +377,9 @@ function elemTag(t: TopazType): string {
     // Phase 1.5-3.5g-iterator: Iterator<T> values are single-pass and own
     // arena-allocated state — storing them in Array / Map / Set would need
     // ownership semantics we don't model. Always reject at container site.
-    throw new Error(`elemTag: iterator type ${typeIdent(t)} cannot be a container element (1.5-3.5g)`);
+    throwInternalCodegenError(`elemTag: iterator type ${typeIdent(t)} cannot be a container element (1.5-3.5g)`);
   }
-  throw new Error("elemTag: unsupported container element kind (no nested containers yet)");
+  throwInternalCodegenError("elemTag: unsupported container element kind (no nested containers yet)");
 }
 
 function scalarTag(t: TopazType): string {
