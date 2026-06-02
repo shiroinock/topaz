@@ -333,7 +333,7 @@ function makeUnion(variants: Array<TopazType>): TopazType {
     sorted[i] = v;
   }
   if (sorted.length === 0) throwInternalCodegenError("makeUnion: empty variants");
-  if (sorted.length === 1) return sorted[0]!;
+  if (sorted.length === 1) return sorted[0];
   return { kind: "union", variants: sorted };
 }
 
