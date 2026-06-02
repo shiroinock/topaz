@@ -1913,7 +1913,7 @@ class Emitter {
 
   private functionSigForDecl(decl: FunctionDecl): TopLevelFunctionSig {
     for (let i = 0; i < this.functionSigDecls.length; i++) {
-      if (this.functionSigDecls[i] === decl) return this.functionSigs[i]!;
+      if (this.functionSigDecls[i] === decl) return this.functionSigs[i];
     }
     throw new Error(`missing signature for function ${decl.name}`);
   }
