@@ -1932,7 +1932,7 @@ class Emitter {
       }
       if (local.length === 1) return local[0];
     }
-    if (matches.length === 1) return matches[0]!;
+    if (matches.length === 1) return matches[0];
     throw new CodegenError(
       anchor,
       `ambiguous top-level function '${name}' across modules; declare a local wrapper or use a unique imported function name`,
