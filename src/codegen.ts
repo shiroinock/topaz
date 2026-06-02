@@ -2114,8 +2114,11 @@ class Emitter {
       const sf = fnEntry.sf;
       this.withSfVoid(sf, () => {
       const fname = fn.name;
+      const existingSig = this.functionSigInModule(fname, sf);
       const existingGeneric = this.genericFunctions.get(fname);
-      if (this.functionSigInModule(fname, sf) || (existingGeneric && existingGeneric.sf === sf)) {
+      const hasExistingSig = existingSig !== undefined;
+      const hasExistingGeneric = existingGeneric !== undefined && existingGeneric.sf === sf;
+      if (hasExistingSig || hasExistingGeneric) {
         throw new CodegenError(fn, `redeclaration of function '${fname}'`);
       }
       if (fn.typeParams.length > 0) {
