@@ -1427,14 +1427,19 @@ class Emitter {
     field: string,
   ): TopazType | undefined {
     if (field === t.discriminator) return undefined;
-    let result: TopazType | undefined;
+    let result: TopazType | undefined = undefined;
     for (const cname of t.variants) {
-      const cls = this.classes.get(cname);
-      if (!cls) return undefined;
-      const ft = cls.fields.get(field);
-      if (!ft) return undefined;
+      const clsMaybe = this.classes.get(cname);
+      if (clsMaybe === undefined) return undefined;
+      const cls: ClassInfo = clsMaybe;
+      const ftMaybe = cls.fields.get(field);
+      if (ftMaybe === undefined) return undefined;
+      const ft: TopazType = ftMaybe;
       if (result === undefined) result = ft;
-      else if (!typeEq(result, ft)) return undefined;
+      else {
+        const current: TopazType = result;
+        if (!typeEq(current, ft)) return undefined;
+      }
     }
     return result;
   }
