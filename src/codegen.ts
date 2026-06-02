@@ -1427,7 +1427,8 @@ class Emitter {
     field: string,
   ): TopazType | undefined {
     if (field === t.discriminator) return undefined;
-    let result: TopazType | undefined = undefined;
+    let hasResult = false;
+    let result: TopazType = T_UNDEFINED;
     for (const cname of t.variants) {
       const clsMaybe = this.classes.get(cname);
       if (clsMaybe === undefined) return undefined;
@@ -1435,13 +1436,15 @@ class Emitter {
       const ftMaybe = cls.fields.get(field);
       if (ftMaybe === undefined) return undefined;
       const ft: TopazType = ftMaybe;
-      if (result === undefined) result = ft;
-      else {
-        const current: TopazType = result;
-        if (!typeEq(current, ft)) return undefined;
+      if (!hasResult) {
+        result = ft;
+        hasResult = true;
+      } else {
+        if (!typeEq(result, ft)) return undefined;
       }
     }
-    return result;
+    if (hasResult) return result;
+    return undefined;
   }
 
   // Phase 1.5-6 prep #18: read a common field off a dunion value. The fat
