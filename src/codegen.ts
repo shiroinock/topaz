@@ -1784,14 +1784,32 @@ class Emitter {
         if (m.isOptional) optionalFields.add(fname);
         fields.set(fname, fty);
       }
-      const sorted = [...fields.keys()].sort();
+      const sorted: Array<string> = [];
+      for (const f of fields.keys()) {
+        sorted.push(f);
+        let i = sorted.length - 1;
+        while (i > 0 && typeKeyLess(f, sorted[i - 1])) {
+          sorted[i] = sorted[i - 1];
+          i = i - 1;
+        }
+        sorted[i] = f;
+      }
       const fieldsOrdered = new Map<string, TopazType>();
-      for (const f of sorted) fieldsOrdered.set(f, fields.get(f)!);
-      const params: ParamInfo[] = sorted.map((f) => ({
-        name: f,
-        type: fields.get(f)!,
-        isOptional: optionalFields.has(f),
-      }));
+      const params: ParamInfo[] = [];
+      for (const f of sorted) {
+        const fieldTypeMaybe = fields.get(f);
+        if (fieldTypeMaybe !== undefined) {
+          const fieldType: TopazType = fieldTypeMaybe;
+          fieldsOrdered.set(f, fieldType);
+          params.push({
+            name: f,
+            type: fieldType,
+            isOptional: optionalFields.has(f),
+          });
+        } else {
+          throwInternalCodegenError("fillPreAllocatedAnonFields: missing field type");
+        }
+      }
       cls.fields = fieldsOrdered;
       cls.fieldOrder = sorted;
       cls.optionalFields = new Set(optionalFields);
