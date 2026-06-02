@@ -615,7 +615,7 @@ function zeroValueOfElem(elem: TopazType): string {
   if (elem.kind === "string") return `(topaz_string){ "", 0 }`;
   if (isClassType(elem)) return `(${cTypeName(elem)})NULL`;
   if (isInterfaceType(elem)) return `(${cTypeName(elem)}){ NULL, NULL }`;
-  throw new Error(`zeroValueOfElem: unsupported ${typeIdent(elem)}`);
+  throwInternalCodegenError(`zeroValueOfElem: unsupported ${typeIdent(elem)}`);
 }
 
 type Binding = { type: TopazType; isConst: boolean };
