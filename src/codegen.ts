@@ -1708,9 +1708,10 @@ class Emitter {
   private preAllocateRecursiveAnons(): void {
     for (const info of this.typeAliases.values()) {
       if (!info.recursive) continue;
-      this.preAllocateRecursiveAnonVisit(info.body, info.sf);
-      if (info.body.kind === "type_literal") {
-        const entry = this.findPreAllocatedAnon(info.body, info.sf);
+      const body = info.body;
+      this.preAllocateRecursiveAnonVisit(body, info.sf);
+      if (body.kind === "type_literal") {
+        const entry = this.findPreAllocatedAnon(body, info.sf);
         if (entry !== undefined) {
           info.resolved = classOf(entry.anonName);
         } else {
