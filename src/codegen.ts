@@ -9080,7 +9080,7 @@ class Emitter {
     unsupported(expr, "expression");
   }
 
-  private checkAssignTarget(target: Expr, anchor: Expr | { pos: number }): void {
+  private checkAssignTarget(target: Expr, anchor: { pos: number }): void {
     if (target.kind === "ident") {
       const b = this.scope.lookup(target.name);
       if (!b) {
