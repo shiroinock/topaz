@@ -2049,8 +2049,9 @@ class Emitter {
       const sf = aliasEntry.sf;
       this.withSfVoid(sf, () => {
       const name = alias.name;
+      const aliasAnchor: { pos: number } = { pos: alias.pos };
       if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
-        throw new CodegenError(alias, `cannot redefine built-in '${name}'`);
+        throw new CodegenError(aliasAnchor, `cannot redefine built-in '${name}'`);
       }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
         throw new CodegenError(alias, `type alias '${name}' collides with a class of the same name`);
