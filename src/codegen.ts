@@ -1890,7 +1890,7 @@ class Emitter {
 
   private moduleId(sf: SourceModule): string {
     for (let i = 0; i < this.moduleIdModules.length; i++) {
-      if (this.moduleIdModules[i] === sf) return this.moduleIdValues[i]!;
+      if (this.moduleIdModules[i] === sf) return this.moduleIdValues[i];
     }
     throw new Error(`missing module id for ${sf.filePath}`);
   }
