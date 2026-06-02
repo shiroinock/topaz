@@ -552,7 +552,7 @@ function cTypeName(t: TopazType): string {
     if (nonUndef.length !== 1) {
       throwInternalCodegenError(`cTypeName: union ${typeIdent(t)} is not \`T | undefined\` (1.5-3b only supports T | undefined)`);
     }
-    const inner = nonUndef[0]!;
+    const inner = nonUndef[0];
     if (isScalarType(inner)) {
       return `topaz_opt_${inner.kind}`;
     }
