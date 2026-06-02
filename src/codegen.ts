@@ -1260,6 +1260,10 @@ class Emitter {
         throwInternalCodegenError("recordAnonClass: missing field type");
       }
     }
+    const optionalFieldsCopy = new Set<string>();
+    for (const f of optionalFields) {
+      optionalFieldsCopy.add(f);
+    }
     const info: ClassInfo = {
       name: mangled,
       fields: fieldsOrdered,
@@ -1268,7 +1272,7 @@ class Emitter {
       ctor: { params, decl: undefined },
       methods: new Map(),
       implements: [],
-      optionalFields: new Set(optionalFields),
+      optionalFields: optionalFieldsCopy,
       decl: anchor,
       // Anon classes carry no user ctor / method body, so `sf` is only a best-
       // effort anchor; the ambient type-resolution SourceFile is the closest fit.
