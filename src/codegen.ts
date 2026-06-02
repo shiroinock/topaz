@@ -1943,7 +1943,8 @@ class Emitter {
     if (sourceFiles.length === 0) {
       throwInternalCodegenError("codegen: at least one source file is required");
     }
-    this.moduleIdModules = [];
+    const emptyModuleIds: Array<SourceModule> = [];
+    this.moduleIdModules = emptyModuleIds;
     this.moduleIdValues = [];
     for (let i = 0; i < sourceFiles.length; i++) {
       this.moduleIdModules.push(sourceFiles[i]!);
