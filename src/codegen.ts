@@ -1930,7 +1930,7 @@ class Emitter {
       if (local.length > 1) {
         throw new CodegenError(anchor, `redeclaration of function '${name}'`);
       }
-      if (local.length === 1) return local[0]!;
+      if (local.length === 1) return local[0];
     }
     if (matches.length === 1) return matches[0]!;
     throw new CodegenError(
