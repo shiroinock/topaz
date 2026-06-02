@@ -1463,7 +1463,7 @@ class Emitter {
     const data = `(${this.emitExpression(expr.receiver)}).data`;
     let chain = "";
     for (let i = 0; i < t.variants.length; i++) {
-      const cname = t.variants[i]!;
+      const cname = t.variants[i];
       const read = `((topaz_class_${cname} *)${tmp})->${field}`;
       if (i === t.variants.length - 1) {
         chain += read;
