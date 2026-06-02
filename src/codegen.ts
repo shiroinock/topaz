@@ -1945,7 +1945,8 @@ class Emitter {
     }
     const emptyModuleIds: Array<SourceModule> = [];
     this.moduleIdModules = emptyModuleIds;
-    this.moduleIdValues = [];
+    const emptyModuleIdValues: Array<string> = [];
+    this.moduleIdValues = emptyModuleIdValues;
     for (let i = 0; i < sourceFiles.length; i++) {
       this.moduleIdModules.push(sourceFiles[i]!);
       this.moduleIdValues.push(`m${i}`);
