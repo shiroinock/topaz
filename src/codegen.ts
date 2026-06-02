@@ -984,6 +984,29 @@ function mangleMonomorph(origName: string, args: Array<TopazType>): string {
   return `${origName}__${args.map(mangleTypeArg).join("__")}`;
 }
 
+function lowerHexDigit(n: number): string {
+  if (n < 10) return String.fromCharCode(48 + n);
+  return String.fromCharCode(87 + n);
+}
+
+function lowerHexNumber(n: number): string {
+  if (n === 0) return "0";
+  let value = n;
+  let out = "";
+  while (value > 0) {
+    const digit = value % 16;
+    out = `${lowerHexDigit(digit)}${out}`;
+    value = (value - digit) / 16;
+  }
+  return out;
+}
+
+function lowerHexByte2(n: number): string {
+  const lo = n % 16;
+  const hi = (n - lo) / 16;
+  return `${lowerHexDigit(hi)}${lowerHexDigit(lo)}`;
+}
+
 function cIdentFragment(raw: string): string {
   let out = "";
   for (let i = 0; i < raw.length; i++) {
@@ -996,7 +1019,7 @@ function cIdentFragment(raw: string): string {
     ) {
       out += String.fromCharCode(code);
     } else {
-      out += `_${code.toString(16)}_`;
+      out += `_${lowerHexNumber(code)}_`;
     }
   }
   if (out.length === 0) return "_";
@@ -6707,7 +6730,7 @@ class Emitter {
       else if (c === 0x09) escaped += "\\t";
       else if (c === 0x00) escaped += "\\0";
       else if (c < 0x20 || c === 0x7f) {
-        escaped += `\\x${c.toString(16).padStart(2, "0")}`;
+        escaped += `\\x${lowerHexByte2(c)}`;
       } else {
         escaped += String.fromCharCode(c);
       }
@@ -9680,7 +9703,7 @@ class Emitter {
     for (let i = 0; i < value.length; i++) {
       const c = value.charCodeAt(i);
       if (c >= 0x80) {
-        throw new Error(`encodeStringLiteralCompound: non-ASCII byte in '${value}'`);
+        throwInternalCodegenError(`encodeStringLiteralCompound: non-ASCII byte in '${value}'`);
       }
       if (c === 0x22) escaped += '\\"';
       else if (c === 0x5c) escaped += "\\\\";
@@ -9689,7 +9712,7 @@ class Emitter {
       else if (c === 0x09) escaped += "\\t";
       else if (c === 0x00) escaped += "\\0";
       else if (c < 0x20 || c === 0x7f) {
-        escaped += `\\x${c.toString(16).padStart(2, "0")}`;
+        escaped += `\\x${lowerHexByte2(c)}`;
       } else {
         escaped += String.fromCharCode(c);
       }
