@@ -1216,21 +1216,42 @@ class Emitter {
     // `{ a?: number }` are *not* deduped to the same anon class (the latter has
     // `a: number | undefined`, so field type already differs — but make it
     // explicit so future field-type changes can't accidentally collapse them).
-    const sorted = [...fields.keys()].sort();
-    const key = sorted
-      .map((f) => `${f}${optionalFields.has(f) ? "?" : ""}:${typeIdent(fields.get(f)!)}`)
-      .join(",");
+    const sorted: Array<string> = [];
+    for (const f of fields.keys()) {
+      sorted.push(f);
+      let i = sorted.length - 1;
+      while (i > 0 && typeKeyLess(f, sorted[i - 1])) {
+        sorted[i] = sorted[i - 1];
+        i = i - 1;
+      }
+      sorted[i] = f;
+    }
+    let key = "";
+    for (let i = 0; i < sorted.length; i++) {
+      const f = sorted[i];
+      const fieldType = fields.get(f);
+      if (fieldType === undefined) throwInternalCodegenError("recordAnonClass: missing field type");
+      const opt = optionalFields.has(f) ? "?" : "";
+      const part = `${f}${opt}:${typeIdent(fieldType)}`;
+      if (i === 0) key = part;
+      else key = `${key},${part}`;
+    }
     const existing = this.anonClassByKey.get(key);
-    if (existing) return existing;
+    if (existing !== undefined) return existing;
     const mangled = `anon_${this.anonClassCounter++}`;
     this.anonClassByKey.set(key, mangled);
-    const params: ParamInfo[] = sorted.map((f) => ({
-      name: f,
-      type: fields.get(f)!,
-      isOptional: optionalFields.has(f),
-    }));
+    const params: ParamInfo[] = [];
     const fieldsOrdered = new Map<string, TopazType>();
-    for (const f of sorted) fieldsOrdered.set(f, fields.get(f)!);
+    for (const f of sorted) {
+      const fieldType = fields.get(f);
+      if (fieldType === undefined) throwInternalCodegenError("recordAnonClass: missing field type");
+      params.push({
+        name: f,
+        type: fieldType,
+        isOptional: optionalFields.has(f),
+      });
+      fieldsOrdered.set(f, fieldType);
+    }
     const info: ClassInfo = {
       name: mangled,
       fields: fieldsOrdered,
