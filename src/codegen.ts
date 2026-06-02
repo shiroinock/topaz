@@ -2114,19 +2114,20 @@ class Emitter {
       const sf = fnEntry.sf;
       this.withSfVoid(sf, () => {
       const fname = fn.name;
+      const fnAnchor: { pos: number } = { pos: fn.pos };
       const existingSig = this.functionSigInModule(fname, sf);
       const existingGeneric = this.genericFunctions.get(fname);
       const hasExistingSig = existingSig !== undefined;
       const hasExistingGeneric = existingGeneric !== undefined && existingGeneric.sf === sf;
       if (hasExistingSig || hasExistingGeneric) {
-        throw new CodegenError(fn, `redeclaration of function '${fname}'`);
+        throw new CodegenError(fnAnchor, `redeclaration of function '${fname}'`);
       }
       if (fn.typeParams.length > 0) {
         // Generic function: defer signature resolution until call sites
         // supply concrete type arguments. Constraint / default rejection
         // already happened in convert; only the duplicate-name check remains.
         if (this.genericFunctions.has(fname)) {
-          throw new CodegenError(fn, `redeclaration of function '${fname}'`);
+          throw new CodegenError(fnAnchor, `redeclaration of function '${fname}'`);
         }
         const typeParams: string[] = [];
         for (const tp of fn.typeParams) {
