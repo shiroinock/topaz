@@ -204,10 +204,10 @@ function formatSourceError(file: string, pos: number, message: string): string {
   const lineStarts = computeLineStarts(source);
   let lineIndex = 0;
   for (let i = 0; i < lineStarts.length; i++) {
-    if (lineStarts[i]! > pos) break;
+    if (lineStarts[i] > pos) break;
     lineIndex = i;
   }
-  return `${file}:${lineIndex + 1}:${pos - lineStarts[lineIndex]! + 1}: ${message}`;
+  return `${file}:${lineIndex + 1}:${pos - lineStarts[lineIndex] + 1}: ${message}`;
 }
 
 try {
