@@ -2026,7 +2026,7 @@ class Emitter {
         throw new CodegenError(ifaceAnchor, `interface '${name}' collides with a class of the same name`);
       }
       if (this.interfaces.has(name)) {
-        throw new CodegenError(iface, `redeclaration of interface '${name}'`);
+        throw new CodegenError(ifaceAnchor, `redeclaration of interface '${name}'`);
       }
       this.interfaces.set(name, {
         name,
