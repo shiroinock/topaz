@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CodegenError, codegen } from "./codegen.js";
 import { computeLineStarts, LexError, tokenize, Token } from "./lexer.js";
 import { LoaderError, loadModuleGraph } from "./loader.js";
-import { ParseError, parseFile } from "./topaz_parser.js";
+import { ParseError } from "./topaz_parser.js";
 
 function usageText(): string {
   return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
@@ -111,8 +111,7 @@ function main(): void {
   }
 
   if (parsed.parseOnly) {
-    const mod = parseFile(input);
-    process.stdout.write(JSON.stringify(mod, null, 2) + "\n");
+    die("--parse-only JSON dump is unsupported in the self-host subset");
     return;
   }
 
@@ -147,19 +146,19 @@ function main(): void {
 function formatToken(t: Token): string {
   switch (t.kind) {
     case "ident":
-      return `ident ${t.pos}-${t.end} ${JSON.stringify(t.text)}`;
+      return `ident ${t.pos}-${t.end} ${dumpQuote(t.text)}`;
     case "number":
-      return `number ${t.pos}-${t.end} ${JSON.stringify(t.text)}`;
+      return `number ${t.pos}-${t.end} ${dumpQuote(t.text)}`;
     case "string":
-      return `string ${t.pos}-${t.end} ${JSON.stringify(t.value)}`;
+      return `string ${t.pos}-${t.end} ${dumpQuote(t.value)}`;
     case "template_head":
-      return `template_head ${t.pos}-${t.end} ${JSON.stringify(t.value)}`;
+      return `template_head ${t.pos}-${t.end} ${dumpQuote(t.value)}`;
     case "template_middle":
-      return `template_middle ${t.pos}-${t.end} ${JSON.stringify(t.value)}`;
+      return `template_middle ${t.pos}-${t.end} ${dumpQuote(t.value)}`;
     case "template_tail":
-      return `template_tail ${t.pos}-${t.end} ${JSON.stringify(t.value)}`;
+      return `template_tail ${t.pos}-${t.end} ${dumpQuote(t.value)}`;
     case "template_full":
-      return `template_full ${t.pos}-${t.end} ${JSON.stringify(t.value)}`;
+      return `template_full ${t.pos}-${t.end} ${dumpQuote(t.value)}`;
     case "punct":
       return `punct ${t.pos}-${t.end} ${t.op}`;
     case "keyword":
@@ -169,6 +168,33 @@ function formatToken(t: Token): string {
     case "eof":
       return `eof ${t.pos}`;
   }
+}
+
+function lowerHexDigit(n: number): string {
+  if (n < 10) return String.fromCharCode(48 + n);
+  return String.fromCharCode(87 + n);
+}
+
+function lowerHexByte2(n: number): string {
+  const lo = n % 16;
+  const hi = (n - lo) / 16;
+  return `${lowerHexDigit(hi)}${lowerHexDigit(lo)}`;
+}
+
+function dumpQuote(value: string): string {
+  let out = "\"";
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c === 0x22) out += "\\\"";
+    else if (c === 0x5c) out += "\\\\";
+    else if (c === 0x0a) out += "\\n";
+    else if (c === 0x0d) out += "\\r";
+    else if (c === 0x09) out += "\\t";
+    else if (c < 0x20 || c === 0x7f) out += `\\u00${lowerHexByte2(c)}`;
+    else out += String.fromCharCode(c);
+  }
+  out += "\"";
+  return out;
 }
 
 function formatSourceError(file: string, pos: number, message: string): string {
