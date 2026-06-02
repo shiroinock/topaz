@@ -2563,7 +2563,8 @@ class Emitter {
         const key = typeKey(elem);
         if (setElemKeys.has(key)) continue;
         setElemKeys.add(key);
-        helperLines.push(...this.emitSetElemHelpers(elem));
+        const elemHelpers = this.emitSetElemHelpers(elem);
+        for (const line of elemHelpers) helperLines.push(line);
       }
       if (helperLines.length > 0) sections.push(helperLines.join("\n"));
 
