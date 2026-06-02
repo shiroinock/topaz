@@ -2455,14 +2455,11 @@ class Emitter {
         // for the duration of body emission.
         const prevScope = this.typeParamScope;
         this.typeParamScope = mono.subs;
-        try {
-          for (const def of this.emitClassMemberDefinitions(info)) {
-            classMonoDefLines.push(def);
-            classMonoDefLines.push("");
-          }
-        } finally {
-          this.typeParamScope = prevScope;
+        for (const def of this.emitClassMemberDefinitions(info)) {
+          classMonoDefLines.push(def);
+          classMonoDefLines.push("");
         }
+        this.typeParamScope = prevScope;
       }
       while (this.genericWorklist.length > 0) {
         const last = this.genericWorklist.length - 1;
