@@ -1990,7 +1990,7 @@ class Emitter {
         }
         if (cls.implementsList.length > 0) {
           throw new CodegenError(
-            cls,
+            clsAnchor,
             "generic classes cannot implement interfaces (Phase 1.4c-3)",
           );
         }
