@@ -139,7 +139,10 @@ function interfaceOf(name: string): TopazType {
 function isReferenceType(t: TopazType): boolean {
   if (t.kind === "union") {
     const nonUndef = t.variants.filter((v) => v.kind !== "undefined");
-    if (nonUndef.length === 1) return isReferenceType(nonUndef[0]!);
+    if (nonUndef.length === 1) {
+      const inner = nonUndef[0];
+      return isReferenceType(inner);
+    }
     return false;
   }
   return isArrayType(t) || isMapType(t) || isSetType(t) || isClassType(t);
