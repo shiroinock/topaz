@@ -1763,7 +1763,6 @@ class Emitter {
       const sf = entry.sf;
       const savedSf = this.currentTypeModule;
       this.currentTypeModule = sf;
-      try {
       if (literalNode.members.length === 0) {
         throw this.typeErr(literalNode, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
       }
@@ -1795,9 +1794,7 @@ class Emitter {
       cls.fieldOrder = sorted;
       cls.optionalFields = new Set(optionalFields);
       cls.ctor = { params, decl: undefined };
-      } finally {
-        this.currentTypeModule = savedSf;
-      }
+      this.currentTypeModule = savedSf;
     }
   }
 
