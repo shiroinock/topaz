@@ -1812,7 +1812,7 @@ class Emitter {
       }
       cls.fields = fieldsOrdered;
       cls.fieldOrder = sorted;
-      cls.optionalFields = new Set(optionalFields);
+      cls.optionalFields = optionalFields;
       cls.ctor = { params, decl: undefined };
       this.currentTypeModule = savedSf;
     }
