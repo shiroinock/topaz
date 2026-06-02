@@ -685,7 +685,7 @@ function throwInternalCodegenError(message: string): never {
 }
 
 function unsupported(node: { kind: string; pos: number }, what: string): never {
-  throw new CodegenError(node, `unsupported ${what} (${node.kind})`);
+  throw new CodegenError({ pos: node.pos }, `unsupported ${what} (${node.kind})`);
 }
 
 class Scope {
