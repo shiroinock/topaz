@@ -332,7 +332,7 @@ function makeUnion(variants: Array<TopazType>): TopazType {
     }
     sorted[i] = v;
   }
-  if (sorted.length === 0) throw new Error("makeUnion: empty variants");
+  if (sorted.length === 0) throwInternalCodegenError("makeUnion: empty variants");
   if (sorted.length === 1) return sorted[0]!;
   return { kind: "union", variants: sorted };
 }
@@ -658,6 +658,10 @@ class FormattedCodegenError {
     err.message = formatted;
     this.value = err;
   }
+}
+
+function throwInternalCodegenError(message: string): never {
+  throw new FormattedCodegenError(message).value;
 }
 
 function unsupported(node: { kind: string; pos: number }, what: string): never {
