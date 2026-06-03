@@ -4783,8 +4783,9 @@ class Emitter {
     callee: IdentExpr,
     expr: CallExpr,
   ): { mangled: string; sig: FunctionSig } | undefined {
-    const generic = this.genericFunctions.get(callee.name);
-    if (!generic) return undefined;
+    const genericMaybe = this.genericFunctions.get(callee.name);
+    if (genericMaybe === undefined) return undefined;
+    const generic: GenericFunctionInfo = genericMaybe;
 
     const subs = new Map<string, TopazType>();
 
@@ -4835,7 +4836,7 @@ class Emitter {
     const mangled = mangleMonomorph(generic.name, typeArgs);
 
     const existing = this.genericMonomorphs.get(mangled);
-    if (existing) {
+    if (existing !== undefined) {
       return { mangled, sig: existing.sig };
     }
 
@@ -4880,7 +4881,11 @@ class Emitter {
     anchor: { pos: number },
     sf: SourceModule,
   ): TopazType {
-    const generic = this.genericClasses.get(refName)!;
+    const genericMaybe = this.genericClasses.get(refName);
+    if (genericMaybe === undefined) {
+      throw new CodegenError(anchor, `internal error: missing generic class '${refName}'`);
+    }
+    const generic: GenericClassInfo = genericMaybe;
     if (!typeArgNodes || typeArgNodes.length !== generic.typeParams.length) {
       throw this.typeErr(
         anchor,
@@ -5006,8 +5011,10 @@ class Emitter {
       if (this.genericClasses.has(refName) && typeArgs.length > 0) {
         if (!isClassType(argType)) return;
         const argClassName = classNameOf(argType)!;
-        const argMono = this.classMonomorphs.get(argClassName);
-        if (!argMono || argMono.origName !== refName) return;
+        const argMonoMaybe = this.classMonomorphs.get(argClassName);
+        if (argMonoMaybe === undefined) return;
+        const argMono: ClassMonomorphInfo = argMonoMaybe;
+        if (argMono.origName !== refName) return;
         if (argMono.typeArgs.length !== typeArgs.length) return;
         for (let i = 0; i < typeArgs.length; i++) {
           this.unifyTypeParam(typeArgs[i]!, argMono.typeArgs[i]!, params, subs, anchor);
