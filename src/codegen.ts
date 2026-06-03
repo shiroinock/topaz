@@ -5870,17 +5870,34 @@ class Emitter {
   }
 
   private emitModuleGlobalInit(stmt: Stmt, sf: SourceModule, indent: number): string {
-    return this.withSfString(sf, () => {
-      if (stmt.kind !== "var_decl" || stmt.init === undefined) {
+    const savedG = g_currentModule;
+    const savedT = this.currentTypeModule;
+    g_currentModule = sf;
+    this.currentTypeModule = sf;
+    switch (stmt.kind) {
+      case "var_decl":
+        const d = stmt;
+        const initMaybe = d.init;
+        if (initMaybe !== undefined) {
+          const init = initMaybe;
+          const varTypeMaybe = this.moduleGlobalTypes.get(d.name);
+          if (varTypeMaybe !== undefined) {
+            const varType = varTypeMaybe;
+            const pad = "  ".repeat(indent);
+            const out = `${pad}${d.name} = ${this.emitWithExpected(init, varType)};`;
+            g_currentModule = savedG;
+            this.currentTypeModule = savedT;
+            return out;
+          }
+          throwInternalCodegenError("emitModuleGlobalInit: missing module global type");
+          return "";
+        }
         throwInternalCodegenError("emitModuleGlobalInit: expected initialized var_decl");
-      }
-      const varType = this.moduleGlobalTypes.get(stmt.name);
-      if (varType === undefined) {
-        throwInternalCodegenError("emitModuleGlobalInit: missing module global type");
-      }
-      const pad = "  ".repeat(indent);
-      return `${pad}${stmt.name} = ${this.emitWithExpected(stmt.init, varType)};`;
-    });
+        return "";
+      default:
+        throwInternalCodegenError("emitModuleGlobalInit: expected initialized var_decl");
+        return "";
+    }
   }
 
   // Phase 1.5-6 prep #9: recognize the set of initializers that are
@@ -6114,50 +6131,50 @@ class Emitter {
   private emitForStatement(stmt: ForStmt, indent: number): string {
     const pad = "  ".repeat(indent);
     this.scope.push();
-    try {
-      let initStr = "";
-      if (stmt.init) {
-        if (stmt.init.kind === "for_init_decl") {
-          // `for_init_decl.decl` is a single `var_decl`; convert already split
-          // out / rejected destructuring and multi-decl for-init.
-          const d = stmt.init.decl;
-          const declaredVar = this.declareVar(d, d.declKind === "const");
-          initStr = `${cTypeName(declaredVar.type)} ${declaredVar.cName}${declaredVar.initStr}`;
-        } else {
-          initStr = this.emitExpression(stmt.init.expr);
-        }
+    let initStr = "";
+    const initMaybe = stmt.init;
+    if (initMaybe !== undefined) {
+      if (initMaybe.kind === "for_init_decl") {
+        // `for_init_decl.decl` is a single `var_decl`; convert already split
+        // out / rejected destructuring and multi-decl for-init.
+        const d = initMaybe.decl;
+        const declaredVar = this.declareVar(d, d.declKind === "const");
+        initStr = `${cTypeName(declaredVar.type)} ${declaredVar.cName}${declaredVar.initStr}`;
+      } else {
+        initStr = this.emitExpression(initMaybe.expr);
       }
-      // A missing condition (`for (;;)`) is an infinite loop — C accepts an
-      // empty middle clause natively, so emit it verbatim (the body is expected
-      // to `break` / `return` / `throw` out). init / incrementor are already
-      // optional above (initStr / incrStr stay empty when omitted).
-      let condStr = "";
-      if (stmt.cond) {
-        this.expectType(stmt.cond, T_BOOLEAN);
-        condStr = this.emitExpression(stmt.cond);
-      }
-      const incrStr = stmt.update ? this.emitExpression(stmt.update) : "";
-
-      this.pushLoopCtx("loop");
-      let bodyStr: string;
-      try {
-        if (stmt.body.kind === "block_stmt") {
-          this.scope.push();
-          bodyStr = this.emitBlock(stmt.body, indent);
-          this.scope.pop();
-        } else {
-          this.scope.push();
-          const inner = this.emitStatement(stmt.body, indent + 1);
-          this.scope.pop();
-          bodyStr = `${pad}{\n${inner}\n${pad}}`;
-        }
-      } finally {
-        this.popLoopCtx();
-      }
-      return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}`;
-    } finally {
-      this.scope.pop();
     }
+    // A missing condition (`for (;;)`) is an infinite loop — C accepts an
+    // empty middle clause natively, so emit it verbatim (the body is expected
+    // to `break` / `return` / `throw` out). init / incrementor are already
+    // optional above (initStr / incrStr stay empty when omitted).
+    let condStr = "";
+    const condMaybe = stmt.cond;
+    if (condMaybe !== undefined) {
+      this.expectType(condMaybe, T_BOOLEAN);
+      condStr = this.emitExpression(condMaybe);
+    }
+    let incrStr = "";
+    const updateMaybe = stmt.update;
+    if (updateMaybe !== undefined) {
+      incrStr = this.emitExpression(updateMaybe);
+    }
+
+    this.pushLoopCtx("loop");
+    let bodyStr = "";
+    if (stmt.body.kind === "block_stmt") {
+      this.scope.push();
+      bodyStr = this.emitBlock(stmt.body, indent);
+      this.scope.pop();
+    } else {
+      this.scope.push();
+      const inner = this.emitStatement(stmt.body, indent + 1);
+      this.scope.pop();
+      bodyStr = `${pad}{\n${inner}\n${pad}}`;
+    }
+    this.popLoopCtx();
+    this.scope.pop();
+    return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}`;
   }
 
   // Phase 1.5-3.5b: for-of over Array<T>. Lower to an index-based C for-loop
