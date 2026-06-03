@@ -7359,28 +7359,24 @@ class Emitter {
     n: { name: string; type: TopazType } | undefined,
     fn: () => string,
   ): string {
-    if (!n) return fn();
+    if (n === undefined) return fn();
     this.scope.push();
-    try {
-      this.scope.narrow(n.name, n.type);
-      return fn();
-    } finally {
-      this.scope.pop();
-    }
+    this.scope.narrow(n.name, n.type);
+    const result = fn();
+    this.scope.pop();
+    return result;
   }
 
   private underNarrowingType(
     n: { name: string; type: TopazType } | undefined,
     fn: () => TopazType,
   ): TopazType {
-    if (!n) return fn();
+    if (n === undefined) return fn();
     this.scope.push();
-    try {
-      this.scope.narrow(n.name, n.type);
-      return fn();
-    } finally {
-      this.scope.pop();
-    }
+    this.scope.narrow(n.name, n.type);
+    const result = fn();
+    this.scope.pop();
+    return result;
   }
 
   // Phase 1.5-6 prep #25: conditional (ternary) `cond ? a : b`. The condition
