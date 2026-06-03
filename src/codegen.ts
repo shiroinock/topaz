@@ -5111,14 +5111,27 @@ class Emitter {
   private applyCarryNarrowing(stmt: Stmt): void {
     if (stmt.kind !== "if_stmt") return;
     const thenExits = this.alwaysExits(stmt.thenBranch);
-    const elseExits = stmt.elseBranch ? this.alwaysExits(stmt.elseBranch) : false;
-    let carryPolarity: boolean | undefined;
-    if (thenExits && !stmt.elseBranch) carryPolarity = false;
-    else if (thenExits && !elseExits) carryPolarity = false;
-    else if (!thenExits && elseExits) carryPolarity = true;
-    else return;
-    const n = this.extractNarrowing(stmt.cond, carryPolarity);
-    if (n) this.scope.narrow(n.name, n.type);
+    const elseBranchMaybe = stmt.elseBranch;
+    let elseExits = false;
+    if (elseBranchMaybe !== undefined) {
+      elseExits = this.alwaysExits(elseBranchMaybe);
+    }
+    const hasElseBranch = elseBranchMaybe !== undefined;
+    if (thenExits && !hasElseBranch) {
+      const n = this.extractNarrowing(stmt.cond, false);
+      if (n !== undefined) this.scope.narrow(n.name, n.type);
+      return;
+    }
+    if (thenExits && !elseExits) {
+      const n = this.extractNarrowing(stmt.cond, false);
+      if (n !== undefined) this.scope.narrow(n.name, n.type);
+      return;
+    }
+    if (!thenExits && elseExits) {
+      const n = this.extractNarrowing(stmt.cond, true);
+      if (n !== undefined) this.scope.narrow(n.name, n.type);
+      return;
+    }
   }
 
   // Phase 1.5-3d: conservative "this statement always exits the enclosing
@@ -5131,10 +5144,18 @@ class Emitter {
     if (stmt.kind === "continue_stmt") return true;
     if (stmt.kind === "block_stmt") {
       if (stmt.stmts.length === 0) return false;
-      return this.alwaysExits(stmt.stmts[stmt.stmts.length - 1]!);
+      const lastIndex = stmt.stmts.length - 1;
+      const lastStmt: Stmt | undefined = stmt.stmts[lastIndex];
+      if (lastStmt !== undefined) {
+        return this.alwaysExits(lastStmt);
+      }
+      throwInternalCodegenError("alwaysExits: missing last block statement");
     }
-    if (stmt.kind === "if_stmt" && stmt.elseBranch) {
-      return this.alwaysExits(stmt.thenBranch) && this.alwaysExits(stmt.elseBranch);
+    if (stmt.kind === "if_stmt") {
+      const elseBranchMaybe = stmt.elseBranch;
+      if (elseBranchMaybe !== undefined) {
+        return this.alwaysExits(stmt.thenBranch) && this.alwaysExits(elseBranchMaybe);
+      }
     }
     return false;
   }
