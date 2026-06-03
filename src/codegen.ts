@@ -9792,7 +9792,7 @@ class Emitter {
         // narrowing (e.g. `Token.pos` / `.end` across the lexer's token
         // variants). emit dispatches on the variant tag to pick the right cast.
         const common = this.dunionCommonFieldType(baseType, expr.name);
-        if (common) return common;
+        if (common !== undefined) return common;
         throw new CodegenError(
           { pos: expr.pos },
           `cannot access '.${expr.name}' on discriminated union ${typeIdent(baseType)} - narrow it first with \`switch (x.${baseType.discriminator})\``,
@@ -10046,7 +10046,7 @@ class Emitter {
           // runs when the left is false and sees the negative narrowing.
           const polarity = kind === "&&";
           const n = this.extractNarrowing(expr.lhs, polarity);
-          if (n) {
+          if (n !== undefined) {
             this.scope.push();
             try {
               this.scope.narrow(n.name, n.type);
@@ -10703,7 +10703,7 @@ class Emitter {
       // `.data == NULL` sentinel and applyCoercion's union branch).
       if (expected.kind === "union" && containsUndefined(expected)) {
         const inner = withoutUndefined(expected);
-        if (inner) {
+        if (inner !== undefined) {
           const innerC = this.emitWithExpected(expr, inner);
           return this.applyCoercion(innerC, inner, expected, expr);
         }
@@ -10724,7 +10724,7 @@ class Emitter {
             break;
           }
         }
-        if (!kindProp) {
+        if (kindProp === undefined) {
           throw new CodegenError(
             { pos: expr.pos },
             `object literal for ${typeIdent(expected)} must include discriminator property '${disc}: "..."'`,
@@ -10740,15 +10740,16 @@ class Emitter {
         let matchedVariant: string | undefined;
         for (const variantName of expected.variants) {
           const info = this.classes.get(variantName);
-          if (!info) continue;
+          if (info === undefined) continue;
           const field = info.fields.get(disc);
-          if (!field || field.kind !== "string_literal") continue;
+          if (field === undefined) continue;
+          if (field.kind !== "string_literal") continue;
           if (field.value === kindValue) {
             matchedVariant = variantName;
             break;
           }
         }
-        if (!matchedVariant) {
+        if (matchedVariant === undefined) {
           throw new CodegenError(
             { pos: kindProp.pos },
             `no variant of ${typeIdent(expected)} has ${disc}="${kindValue}"`,
@@ -10820,7 +10821,7 @@ class Emitter {
       const args = info.fieldOrder.map((f) => {
         const fty = info.fields.get(f)!;
         const v = valuesByField.get(f);
-        if (v) return this.emitWithExpected(v, fty);
+        if (v !== undefined) return this.emitWithExpected(v, fty);
         return this.emitUndefinedLiteral(fty, expr);
       });
       return `topaz_class_${className}_new(${args.join(", ")})`;
@@ -10896,7 +10897,7 @@ class Emitter {
     }
     if (expected.kind === "union" && containsUndefined(expected)) {
       const inner = withoutUndefined(expected);
-      if (!inner) {
+      if (inner === undefined) {
         throw new CodegenError(anchor, `cannot lower \`undefined\` for type ${typeIdent(expected)}`);
       }
       if (isScalarType(inner)) {
@@ -10936,12 +10937,14 @@ class Emitter {
     // in the opt struct via `topaz_opt_wrap_<scalar>`.
     if (expected.kind === "union" && containsUndefined(expected)) {
       const inner = withoutUndefined(expected);
-      if (inner && this.isAssignableTo(actual, inner)) {
-        const coerced = this.applyCoercion(raw, actual, inner, anchor);
-        if (isScalarType(inner)) {
-          return `topaz_opt_wrap_${inner.kind}(${coerced})`;
+      if (inner !== undefined) {
+        if (this.isAssignableTo(actual, inner)) {
+          const coerced = this.applyCoercion(raw, actual, inner, anchor);
+          if (isScalarType(inner)) {
+            return `topaz_opt_wrap_${inner.kind}(${coerced})`;
+          }
+          return coerced;
         }
-        return coerced;
       }
     }
     if (isInterfaceType(expected) && isClassType(actual)) {
