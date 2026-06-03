@@ -93,6 +93,11 @@ type CheckedNodeFsWriteFileSyncArgs = {
   contentArg: Expr;
 };
 
+type CheckedNodeChildProcessExecFileSyncArgs = {
+  cmdArg: Expr;
+  argsArg: Expr;
+};
+
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
@@ -8797,47 +8802,47 @@ class Emitter {
   // stdio は inherit のみ受理(child の stdout/stderr/stdin が親 fd を共有)。
   // mkdirSync と同じく options は syntactic object literal で `stdio: "inherit"`
   // 1 property だけ。emit/infer 両経路で同じ reject。
-  private checkNodeChildProcessExecFileSyncArgs(expr: CallExpr): void {
+  private checkNodeChildProcessExecFileSyncArgs(expr: CallExpr): CheckedNodeChildProcessExecFileSyncArgs {
     if (expr.args.length !== 3) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "execFileSync expects exactly three arguments: (cmd: string, args: string[], { stdio: \"inherit\" })",
       );
     }
-    const cmdArg = expr.args[0]!;
+    const cmdArg = expr.args[0];
     const cmdType = this.inferType(cmdArg);
     if (cmdType.kind !== "string") {
       throw new CodegenError(
-        cmdArg,
+        { pos: cmdArg.pos },
         `execFileSync cmd argument must be string, got ${typeIdent(cmdType)}`,
       );
     }
-    const argsArg = expr.args[1]!;
+    const argsArg = expr.args[1];
     const argsType = this.inferType(argsArg);
     const expectedArgs = arrayOf(T_STRING)!;
     if (!typeEq(argsType, expectedArgs)) {
       throw new CodegenError(
-        argsArg,
+        { pos: argsArg.pos },
         `execFileSync args argument must be Array<string>, got ${typeIdent(argsType)}`,
       );
     }
-    const optsArg = expr.args[2]!;
+    const optsArg = expr.args[2];
     if (optsArg.kind !== "object_lit") {
       throw new CodegenError(
-        optsArg,
+        { pos: optsArg.pos },
         "execFileSync options argument must be the literal { stdio: \"inherit\" }",
       );
     }
     if (optsArg.props.length !== 1) {
       throw new CodegenError(
-        optsArg,
+        { pos: optsArg.pos },
         "execFileSync options literal must contain exactly one property: { stdio: \"inherit\" }",
       );
     }
-    const prop = optsArg.props[0]!;
+    const prop = optsArg.props[0];
     if (prop.kind !== "prop_kv" || prop.name !== "stdio") {
       throw new CodegenError(
-        prop,
+        { pos: prop.pos },
         "execFileSync options property must be `stdio: \"inherit\"`",
       );
     }
@@ -8845,18 +8850,19 @@ class Emitter {
     const initLit = stringLitText(init);
     if (initLit !== "inherit") {
       throw new CodegenError(
-        init,
+        { pos: init.pos },
         "execFileSync `stdio` must be the string literal \"inherit\"",
       );
     }
+    return { cmdArg, argsArg };
   }
 
   private emitNodeChildProcessExecFileSync(expr: CallExpr): string {
-    this.checkNodeChildProcessExecFileSyncArgs(expr);
+    const checkedArgs = this.checkNodeChildProcessExecFileSyncArgs(expr);
     const expectedArgs = arrayOf(T_STRING)!;
     this.recordArrayMonomorph(expectedArgs);
-    const cmd = this.emitWithExpected(expr.args[0]!, T_STRING);
-    const args = this.emitWithExpected(expr.args[1]!, expectedArgs);
+    const cmd = this.emitWithExpected(checkedArgs.cmdArg, T_STRING);
+    const args = this.emitWithExpected(checkedArgs.argsArg, expectedArgs);
     return `topaz_child_exec_inherit(${cmd}, ${args})`;
   }
 
@@ -8865,43 +8871,52 @@ class Emitter {
   // して local path を返す 1 引数 string 関数。Node の fileURLToPath は
   // posix と win32 で挙動が分かれるが、self-hosting の実行環境は POSIX 限定で
   // 構築するので POSIX 寄りに固定。
-  private checkNodeUrlFileURLToPathArgs(expr: CallExpr): void {
+  private checkNodeUrlFileURLToPathArgs(expr: CallExpr): Expr {
     if (expr.args.length !== 1) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "fileURLToPath expects exactly one argument: (url: string)",
       );
     }
-    const urlArg = expr.args[0]!;
+    const urlArg = expr.args[0];
     const urlType = this.inferType(urlArg);
     if (urlType.kind !== "string") {
       throw new CodegenError(
-        urlArg,
+        { pos: urlArg.pos },
         `fileURLToPath argument must be string, got ${typeIdent(urlType)}`,
       );
     }
+    return urlArg;
   }
 
   private emitNodeUrlFileURLToPath(expr: CallExpr): string {
-    this.checkNodeUrlFileURLToPathArgs(expr);
-    const url = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const urlArg = this.checkNodeUrlFileURLToPathArgs(expr);
+    const url = this.emitWithExpected(urlArg, T_STRING);
     return `topaz_url_file_url_to_path(${url})`;
   }
 
   // Phase 1.5-6 prep #26: process.exit(code?). arity 0 -> exit(0) (Node's
   // default), arity 1 -> the number code. More args or a non-number code are
   // rejected. Returns `never`; value use is rejected in inferType.
-  private emitProcessExit(expr: CallExpr): string {
+  private checkProcessExitArgs(expr: CallExpr): Expr | undefined {
     if (expr.args.length === 0) {
-      return `topaz_process_exit(0)`;
+      return undefined;
     }
     if (expr.args.length !== 1) {
-      throw new CodegenError(expr, "process.exit expects at most one argument: (code?: number)");
+      throw new CodegenError({ pos: expr.pos }, "process.exit expects at most one argument: (code?: number)");
     }
-    const arg = expr.args[0]!;
+    const arg = expr.args[0];
     const t = this.inferType(arg);
     if (t.kind !== "number") {
-      throw new CodegenError(arg, `process.exit code must be number, got ${typeIdent(t)}`);
+      throw new CodegenError({ pos: arg.pos }, `process.exit code must be number, got ${typeIdent(t)}`);
+    }
+    return arg;
+  }
+
+  private emitProcessExit(expr: CallExpr): string {
+    const arg = this.checkProcessExitArgs(expr);
+    if (arg === undefined) {
+      return `topaz_process_exit(0)`;
     }
     return `topaz_process_exit(${this.emitWithExpected(arg, T_NUMBER)})`;
   }
@@ -8909,20 +8924,20 @@ class Emitter {
   // Phase 1.5-6 prep #26: process.{stdout,stderr}.write(s). Exactly one string
   // argument; no trailing newline (unlike console.*). Returns void (Node
   // returns a backpressure boolean — dropped here).
-  private checkProcessStreamWriteArgs(expr: CallExpr, stream: string): void {
+  private checkProcessStreamWriteArgs(expr: CallExpr, stream: string): Expr {
     if (expr.args.length !== 1) {
       throw new CodegenError({ pos: expr.pos }, `process.${stream}.write expects exactly one argument: (s: string)`);
     }
     const arg = expr.args[0];
     const t = this.inferType(arg);
     if (t.kind !== "string") {
-      throw new CodegenError(arg, `process.${stream}.write argument must be string, got ${typeIdent(t)}`);
+      throw new CodegenError({ pos: arg.pos }, `process.${stream}.write argument must be string, got ${typeIdent(t)}`);
     }
+    return arg;
   }
 
   private emitProcessStreamWrite(expr: CallExpr, stream: string): string {
-    this.checkProcessStreamWriteArgs(expr, stream);
-    const arg = expr.args[0]!;
+    const arg = this.checkProcessStreamWriteArgs(expr, stream);
     const fn = stream === "stdout" ? "topaz_stdout_write" : "topaz_stderr_write";
     return `${fn}(${this.emitWithExpected(arg, T_STRING)})`;
   }
@@ -10024,7 +10039,10 @@ class Emitter {
           // Phase 1.5-6 prep #26: process.exit returns `never`, process.*.write
           // returns void — neither is usable as a value.
           if (receiver.name === "process" && prop.name === "exit") {
-            throw new CodegenError(expr, "process.exit returns `never` and cannot be used as a value");
+            throw new CodegenError(
+              { pos: expr.pos },
+              "process.exit returns `never` and cannot be used as a value",
+            );
           }
           // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
           // syntactically (mirrors emitCall) — the `String` identifier has no
@@ -10043,7 +10061,7 @@ class Emitter {
             prop.name === "write"
           ) {
             throw new CodegenError(
-              expr,
+              { pos: expr.pos },
               `process.${receiverProp.name}.write returns void and cannot be used as a value`,
             );
           }
@@ -10275,7 +10293,10 @@ class Emitter {
         // Phase 1.5-6 prep #24: execFileSync returns void; reject value use
         // (mirrors writeFileSync / mkdirSync).
         if (callee.name === "execFileSync") {
-          throw new CodegenError(expr, "execFileSync returns void and cannot be used as a value");
+          throw new CodegenError(
+            { pos: expr.pos },
+            "execFileSync returns void and cannot be used as a value",
+          );
         }
         // Phase 1.5-6 prep #25: node:url.fileURLToPath types as string.
         if (callee.name === "fileURLToPath") {
