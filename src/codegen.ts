@@ -7420,7 +7420,7 @@ class Emitter {
     if (tt.kind === "undefined") return makeUnion([tf, T_UNDEFINED]);
     if (tf.kind === "undefined") return makeUnion([tt, T_UNDEFINED]);
     throw new CodegenError(
-      expr,
+      { pos: expr.pos },
       `conditional (?:) branches have incompatible types: ${typeIdent(tt)} vs ${typeIdent(tf)} (annotate the target to pick one)`,
     );
   }
