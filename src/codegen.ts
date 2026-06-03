@@ -7487,7 +7487,7 @@ class Emitter {
       let spIdx = 0;
       for (const e of expr.elems) {
         if (e.kind === "spread") {
-          const spTmp = spreadTmps[spIdx++]!;
+          const spTmp = spreadTmps[spIdx++];
           const iterId = this.tmpCounter++;
           const iVar = `__topaz_si_${iterId}`;
           parts.push(
@@ -7503,7 +7503,7 @@ class Emitter {
 
   private firstArrayLiteralElementType(expr: ArrayLitExpr): TopazType {
     // Infer from the first element: spread -> source's elem, fixed -> its type.
-    const first = expr.elems[0]!;
+    const first = expr.elems[0];
     if (first.kind === "spread") {
       const srcType = this.inferType(first.expr);
       if (!isArrayType(srcType)) {
@@ -7630,8 +7630,8 @@ class Emitter {
     expected: TopazType | undefined,
   ): TopazType {
     if (expr.typeArgs.length === 2) {
-      const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
-      const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
+      const k = this.typeFromAnnotation(expr.typeArgs[0], expr, g_currentModule!);
+      const v = this.typeFromAnnotation(expr.typeArgs[1], expr, g_currentModule!);
       const t = mapOf(k, v);
       if (!t) {
         throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
@@ -7690,7 +7690,7 @@ class Emitter {
 
     const elem = setElem(setType)!;
     if (expr.args.length === 1) {
-      this.setConstructorSourceType(expr.args[0]!, elem);
+      this.setConstructorSourceType(expr.args[0], elem);
     }
     this.recordSetMonomorph(setType);
     return setType;
@@ -7701,7 +7701,7 @@ class Emitter {
     expected: TopazType | undefined,
   ): TopazType {
     if (expr.typeArgs.length === 1) {
-      const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
+      const elem = this.typeFromAnnotation(expr.typeArgs[0], expr, g_currentModule!);
       const t = setOf(elem);
       if (!t) {
         throw new CodegenError({ pos: expr.pos }, `no Set monomorph for element type ${typeIdent(elem)}`);
@@ -7727,7 +7727,7 @@ class Emitter {
     expr: NewExpr,
     setType: TopazType,
   ): string {
-    const source = expr.args[0]!;
+    const source = expr.args[0];
     const elem = setElem(setType)!;
     const sourceType = this.setConstructorSourceType(source, elem);
     const setName = setShortName(setType);
@@ -9726,11 +9726,11 @@ class Emitter {
       // Phase 1.5-3.5h-spread: infer elem from first element (spread -> source's
       // elem, fixed -> its type). Subsequent elements are validated by emit-time
       // type checks; inferType only needs the elem to look up the monomorph.
-      const first = expr.elems[0]!;
+      const first = expr.elems[0];
       const elem = this.firstArrayLiteralElementType(expr);
       if (first.kind !== "spread") {
         for (let i = 1; i < expr.elems.length; i++) {
-          const e = expr.elems[i]!;
+          const e = expr.elems[i];
           if (e.kind !== "spread") this.expectType(e.expr, elem);
         }
       }
