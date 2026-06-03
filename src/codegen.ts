@@ -6791,21 +6791,16 @@ class Emitter {
       groups.push({ conds: pending, body: [] });
     }
 
-    const isTerminator = (s: Stmt): boolean =>
-      s.kind === "break_stmt" ||
-      s.kind === "return_stmt" ||
-      s.kind === "throw_stmt" ||
-      s.kind === "continue_stmt";
     for (const g of groups) {
       if (g.body.length > 0) {
         const lastIndex = g.body.length - 1;
         const lastStmt: Stmt | undefined = g.body[lastIndex];
         if (lastStmt !== undefined) {
-          if (isTerminator(lastStmt) === false) {
+          if (this.alwaysExits(lastStmt) === false) {
             const lastAnchor: { pos: number } = { pos: lastStmt.pos };
             throw new CodegenError(
               lastAnchor,
-              "case body must end with `break` or `return` (implicit fall-through is unsupported)",
+              "case body must end with `break`, `return`, `throw`, `continue`, or another statement that always exits (implicit fall-through is unsupported)",
             );
           }
         } else {
