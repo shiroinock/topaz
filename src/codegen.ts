@@ -8133,7 +8133,7 @@ class Emitter {
       return this.emitFnValueCall(expr, callee, calleeType);
     }
 
-    unsupported(callee, "call target");
+    unsupported({ kind: callee.kind, pos: callee.pos }, "call target");
   }
 
   // Phase 1.5-3.5e: lower a call `f(args)` where `f` types as a fn fat
@@ -8148,7 +8148,7 @@ class Emitter {
       const fnValueType = fnType;
       if (expr.args.length !== fnValueType.params.length) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `fn value expects ${fnValueType.params.length} argument(s), got ${expr.args.length}`,
         );
       }
@@ -8182,7 +8182,7 @@ class Emitter {
   ): string {
     for (const a of expr.args) {
       if (a.kind === "spread_expr") {
-        throw new CodegenError(a, "spread in call arguments is unsupported");
+        throw new CodegenError({ pos: a.pos }, "spread in call arguments is unsupported");
       }
     }
     const expectedFn: TopazType = {
@@ -10269,7 +10269,7 @@ class Emitter {
       // Phase 1.5-3.5e: any other expression that types as a fn value.
       const ct = this.inferType(callee);
       if (ct.kind === "fn") return ct.returnType;
-      unsupported(callee, "call target");
+      unsupported({ kind: callee.kind, pos: callee.pos }, "call target");
     }
     if (expr.kind === "new_expr") {
       const callee = expr.callee;
