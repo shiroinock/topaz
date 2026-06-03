@@ -4858,16 +4858,12 @@ class Emitter {
     // signature types live in the generic's module, so set its ambient sf.
     const prevScope = this.typeParamScope;
     this.typeParamScope = subs;
-    let sig: FunctionSig;
-    try {
-      sig = this.withSfFunctionSig(generic.sf, () => {
-        const returnType = this.typeFromAnnotation(generic.decl.returnType, generic.decl, generic.sf);
-        const params = this.collectParams(generic.decl.params, generic.sf);
-        return { params, returnType };
-      });
-    } finally {
-      this.typeParamScope = prevScope;
-    }
+    const sig = this.withSfFunctionSig(generic.sf, () => {
+      const returnType = this.typeFromAnnotation(generic.decl.returnType, generic.decl, generic.sf);
+      const params = this.collectParams(generic.decl.params, generic.sf);
+      return { params, returnType };
+    });
+    this.typeParamScope = prevScope;
 
     const mono: MonomorphInfo = {
       mangled,
