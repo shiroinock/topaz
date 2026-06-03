@@ -3069,7 +3069,7 @@ class Emitter {
       this.verifyDefiniteFieldInit(info);
     }
     for (const ifaceName of info.implements) {
-      this.verifyImplements(info, this.interfaces.get(ifaceName)!, cls);
+      this.verifyImplements(info, this.interfaces.get(ifaceName)!, clsAnchor);
     }
     });
   }
