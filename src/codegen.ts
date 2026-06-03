@@ -3076,7 +3076,8 @@ class Emitter {
 
   private verifyDefiniteFieldInit(info: ClassInfo): void {
     if (info.fields.size === 0) return;
-    if (!info.ctor) return; // field-without-ctor は上で報告済み
+    const ctor = info.ctor;
+    if (ctor === undefined) return; // field-without-ctor は上で報告済み
     const assigned = new Set<string>();
     // Phase 1.5-6 prep: field initializer (`x: T = init;`) を持つ field は
     // emitConstructorDefinition が ctor body 冒頭で代入を吐くため definitely
@@ -3084,16 +3085,19 @@ class Emitter {
     // 必要がある。auto-synthesized ctor (decl === undefined) はそもそも全
     // field が initializer 持ちなので 2 つ目の集計はスキップする。
     for (const fname of info.fieldInits.keys()) assigned.add(fname);
-    if (info.ctor.decl) {
-      this.collectDefiniteFieldAssignments(info.ctor.decl.body, assigned);
+    const ctorDecl = ctor.decl;
+    if (ctorDecl !== undefined) {
+      this.collectDefiniteFieldAssignments(ctorDecl.body, assigned);
     }
     for (const fname of info.fieldOrder) {
       if (!assigned.has(fname)) {
         // info.decl is the Topaz `ClassDecl` (or anon `TypeLiteralNode`); route
         // through typeErr, which accepts Topaz `{ pos }` anchors. The ambient
         // SourceFile is set by the enclosing collectClassMembers' withSf.
+        let errAnchor: { pos: number } = { pos: info.decl.pos };
+        if (ctorDecl !== undefined) errAnchor = { pos: ctorDecl.pos };
         throw this.typeErr(
-          info.ctor.decl ?? info.decl,
+          errAnchor,
           `field '${info.name}.${fname}' is not definitely assigned in the constructor (assign it directly under the constructor body, or add a field initializer 'x: T = init;' - control-flow inside if/for/while/try is not analyzed yet)`,
         );
       }
