@@ -4786,13 +4786,14 @@ class Emitter {
     const genericMaybe = this.genericFunctions.get(callee.name);
     if (genericMaybe === undefined) return undefined;
     const generic: GenericFunctionInfo = genericMaybe;
+    const callAnchor: { pos: number } = { pos: expr.pos };
 
     const subs = new Map<string, TopazType>();
 
     if (expr.typeArgs.length > 0) {
       if (expr.typeArgs.length !== generic.typeParams.length) {
         throw new CodegenError(
-          expr,
+          callAnchor,
           `${callee.name} expects ${generic.typeParams.length} type argument(s), got ${expr.typeArgs.length}`,
         );
       }
@@ -4801,7 +4802,7 @@ class Emitter {
         // type parameters (when a generic body calls another generic), so
         // typeFromAnnotation must run with the outer typeParamScope still
         // active. We don't swap it here.
-        const t = this.typeFromAnnotation(expr.typeArgs[i]!, expr, g_currentModule!);
+        const t = this.typeFromAnnotation(expr.typeArgs[i]!, callAnchor, g_currentModule!);
         subs.set(generic.typeParams[i]!, t);
       }
     } else {
@@ -4813,19 +4814,19 @@ class Emitter {
       // that `unifyTypeParam` walks.
       if (expr.args.length !== generic.decl.params.length) {
         throw new CodegenError(
-          expr,
+          callAnchor,
           `${callee.name}() expects ${generic.decl.params.length} argument(s), got ${expr.args.length}`,
         );
       }
       for (let i = 0; i < generic.decl.params.length; i++) {
         const param = generic.decl.params[i]!;
         const argType = this.inferType(expr.args[i]!);
-        this.unifyTypeParam(param.type, argType, generic.typeParams, subs, expr);
+        this.unifyTypeParam(param.type, argType, generic.typeParams, subs, callAnchor);
       }
       for (const tp of generic.typeParams) {
         if (!subs.has(tp)) {
           throw new CodegenError(
-            expr,
+            callAnchor,
             `cannot infer type parameter '${tp}' for ${callee.name}; provide explicit type arguments`,
           );
         }
