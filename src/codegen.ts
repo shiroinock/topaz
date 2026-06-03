@@ -7482,7 +7482,7 @@ class Emitter {
         parts.push(`topaz_array_${spName} *${spTmp} = ${this.emitExpression(e.expr)};`);
         spreadTmps.push(spTmp);
       }
-      const reserveSum = [String(fixedCount), ...spreadTmps.map((t) => `${t}->len`)].join(" + ");
+      const reserveSum = [`${fixedCount}`, ...spreadTmps.map((t) => `${t}->len`)].join(" + ");
       parts.push(`topaz_array_${name}_reserve(${tmp}, ${reserveSum});`);
       let spIdx = 0;
       for (const e of expr.elems) {
