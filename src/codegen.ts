@@ -5773,15 +5773,20 @@ class Emitter {
     narrow?: { name: string; type: TopazType },
   ): string {
     const pad = "  ".repeat(indent);
+    const narrowMaybe = narrow;
     if (stmt.kind === "block_stmt") {
       this.scope.push();
-      if (narrow) this.scope.narrow(narrow.name, narrow.type);
+      if (narrowMaybe !== undefined) {
+        this.scope.narrow(narrowMaybe.name, narrowMaybe.type);
+      }
       const out = this.emitBlock(stmt, indent);
       this.scope.pop();
       return out;
     }
     this.scope.push();
-    if (narrow) this.scope.narrow(narrow.name, narrow.type);
+    if (narrowMaybe !== undefined) {
+      this.scope.narrow(narrowMaybe.name, narrowMaybe.type);
+    }
     const inner = this.emitStatement(stmt, indent + 1);
     this.scope.pop();
     return `${pad}{\n${inner}\n${pad}}`;
@@ -5799,13 +5804,16 @@ class Emitter {
   private canHoistModuleConst(stmt: Stmt, sf: SourceModule): boolean {
     if (stmt.kind !== "var_decl") return false;
     if (stmt.declKind !== "const") return false;
-    if (stmt.init === undefined) return false;
-    const lit = this.tryScalarLiteralInit(stmt.init);
-    if (!lit) return false;
-    if (stmt.type) {
+    const initMaybe = stmt.init;
+    if (initMaybe === undefined) return false;
+    const init = initMaybe;
+    const lit = this.tryScalarLiteralInit(init);
+    if (lit === undefined) return false;
+    const typeMaybe = stmt.type;
+    if (typeMaybe !== undefined) {
       // Only scalar annotations (number / boolean) can match a scalar literal
       // init, so `typeFromAnnotation` is side-effect-free here.
-      const annotated = this.typeFromAnnotation(stmt.type, stmt, sf);
+      const annotated = this.typeFromAnnotation(typeMaybe, stmt, sf);
       if (!typeEq(annotated, lit.type)) return false;
     }
     return true;
@@ -5828,9 +5836,16 @@ class Emitter {
     if (!this.canHoistModuleConst(stmt, sf)) return undefined;
     if (stmt.kind !== "var_decl") return undefined;
     const d = stmt;
-    const lit = this.tryScalarLiteralInit(d.init!)!;
+    const initMaybe = d.init;
+    if (initMaybe === undefined) return undefined;
+    const init = initMaybe;
+    const lit = this.tryScalarLiteralInit(init);
+    if (lit === undefined) return undefined;
     let varType: TopazType = lit.type;
-    if (d.type) varType = this.typeFromAnnotation(d.type, d, sf);
+    const typeMaybe = d.type;
+    if (typeMaybe !== undefined) {
+      varType = this.typeFromAnnotation(typeMaybe, d, sf);
+    }
     this.scope.declareBinding(d.name, varType, /* isConst */ true, d);
     return `static const ${cTypeName(varType)} ${d.name} = ${lit.cExpr};`;
   }
