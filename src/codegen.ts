@@ -88,6 +88,11 @@ type DunionType = { kind: "dunion"; variants: Array<string>; discriminator: stri
 type FnType = { kind: "fn"; params: Array<ParamInfo>; returnType: TopazType };
 type IterType = { kind: "iter"; elem: TopazType };
 
+type CheckedNodeFsWriteFileSyncArgs = {
+  pathArg: Expr;
+  contentArg: Expr;
+};
+
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
@@ -8621,100 +8626,103 @@ class Emitter {
   // 第 2 引数は `"utf8"` 限定 (binary 読み出しを Topaz は今のところ要らない、
   // それでも encoding argument を必須化することで「buffer 戻り value」が誤って
   // string 経路に乗ることを防ぐ)。
-  private checkNodeFsReadFileSyncArgs(expr: CallExpr): void {
+  private checkNodeFsReadFileSyncArgs(expr: CallExpr): Expr {
     if (expr.args.length !== 2) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "readFileSync expects exactly two arguments: (path: string, encoding: \"utf8\")",
       );
     }
-    const pathArg = expr.args[0]!;
+    const pathArg = expr.args[0];
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
-        pathArg,
+        { pos: pathArg.pos },
         `readFileSync path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
-    const encArg = expr.args[1]!;
+    const encArg = expr.args[1];
     const enc = stringLitText(encArg);
     if (enc === undefined) {
       throw new CodegenError(
-        encArg,
+        { pos: encArg.pos },
         "readFileSync encoding argument must be the string literal \"utf8\"",
       );
     }
     if (enc !== "utf8") {
       throw new CodegenError(
-        encArg,
+        { pos: encArg.pos },
         `readFileSync encoding argument must be "utf8" (got "${enc}")`,
       );
     }
+    return pathArg;
   }
 
   private emitNodeFsReadFileSync(expr: CallExpr): string {
-    this.checkNodeFsReadFileSyncArgs(expr);
-    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const pathArg = this.checkNodeFsReadFileSyncArgs(expr);
+    const path = this.emitWithExpected(pathArg, T_STRING);
     return `topaz_fs_read_text_file(${path})`;
   }
 
   // Phase 1.5-6 prep #17: `existsSync(path)` の引数検査。第 1 引数は string 一個
   // のみ (Node の options 第 2 引数は未対応)。emit/infer 両経路で同じ reject。
-  private checkNodeFsExistsSyncArgs(expr: CallExpr): void {
+  private checkNodeFsExistsSyncArgs(expr: CallExpr): Expr {
     if (expr.args.length !== 1) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "existsSync expects exactly one argument: (path: string)",
       );
     }
-    const pathArg = expr.args[0]!;
+    const pathArg = expr.args[0];
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
-        pathArg,
+        { pos: pathArg.pos },
         `existsSync path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
+    return pathArg;
   }
 
   private emitNodeFsExistsSync(expr: CallExpr): string {
-    this.checkNodeFsExistsSyncArgs(expr);
-    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const pathArg = this.checkNodeFsExistsSyncArgs(expr);
+    const path = this.emitWithExpected(pathArg, T_STRING);
     return `topaz_fs_exists(${path})`;
   }
 
   // Phase 1.5-6 prep #19: `writeFileSync(path, content)` の引数検査。Node の
   // 3 引数目 (encoding/options) は受けない (encoding は implicit utf8)。両引数
   // 必須・string のみ。emit/infer 両経路で同じ reject。
-  private checkNodeFsWriteFileSyncArgs(expr: CallExpr): void {
+  private checkNodeFsWriteFileSyncArgs(expr: CallExpr): CheckedNodeFsWriteFileSyncArgs {
     if (expr.args.length !== 2) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "writeFileSync expects exactly two arguments: (path: string, content: string)",
       );
     }
-    const pathArg = expr.args[0]!;
+    const pathArg = expr.args[0];
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
-        pathArg,
+        { pos: pathArg.pos },
         `writeFileSync path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
-    const contentArg = expr.args[1]!;
+    const contentArg = expr.args[1];
     const contentType = this.inferType(contentArg);
     if (contentType.kind !== "string") {
       throw new CodegenError(
-        contentArg,
+        { pos: contentArg.pos },
         `writeFileSync content argument must be string, got ${typeIdent(contentType)}`,
       );
     }
+    return { pathArg, contentArg };
   }
 
   private emitNodeFsWriteFileSync(expr: CallExpr): string {
-    this.checkNodeFsWriteFileSyncArgs(expr);
-    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
-    const content = this.emitWithExpected(expr.args[1]!, T_STRING);
+    const checkedArgs = this.checkNodeFsWriteFileSyncArgs(expr);
+    const path = this.emitWithExpected(checkedArgs.pathArg, T_STRING);
+    const content = this.emitWithExpected(checkedArgs.contentArg, T_STRING);
     return `topaz_fs_write_text_file(${path}, ${content})`;
   }
 
@@ -8724,52 +8732,63 @@ class Emitter {
   // ならない — 変数や別 shape の options は受けない (runtime は常に recursive
   // mkdir を呼ぶので、call-site で「単純な誤読」を防ぐためにここで shape を
   // 固定する)。emit/infer 両経路で同じ reject。
-  private checkNodeFsMkdirSyncArgs(expr: CallExpr): void {
+  private checkNodeFsMkdirSyncArgs(expr: CallExpr): Expr {
     if (expr.args.length !== 2) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "mkdirSync expects exactly two arguments: (path: string, { recursive: true })",
       );
     }
-    const pathArg = expr.args[0]!;
+    const pathArg = expr.args[0];
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
-        pathArg,
+        { pos: pathArg.pos },
         `mkdirSync path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
-    const optsArg = expr.args[1]!;
+    const optsArg = expr.args[1];
     if (optsArg.kind !== "object_lit") {
       throw new CodegenError(
-        optsArg,
+        { pos: optsArg.pos },
         "mkdirSync options argument must be the literal { recursive: true }",
       );
     }
     if (optsArg.props.length !== 1) {
       throw new CodegenError(
-        optsArg,
+        { pos: optsArg.pos },
         "mkdirSync options literal must contain exactly one property: { recursive: true }",
       );
     }
-    const prop = optsArg.props[0]!;
+    const prop = optsArg.props[0];
     if (prop.kind !== "prop_kv" || prop.name !== "recursive") {
       throw new CodegenError(
-        prop,
+        { pos: prop.pos },
         "mkdirSync options property must be `recursive: true`",
       );
     }
-    if (prop.value.kind !== "bool_lit" || prop.value.value !== true) {
-      throw new CodegenError(
-        prop.value,
-        "mkdirSync `recursive` must be the literal `true`",
-      );
+    const propValue = prop.value;
+    switch (propValue.kind) {
+      case "bool_lit":
+        if (propValue.value !== true) {
+          throw new CodegenError(
+            { pos: propValue.pos },
+            "mkdirSync `recursive` must be the literal `true`",
+          );
+        }
+        break;
+      default:
+        throw new CodegenError(
+          { pos: propValue.pos },
+          "mkdirSync `recursive` must be the literal `true`",
+        );
     }
+    return pathArg;
   }
 
   private emitNodeFsMkdirSync(expr: CallExpr): string {
-    this.checkNodeFsMkdirSyncArgs(expr);
-    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const pathArg = this.checkNodeFsMkdirSyncArgs(expr);
+    const path = this.emitWithExpected(pathArg, T_STRING);
     return `topaz_fs_mkdir_p(${path})`;
   }
 
@@ -10223,11 +10242,11 @@ class Emitter {
         // Phase 1.5-6 prep #19: writeFileSync returns void; reject value use
         // (mirrors Array.push / console.log).
         if (callee.name === "writeFileSync") {
-          throw new CodegenError(expr, "writeFileSync returns void and cannot be used as a value");
+          throw new CodegenError({ pos: expr.pos }, "writeFileSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #20: mkdirSync returns void; reject value use.
         if (callee.name === "mkdirSync") {
-          throw new CodegenError(expr, "mkdirSync returns void and cannot be used as a value");
+          throw new CodegenError({ pos: expr.pos }, "mkdirSync returns void and cannot be used as a value");
         }
         // Phase 1.5-6 prep #18: node:path.dirname / resolve type as string.
         if (callee.name === "dirname") {
