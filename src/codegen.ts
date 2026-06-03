@@ -6914,10 +6914,10 @@ class Emitter {
         "use array literal syntax (`[...]` or `[]`) instead of `new Array()`",
       );
     }
-    if ((name === "Map" || name === "Set") && expr.args.length > 0) {
+    if (name === "Map" && expr.args.length > 0) {
       throw new CodegenError(
         expr,
-        `${name}() constructor arguments are unsupported (initialize via .set/.add)`,
+        "Map() constructor arguments are unsupported",
       );
     }
     if (name === "Map") {
@@ -6948,30 +6948,11 @@ class Emitter {
       return `topaz_map_${mapShortName(mapType)}_new()`;
     }
     if (name === "Set") {
-      let setType: TopazType;
-      if (expr.typeArgs.length === 1) {
-        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
-        const t = setOf(elem);
-        if (!t) {
-          throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
-        }
-        if (expected && !typeEq(expected, t)) {
-          throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
-        }
-        setType = t;
-      } else if (expr.typeArgs.length !== 0) {
-        throw new CodegenError(expr, "Set<T> requires exactly one type argument");
-      } else {
-        if (!expected || !isSetType(expected)) {
-          throw new CodegenError(
-            expr,
-            "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
-          );
-        }
-        setType = expected;
+      const setType = this.resolveSetConstructorType(expr, expected);
+      if (expr.args.length === 0) {
+        return `topaz_set_${setShortName(setType)}_new()`;
       }
-      this.recordSetMonomorph(setType);
-      return `topaz_set_${setShortName(setType)}_new()`;
+      return this.emitSetIterableConstructor(expr, setType);
     }
     if (this.interfaces.has(name)) {
       throw new CodegenError(expr, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
@@ -7010,6 +6991,106 @@ class Emitter {
       return `topaz_class_${className}_new(${argStr})`;
     }
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
+  }
+
+  private setConstructorSourceType(source: Expr, elem: TopazType): TopazType {
+    const sourceType = this.inferType(source);
+    let sourceElem: TopazType | undefined = undefined;
+    if (isArrayType(sourceType)) {
+      sourceElem = arrayElem(sourceType);
+    } else if (isSetType(sourceType)) {
+      sourceElem = setElem(sourceType);
+    } else if (sourceType.kind === "iter") {
+      sourceElem = sourceType.elem;
+    }
+    if (sourceElem === undefined) {
+      throw new CodegenError(
+        source,
+        `Set() constructor source must be an Array<T>, Set<T>, or Iterator<T> (got ${typeIdent(sourceType)})`,
+      );
+    }
+    if (!typeEq(sourceElem, elem)) {
+      throw new CodegenError(
+        source,
+        `Set() constructor element type mismatch: expected ${typeIdent(elem)}, got ${typeIdent(sourceElem)}`,
+      );
+    }
+    return sourceType;
+  }
+
+  private resolveSetConstructorType(
+    expr: NewExpr,
+    expected: TopazType | undefined,
+  ): TopazType {
+    if (expr.args.length > 1) {
+      throw new CodegenError(expr, "Set() constructor expects at most one argument");
+    }
+
+    let setType: TopazType;
+    if (expr.typeArgs.length === 1) {
+      const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
+      const t = setOf(elem);
+      if (!t) {
+        throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
+      }
+      if (expected && !typeEq(expected, t)) {
+        throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
+      }
+      setType = t;
+    } else if (expr.typeArgs.length !== 0) {
+      throw new CodegenError(expr, "Set<T> requires exactly one type argument");
+    } else {
+      if (!expected || !isSetType(expected)) {
+        throw new CodegenError(
+          expr,
+          "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
+        );
+      }
+      setType = expected;
+    }
+
+    const elem = setElem(setType)!;
+    if (expr.args.length === 1) {
+      this.setConstructorSourceType(expr.args[0]!, elem);
+    }
+    this.recordSetMonomorph(setType);
+    return setType;
+  }
+
+  private emitSetIterableConstructor(
+    expr: NewExpr,
+    setType: TopazType,
+  ): string {
+    const source = expr.args[0]!;
+    const elem = setElem(setType)!;
+    const sourceType = this.setConstructorSourceType(source, elem);
+    const setName = setShortName(setType);
+    const setCType = cTypeName(setType);
+    const elemCType = cTypeName(elem);
+    const sourceCType = cTypeName(sourceType);
+    const id = this.tmpCounter++;
+    const setTmp = `__topaz_set_ctor_${id}`;
+    const sourceTmp = `__topaz_set_src_${id}`;
+    const idxTmp = `__topaz_set_idx_${id}`;
+    const valTmp = `__topaz_set_val_${id}`;
+    const doneTmp = `__topaz_set_done_${id}`;
+    const sourceExpr = this.emitExpression(source);
+
+    if (isArrayType(sourceType)) {
+      this.recordArrayMonomorph(sourceType);
+      return `({ ${setCType} ${setTmp} = topaz_set_${setName}_new(); ${sourceCType} ${sourceTmp} = ${sourceExpr}; for (size_t ${idxTmp} = 0; ${idxTmp} < ${sourceTmp}->len; ${idxTmp}++) { topaz_set_${setName}_add(${setTmp}, ${sourceTmp}->data[${idxTmp}]); } ${setTmp}; })`;
+    }
+
+    if (isSetType(sourceType)) {
+      this.recordSetMonomorph(sourceType);
+      return `({ ${setCType} ${setTmp} = topaz_set_${setName}_new(); ${sourceCType} ${sourceTmp} = ${sourceExpr}; for (size_t ${idxTmp} = 0; ${idxTmp} < ${sourceTmp}->cap; ${idxTmp}++) { if (${sourceTmp}->slots[${idxTmp}].state != TOPAZ_HASH_SLOT_OCCUPIED) continue; topaz_set_${setName}_add(${setTmp}, ${sourceTmp}->slots[${idxTmp}].key); } ${setTmp}; })`;
+    }
+
+    if (sourceType.kind === "iter") {
+      return `({ ${setCType} ${setTmp} = topaz_set_${setName}_new(); ${sourceCType} ${sourceTmp} = ${sourceExpr}; for (;;) { bool ${doneTmp} = false; ${elemCType} ${valTmp} = ${sourceTmp}.next(${sourceTmp}.state, &${doneTmp}); if (${doneTmp}) break; topaz_set_${setName}_add(${setTmp}, ${valTmp}); } ${setTmp}; })`;
+    }
+
+    throwInternalCodegenError("emitSetIterableConstructor: unexpected validated source type");
   }
 
   // Phase 1.5-6e-2: core string-literal encoder. Takes the cooked JS string and
@@ -9448,6 +9529,9 @@ class Emitter {
       }
       const name = expr.callee.name;
       if (name === "Map") {
+        if (expr.args.length !== 0) {
+          throw new CodegenError(expr, "Map() constructor arguments are unsupported");
+        }
         if (expr.typeArgs.length !== 2) {
           throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
         }
@@ -9459,14 +9543,7 @@ class Emitter {
         return t;
       }
       if (name === "Set") {
-        if (expr.typeArgs.length !== 1) {
-          throw new CodegenError(expr, "Set<T> requires exactly one type argument");
-        }
-        const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
-        const t = setOf(elem);
-        if (!t) throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
-        this.recordSetMonomorph(t);
-        return t;
+        return this.resolveSetConstructorType(expr, undefined);
       }
       if (this.genericClasses.has(name)) {
         return this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentModule!);

@@ -165,6 +165,7 @@ run_case number_format $'3.14\n0.30000000000000004\n1.5\n-1.5\n1e+21\n1e-7\n0.00
 run_case string_basic $'hello, topaz!\n13\nabcdef\ntrue\ntrue\nwoof'
 run_case array_basic $'3\n10\n30\n5\n40\n50\n99\n50\n4\n189\ntrue\nfalse\nalpha\ngamma\n3\n1\n7'
 run_case map_set_basic $'3\n2\ntrue\nfalse\n10\ntrue\n2\nfalse\n3\ntrue\nfalse\ntrue\n2\nfalse\nyes\nno\n2\ntrue\nfalse\ntrue\n50\n250\n490\n7'
+run_case set_constructor_iterable $'3\ntrue\nfalse\n3\nfalse\ntrue\n4\ntrue\n2\ntrue\n1\ntrue'
 run_case class_basic $'3\n4\n7\n30\n40\n99\n100\n555\n101\n557\n110\n575\nhello, topaz\nhello, topaz\n2'
 run_case interface_basic $'circle\n36\nsquare\n25\n16\nrenamed\n6\n144\n8\n64\n4\n4'
 run_case array_class_iface $'3\n1\n12\n12\n4\n99\n99\n3\n500\n2\nsquare\n9\ncircle\n16\n16\ncircle\n100\n0\n7\ncircle\n4'
@@ -242,6 +243,10 @@ run_fail_case for_of_map_fail examples/for_of_map_fail.ts "for-of requires an Ar
 run_fail_case for_of_destructuring_fail examples/for_of_destructuring_fail.ts "destructuring binding in for-of is only supported for .entries() on Map / Set"
 run_fail_case for_of_map_entries_fail examples/for_of_map_entries_fail.ts "for-of over .entries() requires destructuring binding"
 run_fail_case map_entries_outside_for_of_fail examples/map_entries_outside_for_of_fail.ts "Map.entries() is only allowed as the right-hand side"
+run_fail_case set_constructor_mismatch_fail examples/set_constructor_mismatch_fail.ts "Set() constructor element type mismatch"
+run_fail_case set_constructor_non_iterable_fail examples/set_constructor_non_iterable_fail.ts "Set() constructor source must be an Array<T>, Set<T>, or Iterator<T>"
+run_fail_case set_constructor_too_many_fail examples/set_constructor_too_many_fail.ts "Set() constructor expects at most one argument"
+run_fail_case map_constructor_iterable_fail examples/map_constructor_iterable_fail.ts "Map() constructor arguments are unsupported"
 run_fail_case iterator_in_container_fail examples/iterator_in_container_fail.ts "no Array monomorph for element type topaz_iter_number"
 run_fail_case non_null_non_optional_fail examples/non_null_non_optional_fail.ts "non-null assertion (\`!\`) requires a \`T | undefined\` operand"
 run_fail_case coalesce_non_optional_fail examples/coalesce_non_optional_fail.ts "\`??\` requires the left operand to be \`T | undefined\`"
