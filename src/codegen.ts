@@ -3528,9 +3528,12 @@ class Emitter {
   // the pre-migration tsc-anchored errors.
   private typeErr(anchor: { pos: number }, message: string): CodegenError {
     const module = this.currentTypeModule;
-    if (!module) return new FormattedCodegenError(message).value;
-    const { line, col } = posToLineCol(module, anchor.pos);
-    return new FormattedCodegenError(`${module.filePath}:${line + 1}:${col + 1}: ${message}`).value;
+    if (module === undefined) {
+      return new FormattedCodegenError(message).value;
+    } else {
+      const { line, col } = posToLineCol(module, anchor.pos);
+      return new FormattedCodegenError(`${module.filePath}:${line + 1}:${col + 1}: ${message}`).value;
+    }
   }
 
   // decl-land → emit/infer SCC boundary helper. Sets the ambient
@@ -3542,12 +3545,9 @@ class Emitter {
     const savedT = this.currentTypeModule;
     g_currentModule = sf;
     this.currentTypeModule = sf;
-    try {
-      fn();
-    } finally {
-      g_currentModule = savedG;
-      this.currentTypeModule = savedT;
-    }
+    fn();
+    g_currentModule = savedG;
+    this.currentTypeModule = savedT;
   }
 
   private withSfString(sf: SourceModule, fn: () => string): string {
@@ -3555,12 +3555,10 @@ class Emitter {
     const savedT = this.currentTypeModule;
     g_currentModule = sf;
     this.currentTypeModule = sf;
-    try {
-      return fn();
-    } finally {
-      g_currentModule = savedG;
-      this.currentTypeModule = savedT;
-    }
+    const out = fn();
+    g_currentModule = savedG;
+    this.currentTypeModule = savedT;
+    return out;
   }
 
   private withSfFunctionSig(sf: SourceModule, fn: () => FunctionSig): FunctionSig {
@@ -3568,12 +3566,10 @@ class Emitter {
     const savedT = this.currentTypeModule;
     g_currentModule = sf;
     this.currentTypeModule = sf;
-    try {
-      return fn();
-    } finally {
-      g_currentModule = savedG;
-      this.currentTypeModule = savedT;
-    }
+    const out = fn();
+    g_currentModule = savedG;
+    this.currentTypeModule = savedT;
+    return out;
   }
 
   // The statement / block is a Topaz node; set the ambient SourceModule so the
