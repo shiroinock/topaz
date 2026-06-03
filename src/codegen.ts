@@ -5596,96 +5596,175 @@ class Emitter {
   // try body — those are technically safe, but we forbid them uniformly to keep
   // the rule one sentence long.
   private checkTryBodyNoEscape(block: BlockStmt): void {
-    // Recursive visitor over the Topaz statement / expression tree. Descent
-    // stops at function boundaries (`arrow_expr`); the subset forbids nested
-    // function / class declarations inside blocks (convert rejects them), so
-    // arrows are the only barrier to honor.
-    const walkExpr = (e: Expr): void => {
-      switch (e.kind) {
-        case "ident":
-        case "num_lit":
-        case "str_lit":
-        case "bool_lit":
-        case "null_lit":
-        case "undefined_lit":
-        case "this_expr":
-        case "import_meta_url":
-          return;
-        case "template_lit": for (const sub of e.subs) walkExpr(sub.expr); return;
-        case "array_lit": for (const el of e.elems) walkExpr(el.expr); return;
-        case "object_lit":
-          for (const m of e.props) {
-            if (m.kind === "prop_kv") walkExpr(m.value);
-            else if (m.kind === "prop_spread") walkExpr(m.expr);
-          }
-          return;
-        case "paren_expr": walkExpr(e.inner); return;
-        case "call_expr": walkExpr(e.callee); for (const a of e.args) walkExpr(a); return;
-        case "new_expr": walkExpr(e.callee); for (const a of e.args) walkExpr(a); return;
-        case "prop_access": walkExpr(e.receiver); return;
-        case "elem_access": walkExpr(e.receiver); walkExpr(e.index); return;
-        case "prefix_op":
-        case "postfix_op": walkExpr(e.operand); return;
-        case "bin_op": walkExpr(e.lhs); walkExpr(e.rhs); return;
-        case "instanceof_expr": walkExpr(e.lhs); walkExpr(e.rhs); return;
-        case "typeof_expr": walkExpr(e.operand); return;
-        case "ternary_expr": walkExpr(e.cond); walkExpr(e.thenBranch); walkExpr(e.elseBranch); return;
-        case "assign_expr": walkExpr(e.target); walkExpr(e.value); return;
-        case "non_null": walkExpr(e.operand); return;
-        case "spread_expr": walkExpr(e.operand); return;
-        case "arrow_expr": return; // function boundary
-      }
-    };
-    const walk = (s: Stmt): void => {
-      switch (s.kind) {
-        case "break_stmt":
-          throw new CodegenError(
-            s,
-            "`break` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
-          );
-        case "continue_stmt":
-          throw new CodegenError(
-            s,
-            "`continue` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
-          );
-        case "expr_stmt": walkExpr(s.expr); return;
-        case "var_decl": if (s.init) walkExpr(s.init); return;
-        case "var_destr_decl": walkExpr(s.init); return;
-        case "block_stmt": for (const st of s.stmts) walk(st); return;
-        case "if_stmt":
-          walkExpr(s.cond); walk(s.thenBranch);
-          if (s.elseBranch) walk(s.elseBranch);
-          return;
-        case "while_stmt": walkExpr(s.cond); walk(s.body); return;
-        case "do_while_stmt": walk(s.body); walkExpr(s.cond); return;
-        case "for_stmt":
-          if (s.init) {
-            if (s.init.kind === "for_init_decl") walk(s.init.decl);
-            else walkExpr(s.init.expr);
-          }
-          if (s.cond) walkExpr(s.cond);
-          if (s.update) walkExpr(s.update);
-          walk(s.body);
-          return;
-        case "for_of_stmt": walkExpr(s.source); walk(s.body); return;
-        case "switch_stmt":
-          walkExpr(s.discriminant);
-          for (const c of s.cases) {
-            if (c.test) walkExpr(c.test);
-            for (const st of c.stmts) walk(st);
-          }
-          return;
-        case "try_stmt":
-          for (const st of s.tryBlock.stmts) walk(st);
-          if (s.catchClause) for (const st of s.catchClause.body.stmts) walk(st);
-          if (s.finallyBlock) for (const st of s.finallyBlock.stmts) walk(st);
-          return;
-        case "return_stmt": if (s.value) walkExpr(s.value); return;
-        case "throw_stmt": walkExpr(s.value); return;
-        case "empty_stmt": return;
-      }
-    };
-    for (const s of block.stmts) walk(s);
+    for (const s of block.stmts) this.checkTryBodyNoEscapeStmt(s);
+  }
+
+  // Recursive visitor over the Topaz statement / expression tree. Descent stops
+  // at function boundaries (`arrow_expr`); the subset forbids nested function /
+  // class declarations inside blocks (convert rejects them), so arrows are the
+  // only barrier to honor.
+  private checkTryBodyNoEscapeStmt(s: Stmt): void {
+    switch (s.kind) {
+      case "break_stmt":
+        throw new CodegenError(
+          { pos: s.pos },
+          "`break` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
+        );
+      case "continue_stmt":
+        throw new CodegenError(
+          { pos: s.pos },
+          "`continue` inside a `try` body is unsupported (would skip topaz_try_pop); lift the loop out of the try",
+        );
+      case "expr_stmt":
+        this.checkTryBodyNoEscapeExpr(s.expr);
+        return;
+      case "var_decl":
+        const varDeclInit = s.init;
+        if (varDeclInit !== undefined) this.checkTryBodyNoEscapeExpr(varDeclInit);
+        return;
+      case "var_destr_decl":
+        this.checkTryBodyNoEscapeExpr(s.init);
+        return;
+      case "block_stmt":
+        for (const st of s.stmts) this.checkTryBodyNoEscapeStmt(st);
+        return;
+      case "if_stmt":
+        this.checkTryBodyNoEscapeExpr(s.cond);
+        this.checkTryBodyNoEscapeStmt(s.thenBranch);
+        const ifElseBranch = s.elseBranch;
+        if (ifElseBranch !== undefined) this.checkTryBodyNoEscapeStmt(ifElseBranch);
+        return;
+      case "while_stmt":
+        this.checkTryBodyNoEscapeExpr(s.cond);
+        this.checkTryBodyNoEscapeStmt(s.body);
+        return;
+      case "do_while_stmt":
+        this.checkTryBodyNoEscapeStmt(s.body);
+        this.checkTryBodyNoEscapeExpr(s.cond);
+        return;
+      case "for_stmt":
+        const forInit = s.init;
+        if (forInit !== undefined) {
+          if (forInit.kind === "for_init_decl") this.checkTryBodyNoEscapeStmt(forInit.decl);
+          else this.checkTryBodyNoEscapeExpr(forInit.expr);
+        }
+        const forCond = s.cond;
+        if (forCond !== undefined) this.checkTryBodyNoEscapeExpr(forCond);
+        const forUpdate = s.update;
+        if (forUpdate !== undefined) this.checkTryBodyNoEscapeExpr(forUpdate);
+        this.checkTryBodyNoEscapeStmt(s.body);
+        return;
+      case "for_of_stmt":
+        this.checkTryBodyNoEscapeExpr(s.source);
+        this.checkTryBodyNoEscapeStmt(s.body);
+        return;
+      case "switch_stmt":
+        this.checkTryBodyNoEscapeExpr(s.discriminant);
+        for (const c of s.cases) {
+          const switchCaseTest = c.test;
+          if (switchCaseTest !== undefined) this.checkTryBodyNoEscapeExpr(switchCaseTest);
+          for (const st of c.stmts) this.checkTryBodyNoEscapeStmt(st);
+        }
+        return;
+      case "try_stmt":
+        for (const st of s.tryBlock.stmts) this.checkTryBodyNoEscapeStmt(st);
+        const nestedCatchClause = s.catchClause;
+        if (nestedCatchClause !== undefined) {
+          for (const st of nestedCatchClause.body.stmts) this.checkTryBodyNoEscapeStmt(st);
+        }
+        const nestedFinallyBlock = s.finallyBlock;
+        if (nestedFinallyBlock !== undefined) {
+          for (const st of nestedFinallyBlock.stmts) this.checkTryBodyNoEscapeStmt(st);
+        }
+        return;
+      case "return_stmt":
+        const returnValue = s.value;
+        if (returnValue !== undefined) this.checkTryBodyNoEscapeExpr(returnValue);
+        return;
+      case "throw_stmt":
+        this.checkTryBodyNoEscapeExpr(s.value);
+        return;
+      case "empty_stmt":
+        return;
+    }
+  }
+
+  private checkTryBodyNoEscapeExpr(e: Expr): void {
+    switch (e.kind) {
+      case "ident":
+      case "num_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "this_expr":
+      case "import_meta_url":
+        return;
+      case "template_lit":
+        for (const sub of e.subs) this.checkTryBodyNoEscapeExpr(sub.expr);
+        return;
+      case "array_lit":
+        for (const el of e.elems) this.checkTryBodyNoEscapeExpr(el.expr);
+        return;
+      case "object_lit":
+        for (const m of e.props) {
+          if (m.kind === "prop_kv") this.checkTryBodyNoEscapeExpr(m.value);
+          else if (m.kind === "prop_spread") this.checkTryBodyNoEscapeExpr(m.expr);
+        }
+        return;
+      case "paren_expr":
+        this.checkTryBodyNoEscapeExpr(e.inner);
+        return;
+      case "call_expr":
+        this.checkTryBodyNoEscapeExpr(e.callee);
+        for (const a of e.args) this.checkTryBodyNoEscapeExpr(a);
+        return;
+      case "new_expr":
+        this.checkTryBodyNoEscapeExpr(e.callee);
+        for (const a of e.args) this.checkTryBodyNoEscapeExpr(a);
+        return;
+      case "prop_access":
+        this.checkTryBodyNoEscapeExpr(e.receiver);
+        return;
+      case "elem_access":
+        this.checkTryBodyNoEscapeExpr(e.receiver);
+        this.checkTryBodyNoEscapeExpr(e.index);
+        return;
+      case "prefix_op":
+        this.checkTryBodyNoEscapeExpr(e.operand);
+        return;
+      case "postfix_op":
+        this.checkTryBodyNoEscapeExpr(e.operand);
+        return;
+      case "bin_op":
+        this.checkTryBodyNoEscapeExpr(e.lhs);
+        this.checkTryBodyNoEscapeExpr(e.rhs);
+        return;
+      case "instanceof_expr":
+        this.checkTryBodyNoEscapeExpr(e.lhs);
+        this.checkTryBodyNoEscapeExpr(e.rhs);
+        return;
+      case "typeof_expr":
+        this.checkTryBodyNoEscapeExpr(e.operand);
+        return;
+      case "ternary_expr":
+        this.checkTryBodyNoEscapeExpr(e.cond);
+        this.checkTryBodyNoEscapeExpr(e.thenBranch);
+        this.checkTryBodyNoEscapeExpr(e.elseBranch);
+        return;
+      case "assign_expr":
+        this.checkTryBodyNoEscapeExpr(e.target);
+        this.checkTryBodyNoEscapeExpr(e.value);
+        return;
+      case "non_null":
+        this.checkTryBodyNoEscapeExpr(e.operand);
+        return;
+      case "spread_expr":
+        this.checkTryBodyNoEscapeExpr(e.operand);
+        return;
+      case "arrow_expr":
+        return;
+    }
   }
 
   private emitStatementAsBlock(
