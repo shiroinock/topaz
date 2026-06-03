@@ -7634,24 +7634,25 @@ class Emitter {
     expr: NewExpr,
     expected: TopazType | undefined,
   ): TopazType {
+    const constructorAnchor: { pos: number } = { pos: expr.pos };
     if (expr.typeArgs.length === 2) {
-      const k = this.typeFromAnnotation(expr.typeArgs[0], expr, g_currentModule!);
-      const v = this.typeFromAnnotation(expr.typeArgs[1], expr, g_currentModule!);
+      const k = this.typeFromAnnotation(expr.typeArgs[0], constructorAnchor, g_currentModule!);
+      const v = this.typeFromAnnotation(expr.typeArgs[1], constructorAnchor, g_currentModule!);
       const t = mapOf(k, v);
       if (t === undefined) {
-        throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
+        throw new CodegenError(constructorAnchor, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
       }
       if (expected !== undefined && !typeEq(expected, t)) {
-        throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
+        throw new CodegenError(constructorAnchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       return t;
     }
     if (expr.typeArgs.length !== 0) {
-      throw new CodegenError({ pos: expr.pos }, "Map<K, V> requires exactly two type arguments");
+      throw new CodegenError(constructorAnchor, "Map<K, V> requires exactly two type arguments");
     }
     if (expected === undefined || !isMapType(expected)) {
       throw new CodegenError(
-        { pos: expr.pos },
+        constructorAnchor,
         "cannot infer Map type arguments; write `new Map<K, V>()` or annotate the binding",
       );
     }
@@ -7705,23 +7706,24 @@ class Emitter {
     expr: NewExpr,
     expected: TopazType | undefined,
   ): TopazType {
+    const constructorAnchor: { pos: number } = { pos: expr.pos };
     if (expr.typeArgs.length === 1) {
-      const elem = this.typeFromAnnotation(expr.typeArgs[0], expr, g_currentModule!);
+      const elem = this.typeFromAnnotation(expr.typeArgs[0], constructorAnchor, g_currentModule!);
       const t = setOf(elem);
       if (t === undefined) {
-        throw new CodegenError({ pos: expr.pos }, `no Set monomorph for element type ${typeIdent(elem)}`);
+        throw new CodegenError(constructorAnchor, `no Set monomorph for element type ${typeIdent(elem)}`);
       }
       if (expected !== undefined && !typeEq(expected, t)) {
-        throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
+        throw new CodegenError(constructorAnchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       return t;
     }
     if (expr.typeArgs.length !== 0) {
-      throw new CodegenError({ pos: expr.pos }, "Set<T> requires exactly one type argument");
+      throw new CodegenError(constructorAnchor, "Set<T> requires exactly one type argument");
     }
     if (expected === undefined || !isSetType(expected)) {
       throw new CodegenError(
-        { pos: expr.pos },
+        constructorAnchor,
         "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
       );
     }
@@ -10273,24 +10275,25 @@ class Emitter {
         throw new CodegenError({ pos: expr.pos }, "only `new Map<K, V>()` and `new Set<T>()` are supported");
       }
       const name = callee.name;
+      const constructorAnchor: { pos: number } = { pos: expr.pos };
       if (name === "Map") {
         if (expr.args.length !== 0) {
-          throw new CodegenError({ pos: expr.pos }, "Map() constructor arguments are unsupported");
+          throw new CodegenError(constructorAnchor, "Map() constructor arguments are unsupported");
         }
         if (expr.typeArgs.length !== 2) {
-          throw new CodegenError({ pos: expr.pos }, "Map<K, V> requires exactly two type arguments");
+          throw new CodegenError(constructorAnchor, "Map<K, V> requires exactly two type arguments");
         }
-        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
-        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
+        const k = this.typeFromAnnotation(expr.typeArgs[0]!, constructorAnchor, g_currentModule!);
+        const v = this.typeFromAnnotation(expr.typeArgs[1]!, constructorAnchor, g_currentModule!);
         const t = mapOf(k, v);
-        if (t === undefined) throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
+        if (t === undefined) throw new CodegenError(constructorAnchor, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         this.recordMapMonomorph(t);
         return t;
       }
       if (name === "Set") {
         return this.resolveSetConstructorType(expr, undefined);
       }
-      const newAnchor: { pos: number } = { pos: expr.pos };
+      const newAnchor: { pos: number } = constructorAnchor;
       if (this.genericClasses.has(name)) {
         return this.instantiateGenericClass(name, expr.typeArgs, newAnchor, g_currentModule!);
       }
