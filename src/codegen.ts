@@ -2778,7 +2778,7 @@ class Emitter {
   private emitArrayMonomorphMacro(t: TopazType): string {
     const tag = arrayShortName(t);
     const elem = arrayElem(t)!;
-    let cElem: string;
+    let cElem: string = "";
     if (isClassType(elem)) {
       cElem = `topaz_class_${classNameOf(elem)!} *`;
     } else if (isInterfaceType(elem)) {
