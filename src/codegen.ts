@@ -7465,14 +7465,14 @@ class Emitter {
         const srcType = this.inferType(e.expr);
         if (!isArrayType(srcType)) {
           throw new CodegenError(
-            e.expr,
+            { pos: e.expr.pos },
             `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
           );
         }
         const srcElem = arrayElem(srcType)!;
         if (!typeEq(srcElem, elemType)) {
           throw new CodegenError(
-            e.expr,
+            { pos: e.expr.pos },
             `spread element type ${typeIdent(srcElem)} does not match destination element type ${typeIdent(elemType)}`,
           );
         }
@@ -7508,7 +7508,7 @@ class Emitter {
       const srcType = this.inferType(first.expr);
       if (!isArrayType(srcType)) {
         throw new CodegenError(
-          first.expr,
+          { pos: first.expr.pos },
           `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
         );
       }
@@ -7524,7 +7524,7 @@ class Emitter {
     if (expr.elems.length === 0) {
       if (!expected || !isArrayType(expected)) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           "cannot infer element type of empty array literal; add an `Array<T>` annotation",
         );
       }
@@ -7539,7 +7539,7 @@ class Emitter {
     const elem = this.firstArrayLiteralElementType(expr);
     const arr = arrayOf(elem);
     if (!arr) {
-      throw new CodegenError(expr, `no Array monomorph for element type ${typeIdent(elem)}`);
+      throw new CodegenError({ pos: expr.pos }, `no Array monomorph for element type ${typeIdent(elem)}`);
     }
     this.recordArrayMonomorph(arr);
     return arr;
@@ -7550,13 +7550,13 @@ class Emitter {
     expected: TopazType | undefined,
   ): string {
     if (expr.callee.kind !== "ident") {
-      throw new CodegenError(expr, "only `new Map<K, V>()`, `new Set<T>()`, and class instantiation are supported");
+      throw new CodegenError({ pos: expr.pos }, "only `new Map<K, V>()`, `new Set<T>()`, and class instantiation are supported");
     }
     // Phase 1.5-3.5h-spread: same positional-arguments invariant as emitCall.
     for (const a of expr.args) {
       if (a.kind === "spread_expr") {
         throw new CodegenError(
-          a,
+          { pos: a.pos },
           "spread in `new` arguments is unsupported",
         );
       }
@@ -7564,13 +7564,13 @@ class Emitter {
     const name = expr.callee.name;
     if (name === "Array") {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "use array literal syntax (`[...]` or `[]`) instead of `new Array()`",
       );
     }
     if (name === "Map" && expr.args.length > 0) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "Map() constructor arguments are unsupported",
       );
     }
@@ -7634,19 +7634,19 @@ class Emitter {
       const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
       const t = mapOf(k, v);
       if (!t) {
-        throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
+        throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
       }
       if (expected && !typeEq(expected, t)) {
-        throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
+        throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       return t;
     }
     if (expr.typeArgs.length !== 0) {
-      throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
+      throw new CodegenError({ pos: expr.pos }, "Map<K, V> requires exactly two type arguments");
     }
     if (!expected || !isMapType(expected)) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "cannot infer Map type arguments; write `new Map<K, V>()` or annotate the binding",
       );
     }
@@ -7665,13 +7665,13 @@ class Emitter {
     }
     if (sourceElem === undefined) {
       throw new CodegenError(
-        source,
+        { pos: source.pos },
         `Set() constructor source must be an Array<T>, Set<T>, or Iterator<T> (got ${typeIdent(sourceType)})`,
       );
     }
     if (!typeEq(sourceElem, elem)) {
       throw new CodegenError(
-        source,
+        { pos: source.pos },
         `Set() constructor element type mismatch: expected ${typeIdent(elem)}, got ${typeIdent(sourceElem)}`,
       );
     }
@@ -7683,7 +7683,7 @@ class Emitter {
     expected: TopazType | undefined,
   ): TopazType {
     if (expr.args.length > 1) {
-      throw new CodegenError(expr, "Set() constructor expects at most one argument");
+      throw new CodegenError({ pos: expr.pos }, "Set() constructor expects at most one argument");
     }
 
     const setType = this.resolveSetConstructorDeclaredType(expr, expected);
@@ -7704,19 +7704,19 @@ class Emitter {
       const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
       const t = setOf(elem);
       if (!t) {
-        throw new CodegenError(expr, `no Set monomorph for element type ${typeIdent(elem)}`);
+        throw new CodegenError({ pos: expr.pos }, `no Set monomorph for element type ${typeIdent(elem)}`);
       }
       if (expected && !typeEq(expected, t)) {
-        throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
+        throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       return t;
     }
     if (expr.typeArgs.length !== 0) {
-      throw new CodegenError(expr, "Set<T> requires exactly one type argument");
+      throw new CodegenError({ pos: expr.pos }, "Set<T> requires exactly one type argument");
     }
     if (!expected || !isSetType(expected)) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
       );
     }
@@ -9719,7 +9719,7 @@ class Emitter {
     if (expr.kind === "array_lit") {
       if (expr.elems.length === 0) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           "cannot infer element type of empty array literal; add an `Array<T>` annotation",
         );
       }
@@ -9736,7 +9736,7 @@ class Emitter {
       }
       const arr = arrayOf(elem);
       if (!arr) {
-        throw new CodegenError(expr, `no Array monomorph for element type ${typeIdent(elem)}`);
+        throw new CodegenError({ pos: expr.pos }, `no Array monomorph for element type ${typeIdent(elem)}`);
       }
       this.recordArrayMonomorph(arr);
       return arr;
@@ -10264,20 +10264,20 @@ class Emitter {
     }
     if (expr.kind === "new_expr") {
       if (expr.callee.kind !== "ident") {
-        throw new CodegenError(expr, "only `new Map<K, V>()` and `new Set<T>()` are supported");
+        throw new CodegenError({ pos: expr.pos }, "only `new Map<K, V>()` and `new Set<T>()` are supported");
       }
       const name = expr.callee.name;
       if (name === "Map") {
         if (expr.args.length !== 0) {
-          throw new CodegenError(expr, "Map() constructor arguments are unsupported");
+          throw new CodegenError({ pos: expr.pos }, "Map() constructor arguments are unsupported");
         }
         if (expr.typeArgs.length !== 2) {
-          throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
+          throw new CodegenError({ pos: expr.pos }, "Map<K, V> requires exactly two type arguments");
         }
         const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
         const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
         const t = mapOf(k, v);
-        if (!t) throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
+        if (!t) throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         this.recordMapMonomorph(t);
         return t;
       }
