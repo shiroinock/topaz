@@ -9321,12 +9321,13 @@ class Emitter {
   ): string {
     const cls = this.classes.get(classNameOf(baseType)!)!;
     const mname = callee.name;
+    const calleeAnchor: { pos: number } = { pos: callee.pos };
     const method = cls.methods.get(mname);
-    if (!method) {
+    if (method === undefined) {
       if (cls.fields.has(mname)) {
-        throw new CodegenError(callee, `'${mname}' is a field, not a method, on class '${cls.name}'`);
+        throw new CodegenError(calleeAnchor, `'${mname}' is a field, not a method, on class '${cls.name}'`);
       }
-      throw new CodegenError(callee, `class '${cls.name}' has no method '${mname}'`);
+      throw new CodegenError(calleeAnchor, `class '${cls.name}' has no method '${mname}'`);
     }
     const base = this.emitExpression(callee.receiver);
     const argParts = [
@@ -9343,12 +9344,13 @@ class Emitter {
   ): string {
     const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
     const mname = callee.name;
+    const calleeAnchor: { pos: number } = { pos: callee.pos };
     const sig = iface.methods.get(mname);
-    if (!sig) {
+    if (sig === undefined) {
       if (iface.fields.has(mname)) {
-        throw new CodegenError(callee, `'${mname}' is a field, not a method, on interface '${iface.name}'`);
+        throw new CodegenError(calleeAnchor, `'${mname}' is a field, not a method, on interface '${iface.name}'`);
       }
-      throw new CodegenError(callee, `interface '${iface.name}' has no method '${mname}'`);
+      throw new CodegenError(calleeAnchor, `interface '${iface.name}' has no method '${mname}'`);
     }
     const id = this.tmpCounter++;
     const tmp = `__topaz_ib_${id}`;
@@ -9435,34 +9437,35 @@ class Emitter {
   private resolveOptionalFieldType(
     expr: PropAccessExpr,
   ): { baseType: TopazType; inner: TopazType; fieldType: TopazType } {
+    const exprAnchor: { pos: number } = { pos: expr.pos };
     const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.receiver);
     const fname = expr.name;
     if (isClassType(inner)) {
       const cls = this.classes.get(classNameOf(inner)!)!;
       const ft = cls.fields.get(fname);
-      if (ft) return { baseType, inner, fieldType: ft };
+      if (ft !== undefined) return { baseType, inner, fieldType: ft };
       if (cls.methods.has(fname)) {
         throw new CodegenError(
-          expr,
+          exprAnchor,
           `method '${fname}' cannot be used as a value (call it with \`?.${fname}()\` instead)`,
         );
       }
-      throw new CodegenError(expr, `class '${cls.name}' has no member '${fname}'`);
+      throw new CodegenError(exprAnchor, `class '${cls.name}' has no member '${fname}'`);
     }
     if (isInterfaceType(inner)) {
       const iface = this.interfaces.get(interfaceNameOf(inner)!)!;
       const ft = iface.fields.get(fname);
-      if (ft) return { baseType, inner, fieldType: ft };
+      if (ft !== undefined) return { baseType, inner, fieldType: ft };
       if (iface.methods.has(fname)) {
         throw new CodegenError(
-          expr,
+          exprAnchor,
           `method '${fname}' cannot be used as a value (call it with \`?.${fname}()\` instead)`,
         );
       }
-      throw new CodegenError(expr, `interface '${iface.name}' has no member '${fname}'`);
+      throw new CodegenError(exprAnchor, `interface '${iface.name}' has no member '${fname}'`);
     }
     throw new CodegenError(
-      expr,
+      exprAnchor,
       `optional property access \`?.\` is only supported on class / interface receivers (got ${typeIdent(baseType)})`,
     );
   }
@@ -9470,28 +9473,29 @@ class Emitter {
   private resolveOptionalMethodSig(
     callee: PropAccessExpr,
   ): { baseType: TopazType; inner: TopazType; sig: { params: ParamInfo[]; returnType: TopazType } } {
+    const calleeAnchor: { pos: number } = { pos: callee.pos };
     const { baseType, inner } = this.resolveOptionalReceiver(callee, callee.receiver);
     const mname = callee.name;
     if (isClassType(inner)) {
       const cls = this.classes.get(classNameOf(inner)!)!;
       const m = cls.methods.get(mname);
-      if (m) return { baseType, inner, sig: { params: m.params, returnType: m.returnType } };
+      if (m !== undefined) return { baseType, inner, sig: { params: m.params, returnType: m.returnType } };
       if (cls.fields.has(mname)) {
-        throw new CodegenError(callee, `'${mname}' is a field, not a method, on class '${cls.name}'`);
+        throw new CodegenError(calleeAnchor, `'${mname}' is a field, not a method, on class '${cls.name}'`);
       }
-      throw new CodegenError(callee, `class '${cls.name}' has no method '${mname}'`);
+      throw new CodegenError(calleeAnchor, `class '${cls.name}' has no method '${mname}'`);
     }
     if (isInterfaceType(inner)) {
       const iface = this.interfaces.get(interfaceNameOf(inner)!)!;
       const s = iface.methods.get(mname);
-      if (s) return { baseType, inner, sig: { params: s.params, returnType: s.returnType } };
+      if (s !== undefined) return { baseType, inner, sig: { params: s.params, returnType: s.returnType } };
       if (iface.fields.has(mname)) {
-        throw new CodegenError(callee, `'${mname}' is a field, not a method, on interface '${iface.name}'`);
+        throw new CodegenError(calleeAnchor, `'${mname}' is a field, not a method, on interface '${iface.name}'`);
       }
-      throw new CodegenError(callee, `interface '${iface.name}' has no method '${mname}'`);
+      throw new CodegenError(calleeAnchor, `interface '${iface.name}' has no method '${mname}'`);
     }
     throw new CodegenError(
-      callee,
+      calleeAnchor,
       `optional method call \`?.\` is only supported on class / interface receivers (got ${typeIdent(baseType)})`,
     );
   }
@@ -9751,7 +9755,7 @@ class Emitter {
       if (isClassType(baseType)) {
         const cls = this.classes.get(classNameOf(baseType)!)!;
         const fieldType = cls.fields.get(expr.name);
-        if (fieldType) {
+        if (fieldType !== undefined) {
           // A string-literal field (e.g. a discriminator) read off a concrete
           // instance yields a runtime `topaz_string`; widen to `string` for
           // consumption so console.log / template / concat dispatch correctly.
@@ -9777,7 +9781,7 @@ class Emitter {
       if (isInterfaceType(baseType)) {
         const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
         const f = iface.fields.get(expr.name);
-        if (f) return f;
+        if (f !== undefined) return f;
         if (iface.methods.has(expr.name)) {
           throw new CodegenError(
             exprAnchor,
@@ -10263,7 +10267,7 @@ class Emitter {
         if (isClassType(baseType)) {
           const cls = this.classes.get(classNameOf(baseType)!)!;
           const method = cls.methods.get(prop.name);
-          if (!method) {
+          if (method === undefined) {
             throw new CodegenError({ pos: prop.pos }, `class '${cls.name}' has no method '${prop.name}'`);
           }
           return method.returnType;
@@ -10271,7 +10275,7 @@ class Emitter {
         if (isInterfaceType(baseType)) {
           const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
           const sig = iface.methods.get(prop.name);
-          if (!sig) {
+          if (sig === undefined) {
             throw new CodegenError({ pos: prop.pos }, `interface '${iface.name}' has no method '${prop.name}'`);
           }
           return sig.returnType;
