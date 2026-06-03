@@ -4256,10 +4256,13 @@ class Emitter {
     let envTypedef = "";
     if (!envIsEmpty) {
       const fieldLines: string[] = [];
-      for (const captureEntry of captures.entries()) {
-        const n = captureEntry[0];
-        const t = captureEntry[1];
-        fieldLines.push(`  ${cTypeName(t)} ${n};`);
+      for (const n of captures.keys()) {
+        const tMaybe = captures.get(n);
+        if (tMaybe === undefined) {
+          throwInternalCodegenError(`emitArrowFunction: missing captured type for '${n}'`);
+        } else {
+          fieldLines.push(`  ${cTypeName(tMaybe)} ${n};`);
+        }
       }
       envTypedef = `typedef struct ${envName} {\n${fieldLines.join("\n")}\n} ${envName};`;
     }
@@ -4330,15 +4333,18 @@ class Emitter {
       return `((${fnTypeName}){ .fn = (${retCType}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = NULL })`;
     }
     const envExprParts: string[] = [];
-    for (const captureEntry of captures.entries()) {
-      const name = captureEntry[0];
-      const t = captureEntry[1];
-      // Emit each capture using the *outer* scope. The barrier is already
-      // popped, so a plain emitExpression reads from the correct frame.
-      // Use a fresh tmp-free expression: re-emit the identifier the same way
-      // the outer scope sees it.
-      const captureExpr = this.emitCapturedIdentifier(name, t, arrow);
-      envExprParts.push(`.${name} = ${captureExpr}`);
+    for (const name of captures.keys()) {
+      const tMaybe = captures.get(name);
+      if (tMaybe === undefined) {
+        throwInternalCodegenError(`emitArrowFunction: missing captured type for '${name}'`);
+      } else {
+        // Emit each capture using the *outer* scope. The barrier is already
+        // popped, so a plain emitExpression reads from the correct frame.
+        // Use a fresh tmp-free expression: re-emit the identifier the same way
+        // the outer scope sees it.
+        const captureExpr = this.emitCapturedIdentifier(name, tMaybe, arrow);
+        envExprParts.push(`.${name} = ${captureExpr}`);
+      }
     }
     const envInit = `({ ${envName} *__e = topaz_arena_alloc(sizeof(${envName})); *__e = (${envName}){ ${envExprParts.join(", ")} }; __e; })`;
     return `((${fnTypeName}){ .fn = (${retCType}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = ${envInit} })`;
