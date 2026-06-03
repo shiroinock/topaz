@@ -358,6 +358,8 @@ run_fail_case string_ends_with_arg_type_fail examples/string_ends_with_arg_type_
 run_case string_repeat $'xxx\n3\n0\ntrue\naa\npre-haha\nqq'
 run_fail_case string_repeat_arity_fail examples/string_repeat_arity_fail.ts "String.repeat expects exactly one argument"
 run_fail_case string_repeat_arg_type_fail examples/string_repeat_arg_type_fail.ts "String.repeat argument must be number, got topaz_string"
+run_case string_trim_start $'topaz\n5\nok\n2\nready\n5\n0\ntrue\npre-value\nbc\nxxx\nname'
+run_fail_case string_trim_start_arity_fail examples/string_trim_start_arity_fail.ts "String.trimStart expects no arguments"
 run_fail_case string_unsupported_method_fail examples/string_unsupported_method_fail.ts "unsupported method '.indexOf' on topaz_string"
 
 run_case string_from_char_code $'A\na\n0\nz\nB\n1\n72\nHello\n5\nA\nz\nmark=!\n1\n1\n127\nA\nA\nD\nZ\nabcde'

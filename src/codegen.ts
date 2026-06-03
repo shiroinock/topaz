@@ -8146,8 +8146,9 @@ class Emitter {
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
-  // Phase 1.5-6 prep #10/#6f: String.prototype.charCodeAt / .slice /
-  // .startsWith / .endsWith. Arguments are exact Topaz types (no JS coercion).
+  // Phase 1.5-6 prep #10/#6f/#6i: String.prototype.charCodeAt / .slice /
+  // .repeat / .trimStart / .startsWith / .endsWith. Arguments are exact Topaz
+  // types (no JS coercion).
   // Missing slice args lower to `(double)NAN` so topaz_slice_normalize picks
   // the default. startsWith / endsWith intentionally accept only search.
   private emitStringMethodCall(
@@ -8208,6 +8209,12 @@ class Emitter {
       }
       const count = this.emitWithExpected(countArg, T_NUMBER);
       return `topaz_string_repeat(${base}, ${count})`;
+    }
+    if (method === "trimStart") {
+      if (expr.args.length !== 0) {
+        throw new CodegenError(expr, "String.trimStart expects no arguments");
+      }
+      return `topaz_string_trim_start(${base})`;
     }
     if (method === "startsWith" || method === "endsWith") {
       if (expr.args.length !== 1) {
@@ -8820,6 +8827,12 @@ class Emitter {
           countArg,
           `String.repeat argument must be number, got ${typeIdent(countType)}`,
         );
+      }
+      return T_STRING;
+    }
+    if (method === "trimStart") {
+      if (expr.args.length !== 0) {
+        throw new CodegenError(expr, "String.trimStart expects no arguments");
       }
       return T_STRING;
     }

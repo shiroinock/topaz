@@ -125,6 +125,27 @@ static inline topaz_boolean topaz_string_ends_with(topaz_string s, topaz_string 
   return memcmp(s.data + (s.len - search.len), search.data, search.len) == 0;
 }
 
+static inline topaz_boolean topaz_string_is_trim_start_byte(unsigned char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static inline topaz_string topaz_string_trim_start(topaz_string s) {
+  size_t start = 0;
+  while (start < s.len && topaz_string_is_trim_start_byte((unsigned char)s.data[start])) {
+    start += 1;
+  }
+  size_t out_len = s.len - start;
+  if (out_len == 0) {
+    topaz_string r = { "", 0 };
+    return r;
+  }
+  char *buf = (char *)topaz_arena_alloc(out_len + 1);
+  memcpy(buf, s.data + start, out_len);
+  buf[out_len] = '\0';
+  topaz_string r = { buf, out_len };
+  return r;
+}
+
 #ifndef TOPAZ_STRING_REPEAT_MAX_BYTES
 #define TOPAZ_STRING_REPEAT_MAX_BYTES ((size_t)256u * 1024u * 1024u)
 #endif
