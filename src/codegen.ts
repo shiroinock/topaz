@@ -6880,16 +6880,20 @@ class Emitter {
     }
     if (expr.kind === "bool_lit") return expr.value ? "true" : "false";
     if (expr.kind === "null_lit") {
-      unsupported(expr, "expression");
+      throw new CodegenError({ pos: expr.pos }, "unsupported expression (null_lit)");
     }
     if (expr.kind === "this_expr") {
-      if (!this.currentClass) {
-        throw new CodegenError(expr, "`this` is only valid inside class methods or constructors");
+      const currentClass = this.currentClass;
+      if (currentClass === undefined) {
+        throw new CodegenError(
+          { pos: expr.pos },
+          "`this` is only valid inside class methods or constructors",
+        );
       }
       return TOPAZ_THIS;
     }
     if (expr.kind === "str_lit") {
-      return this.emitStringLiteralText(expr.value, expr);
+      return this.emitStringLiteralText(expr.value, { pos: expr.pos });
     }
     if (expr.kind === "template_lit") {
       return this.emitTemplateExpression(expr);
@@ -6905,15 +6909,19 @@ class Emitter {
       // through the env struct.
       const local = this.scope.lookup(expr.name);
       const captureContext = this.captureContext;
-      if (local === undefined && captureContext !== undefined && captureContext.captures.has(expr.name)) {
-        const envType = captureContext.envType;
-        return `(((${envType} *)__topaz_env)->${expr.name})`;
+      if (local === undefined) {
+        if (captureContext !== undefined) {
+          if (captureContext.captures.has(expr.name)) {
+            const envType = captureContext.envType;
+            return `(((${envType} *)__topaz_env)->${expr.name})`;
+          }
+        }
       }
       const b = local;
       if (b === undefined) {
-        const sig = this.resolveFunctionSig(expr.name, expr);
-        if (sig) return this.emitTopLevelFunctionValue(sig);
-        throw new CodegenError(expr, `unknown identifier '${expr.name}'`);
+        const sig = this.resolveFunctionSig(expr.name, { pos: expr.pos });
+        if (sig !== undefined) return this.emitTopLevelFunctionValue(sig);
+        throw new CodegenError({ pos: expr.pos }, `unknown identifier '${expr.name}'`);
       }
       // Phase 1.5-3c: when the binding's C representation is the scalar opt
       // struct (`topaz_opt_<scalar>`) but narrowing has stripped the
@@ -6921,7 +6929,7 @@ class Emitter {
       // interface T | undefined share T's C type, so no accessor is needed.
       const baseMaybe = this.scope.lookupBase(expr.name);
       if (baseMaybe === undefined) {
-        throw new CodegenError(expr, `identifier '${expr.name}' has no base binding`);
+        throw new CodegenError({ pos: expr.pos }, `identifier '${expr.name}' has no base binding`);
       }
       const base = baseMaybe;
       if (isScalarOptUnion(base.type) && !typeEq(base.type, b.type)) {
@@ -6936,9 +6944,11 @@ class Emitter {
       // identically.
       if (isClassType(b.type)) {
         const baseInner = base.type.kind === "union" ? withoutUndefined(base.type) : base.type;
-        if (baseInner && baseInner.kind === "dunion") {
-          const cname = classNameOf(b.type)!;
-          return `((topaz_class_${cname} *)(${expr.name}).data)`;
+        if (baseInner !== undefined) {
+          if (baseInner.kind === "dunion") {
+            const cname = classNameOf(b.type)!;
+            return `((topaz_class_${cname} *)(${expr.name}).data)`;
+          }
         }
       }
       // Phase 1.5-3f: narrowed unknown -> class. The base C type is `void *`
