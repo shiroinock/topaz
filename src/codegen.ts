@@ -98,6 +98,12 @@ type CheckedNodeChildProcessExecFileSyncArgs = {
   argsArg: Expr;
 };
 
+type CheckedNodePathBasenameArgs = {
+  pathArg: Expr;
+  extArg: Expr;
+  hasExt: boolean;
+};
+
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
@@ -8948,147 +8954,155 @@ class Emitter {
 
   // Phase 1.5-6 prep #18: node:path.dirname(p) の引数検査。1 引数 string のみ
   // (Node の dirname は単項)。emit/infer 両経路で同じ reject。
-  private checkNodePathDirnameArgs(expr: CallExpr): void {
+  private checkNodePathDirnameArgs(expr: CallExpr): Expr {
     if (expr.args.length !== 1) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "dirname expects exactly one argument: (path: string)",
       );
     }
-    const pathArg = expr.args[0]!;
+    const pathArg = expr.args[0];
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
-        pathArg,
+        { pos: pathArg.pos },
         `dirname path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
+    return pathArg;
   }
 
   private emitNodePathDirname(expr: CallExpr): string {
-    this.checkNodePathDirnameArgs(expr);
-    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const pathArg = this.checkNodePathDirnameArgs(expr);
+    const path = this.emitWithExpected(pathArg, T_STRING);
     return `topaz_path_dirname(${path})`;
   }
 
   // Phase 1.5-6 prep #18: node:path.resolve(...segments) は variadic。1 個以上の
   // string 引数を要求し、`topaz_path_resolve(n, seg0, seg1, ...)` に lower する
   // (runtime 側で getcwd フォールバック + 正規化)。
-  private checkNodePathResolveArgs(expr: CallExpr): void {
+  private checkNodePathResolveArgs(expr: CallExpr): Array<Expr> {
     if (expr.args.length < 1) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "resolve expects at least one argument: (...segments: string[])",
       );
     }
-    for (const arg of expr.args) {
+    const args = expr.args;
+    for (const arg of args) {
       const argType = this.inferType(arg);
       if (argType.kind !== "string") {
         throw new CodegenError(
-          arg,
+          { pos: arg.pos },
           `resolve segment argument must be string, got ${typeIdent(argType)}`,
         );
       }
     }
+    return args;
   }
 
   private emitNodePathResolve(expr: CallExpr): string {
-    this.checkNodePathResolveArgs(expr);
-    const segs = expr.args
+    const args = this.checkNodePathResolveArgs(expr);
+    const segs = args
       .map((a) => this.emitWithExpected(a, T_STRING))
       .join(", ");
-    return `topaz_path_resolve(${expr.args.length}, ${segs})`;
+    return `topaz_path_resolve(${args.length}, ${segs})`;
   }
 
   // Phase 1.5-6 prep #21: node:path.basename(p, ext?) の引数検査。1 または 2
   // 引数で、いずれも string。Node の path.posix.basename と同じシグネチャ。
   // emit/infer 両経路で同じ reject。
-  private checkNodePathBasenameArgs(expr: CallExpr): void {
+  private checkNodePathBasenameArgs(expr: CallExpr): CheckedNodePathBasenameArgs {
     if (expr.args.length !== 1 && expr.args.length !== 2) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "basename expects one or two arguments: (path: string, ext?: string)",
       );
     }
-    const pathArg = expr.args[0]!;
+    const pathArg = expr.args[0];
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
-        pathArg,
+        { pos: pathArg.pos },
         `basename path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
     if (expr.args.length === 2) {
-      const extArg = expr.args[1]!;
+      const extArg = expr.args[1];
       const extType = this.inferType(extArg);
       if (extType.kind !== "string") {
         throw new CodegenError(
-          extArg,
+          { pos: extArg.pos },
           `basename ext argument must be string, got ${typeIdent(extType)}`,
         );
       }
+      return { pathArg, extArg, hasExt: true };
     }
+    return { pathArg, extArg: pathArg, hasExt: false };
   }
 
   private emitNodePathBasename(expr: CallExpr): string {
-    this.checkNodePathBasenameArgs(expr);
-    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
-    if (expr.args.length === 1) {
+    const checkedArgs = this.checkNodePathBasenameArgs(expr);
+    const path = this.emitWithExpected(checkedArgs.pathArg, T_STRING);
+    if (!checkedArgs.hasExt) {
       return `topaz_path_basename(${path})`;
     }
-    const ext = this.emitWithExpected(expr.args[1]!, T_STRING);
+    const ext = this.emitWithExpected(checkedArgs.extArg, T_STRING);
     return `topaz_path_basename_ext(${path}, ${ext})`;
   }
 
   // Phase 1.5-6 prep #22: node:path.extname(p) の引数検査。1 引数 string。
   // Node の path.posix.extname と同じシグネチャ。emit/infer 両経路で同じ reject。
-  private checkNodePathExtnameArgs(expr: CallExpr): void {
+  private checkNodePathExtnameArgs(expr: CallExpr): Expr {
     if (expr.args.length !== 1) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "extname expects exactly one argument: (path: string)",
       );
     }
-    const pathArg = expr.args[0]!;
+    const pathArg = expr.args[0];
     const pathType = this.inferType(pathArg);
     if (pathType.kind !== "string") {
       throw new CodegenError(
-        pathArg,
+        { pos: pathArg.pos },
         `extname path argument must be string, got ${typeIdent(pathType)}`,
       );
     }
+    return pathArg;
   }
 
   private emitNodePathExtname(expr: CallExpr): string {
-    this.checkNodePathExtnameArgs(expr);
-    const path = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const pathArg = this.checkNodePathExtnameArgs(expr);
+    const path = this.emitWithExpected(pathArg, T_STRING);
     return `topaz_path_extname(${path})`;
   }
 
   // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic、引数 0 個も
   // Node が `.` を返す仕様なので arity の下限は無し。全引数 string を要求し、
   // resolve と同じく `topaz_path_join(n, seg0, seg1, ...)` に lower する。
-  private checkNodePathJoinArgs(expr: CallExpr): void {
-    for (const arg of expr.args) {
+  private checkNodePathJoinArgs(expr: CallExpr): Array<Expr> {
+    const args = expr.args;
+    for (const arg of args) {
       const argType = this.inferType(arg);
       if (argType.kind !== "string") {
         throw new CodegenError(
-          arg,
+          { pos: arg.pos },
           `join segment argument must be string, got ${typeIdent(argType)}`,
         );
       }
     }
+    return args;
   }
 
   private emitNodePathJoin(expr: CallExpr): string {
-    this.checkNodePathJoinArgs(expr);
-    const segs = expr.args
+    const args = this.checkNodePathJoinArgs(expr);
+    const segs = args
       .map((a) => this.emitWithExpected(a, T_STRING))
       .join(", ");
-    if (expr.args.length === 0) {
+    if (args.length === 0) {
       return `topaz_path_join(0)`;
     }
-    return `topaz_path_join(${expr.args.length}, ${segs})`;
+    return `topaz_path_join(${args.length}, ${segs})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
