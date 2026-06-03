@@ -2837,7 +2837,7 @@ class Emitter {
       // `.kind` (empty topaz_string) and `.data` (NULL).
       optAbsent = `((${typeIdent(v)}){0})`;
     } else {
-      throw new Error(`emitMapMonomorphMacro: scalar V should be pre-expanded in runtime.h, got ${typeIdent(v)}`);
+      throwInternalCodegenError(`emitMapMonomorphMacro: scalar V should be pre-expanded in runtime.h, got ${typeIdent(v)}`);
     }
     return `TOPAZ_MAP_DEFINE(${tag}, ${typeIdent(k)}, ${cVal}, ${cVal}, topaz_opt_passthrough, ${optAbsent}, ${hashFn}, ${eqFn})`;
   }
