@@ -7143,20 +7143,24 @@ class Emitter {
       // (.present / .value); reference T uses NULL pointer sentinel; iface T
       // uses fat-pointer .data == NULL sentinel.
       const inner = this.inferType(expr.operand); // verifies T | undefined
-      const stripped = withoutUndefined(inner)!;
-      const valStr = this.emitExpression(expr.operand);
-      const id = this.tmpCounter++;
-      const tmp = `__topaz_nn_${id}`;
-      const ct = cTypeName(inner);
-      const panic = `fputs("topaz: non-null assertion failed\\n", stderr); abort();`;
-      if (isScalarType(stripped)) {
-        return `({ ${ct} ${tmp} = ${valStr}; if (!${tmp}.present) { ${panic} } ${tmp}.value; })`;
+      const stripped = withoutUndefined(inner);
+      if (stripped === undefined) {
+        throwInternalCodegenError("emitExpression: non-null assertion missing optional inner type after inferType");
+      } else {
+        const valStr = this.emitExpression(expr.operand);
+        const id = this.tmpCounter++;
+        const tmp = `__topaz_nn_${id}`;
+        const ct = cTypeName(inner);
+        const panic = `fputs("topaz: non-null assertion failed\\n", stderr); abort();`;
+        if (isScalarType(stripped)) {
+          return `({ ${ct} ${tmp} = ${valStr}; if (!${tmp}.present) { ${panic} } ${tmp}.value; })`;
+        }
+        // Phase 1.5-6 prep #15: dunion shares iface's `.data == NULL` sentinel.
+        if (isInterfaceType(stripped) || stripped.kind === "dunion") {
+          return `({ ${ct} ${tmp} = ${valStr}; if (${tmp}.data == NULL) { ${panic} } ${tmp}; })`;
+        }
+        return `({ ${ct} ${tmp} = ${valStr}; if (${tmp} == NULL) { ${panic} } ${tmp}; })`;
       }
-      // Phase 1.5-6 prep #15: dunion shares iface's `.data == NULL` sentinel.
-      if (isInterfaceType(stripped) || stripped.kind === "dunion") {
-        return `({ ${ct} ${tmp} = ${valStr}; if (${tmp}.data == NULL) { ${panic} } ${tmp}; })`;
-      }
-      return `({ ${ct} ${tmp} = ${valStr}; if (${tmp} == NULL) { ${panic} } ${tmp}; })`;
     }
     if (expr.kind === "prefix_op") {
       this.inferType(expr); // type-check
@@ -9901,7 +9905,7 @@ class Emitter {
       // upgraded to an error here).
       const inner = this.inferType(expr.operand);
       const stripped = withoutUndefined(inner);
-      if (!stripped || typeEq(stripped, inner)) {
+      if (stripped === undefined || typeEq(stripped, inner)) {
         throw new CodegenError(
           { pos: expr.pos },
           `non-null assertion (\`!\`) requires a \`T | undefined\` operand; got ${typeIdent(inner)}`,
