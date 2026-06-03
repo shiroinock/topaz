@@ -9425,9 +9425,10 @@ class Emitter {
   ): { baseType: TopazType; inner: TopazType } {
     const baseType = this.inferType(receiver);
     const inner = withoutUndefined(baseType);
-    if (!inner || typeEq(inner, baseType)) {
+    if (inner === undefined || typeEq(inner, baseType)) {
+      const exprAnchor: { pos: number } = { pos: expr.pos };
       throw new CodegenError(
-        expr,
+        exprAnchor,
         `optional chain \`?.\` requires a \`T | undefined\` receiver; got ${typeIdent(baseType)}`,
       );
     }
