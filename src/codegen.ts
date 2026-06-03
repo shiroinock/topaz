@@ -4076,7 +4076,7 @@ class Emitter {
   // arrows with no captures (env is just NULL) so the call site dispatch is
   // uniform.
   private emitFnTypedef(t: TopazType): string {
-    if (t.kind !== "fn") throw new Error("emitFnTypedef: not a fn type");
+    if (t.kind !== "fn") throwInternalCodegenError("emitFnTypedef: not a fn type");
     const name = typeIdent(t);
     const ret = cReturnTypeName(t.returnType);
     const paramList = t.params.length === 0
@@ -5378,11 +5378,11 @@ class Emitter {
   private emitModuleGlobalInit(stmt: Stmt, sf: SourceModule, indent: number): string {
     return this.withSfString(sf, () => {
       if (stmt.kind !== "var_decl" || stmt.init === undefined) {
-        throw new Error("emitModuleGlobalInit: expected initialized var_decl");
+        throwInternalCodegenError("emitModuleGlobalInit: expected initialized var_decl");
       }
       const varType = this.moduleGlobalTypes.get(stmt.name);
       if (varType === undefined) {
-        throw new Error("emitModuleGlobalInit: missing module global type");
+        throwInternalCodegenError("emitModuleGlobalInit: missing module global type");
       }
       const pad = "  ".repeat(indent);
       return `${pad}${stmt.name} = ${this.emitWithExpected(stmt.init, varType)};`;
@@ -7344,7 +7344,7 @@ class Emitter {
     callee: Expr,
     fnType: TopazType,
   ): string {
-    if (fnType.kind !== "fn") throw new Error("emitFnValueCall: not fn");
+    if (fnType.kind !== "fn") throwInternalCodegenError("emitFnValueCall: not fn");
     if (expr.args.length !== fnType.params.length) {
       throw new CodegenError(
         expr,
@@ -7388,7 +7388,7 @@ class Emitter {
       returnType: expected,
     };
     const fnType = this.inferArrowType(arrow, expectedFn);
-    if (fnType.kind !== "fn") throw new Error("emitContextualIIFE: not fn");
+    if (fnType.kind !== "fn") throwInternalCodegenError("emitContextualIIFE: not fn");
     const arrowStr = this.emitArrowFunction(arrow, expectedFn);
     const args = expr.args
       .map((a, i) => this.emitWithExpected(a, fnType.params[i]!.type))
