@@ -2803,7 +2803,7 @@ class Emitter {
     const tag = arrayShortName(t);
     const elem = arrayElem(t)!;
     if (elem.kind !== "fn") {
-      throw new Error(`emitArrayFnMonomorphMacro: not an fn-elem array, got ${typeIdent(elem)}`);
+      throwInternalCodegenError(`emitArrayFnMonomorphMacro: not an fn-elem array, got ${typeIdent(elem)}`);
     }
     return `TOPAZ_ARRAY_DEFINE(${tag}, ${typeIdent(elem)})`;
   }
