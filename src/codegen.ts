@@ -6198,17 +6198,7 @@ class Emitter {
     }
 
     this.pushLoopCtx("loop");
-    let bodyStr = "";
-    if (stmt.body.kind === "block_stmt") {
-      this.scope.push();
-      bodyStr = this.emitBlock(stmt.body, indent);
-      this.scope.pop();
-    } else {
-      this.scope.push();
-      const inner = this.emitStatement(stmt.body, indent + 1);
-      this.scope.pop();
-      bodyStr = `${pad}{\n${inner}\n${pad}}`;
-    }
+    const bodyStr = this.emitStatementAsBlock(stmt.body, indent);
     this.popLoopCtx();
     this.scope.pop();
     return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}`;
