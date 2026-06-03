@@ -7854,7 +7854,7 @@ class Emitter {
       case "!": return "!";
       case "++": return "++";
       case "--": return "--";
-      default: unsupported(expr, "prefix unary operator");
+      default: unsupported({ kind: expr.kind, pos: expr.pos }, "prefix unary operator");
     }
   }
 
@@ -7862,7 +7862,7 @@ class Emitter {
     switch (expr.op) {
       case "++": return "++";
       case "--": return "--";
-      default: unsupported(expr, "postfix unary operator");
+      default: unsupported({ kind: expr.kind, pos: expr.pos }, "postfix unary operator");
     }
   }
 
@@ -7878,7 +7878,7 @@ class Emitter {
       case "/=": return "/=";
       case "%=": return "%=";
       default:
-        unsupported(expr, "assignment operator");
+        unsupported({ kind: expr.kind, pos: expr.pos }, "assignment operator");
     }
   }
 
@@ -7899,9 +7899,9 @@ class Emitter {
       case "||": return "||";
       case "==":
       case "!=":
-        throw new CodegenError(expr, "loose equality (== / !=) is unsupported; use === / !==");
+        throw new CodegenError({ pos: expr.pos }, "loose equality (== / !=) is unsupported; use === / !==");
       default:
-        unsupported(expr, "binary operator");
+        unsupported({ kind: expr.kind, pos: expr.pos }, "binary operator");
     }
   }
 
@@ -9796,7 +9796,7 @@ class Emitter {
           this.expectType(expr.operand, T_NUMBER);
           return T_NUMBER;
         default:
-          unsupported(expr, "prefix unary operator");
+          unsupported({ kind: expr.kind, pos: expr.pos }, "prefix unary operator");
       }
     }
     if (expr.kind === "postfix_op") {
@@ -9961,7 +9961,7 @@ class Emitter {
           );
         }
         default:
-          unsupported(expr, "binary operator");
+          unsupported({ kind: expr.kind, pos: expr.pos }, "binary operator");
       }
     }
     if (expr.kind === "call_expr") {
