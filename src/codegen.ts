@@ -5985,9 +5985,14 @@ class Emitter {
       receiverName: "",
     };
     if (isClassType(recvType)) {
-      const cls = this.classes.get(classNameOf(recvType)!);
-      if (!cls) {
-        throw new CodegenError(declAnchor, `internal: class '${classNameOf(recvType)!}' not registered`);
+      const classNameMaybe = classNameOf(recvType);
+      if (classNameMaybe === undefined) {
+        throw new CodegenError(declAnchor, "internal: class '<unknown>' not registered");
+      }
+      const className = classNameMaybe;
+      const cls = this.classes.get(className);
+      if (cls === undefined) {
+        throw new CodegenError(declAnchor, `internal: class '${className}' not registered`);
       }
       const methods = new Set<string>();
       for (const methodName of cls.methods.keys()) {
@@ -6000,9 +6005,14 @@ class Emitter {
         receiverName: cls.name,
       };
     } else if (isInterfaceType(recvType)) {
-      const iface = this.interfaces.get(interfaceNameOf(recvType)!);
-      if (!iface) {
-        throw new CodegenError(declAnchor, `internal: interface '${interfaceNameOf(recvType)!}' not registered`);
+      const interfaceNameMaybe = interfaceNameOf(recvType);
+      if (interfaceNameMaybe === undefined) {
+        throw new CodegenError(declAnchor, "internal: interface '<unknown>' not registered");
+      }
+      const interfaceName = interfaceNameMaybe;
+      const iface = this.interfaces.get(interfaceName);
+      if (iface === undefined) {
+        throw new CodegenError(declAnchor, `internal: interface '${interfaceName}' not registered`);
       }
       const methods = new Set<string>();
       for (const methodName of iface.methods.keys()) {
