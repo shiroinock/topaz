@@ -35,9 +35,7 @@ for (const f of sums) {
 }
 console.log(total);  // 60
 
-// (5) Populate Array<fn> from another array via for-of + capture. (Returning
-//     a fn from an arrow is still rejected as a nested fn return position
-//     — see 1.5-3.5e restriction — so we build the array one push at a time.)
+// (5) Populate Array<fn> from another array via for-of + capture.
 const seeds: Array<number> = [1, 2, 3];
 const builders: Array<(n: number) => number> = [];
 for (const x of seeds) {

@@ -1407,11 +1407,15 @@ class Emitter {
 
   // Phase 1.5-3.5e: each distinct fn signature seen in user code (annotation
   // or arrow expression) gets a typedef + struct expansion emitted in the
-  // fn-typedef slot. fn-in-fn signatures are rejected at the annotation site
-  // so we never have to chase nested monomorphs.
+  // fn-typedef slot. Nested fn params / returns must be registered before the
+  // outer fn so the outer typedef can name already-complete inner structs.
   private fnMonomorphs: Map<string, TopazType> = new Map<string, TopazType>();
   private recordFnMonomorph(t: TopazType): void {
     if (t.kind !== "fn") return;
+    for (const p of t.params) {
+      this.recordFnMonomorph(p.type);
+    }
+    this.recordFnMonomorph(t.returnType);
     this.fnMonomorphs.set(typeKey(t), t);
   }
 
@@ -3782,12 +3786,9 @@ class Emitter {
       // through to the unsupported-type throw below.
     }
     // Phase 1.5-3.5e: `(p: T) => R` function type. Param annotations are
-    // mandatory (no contextual inference yet); no rest/optional/default; no
-    // fn-in-fn signatures (the typedef slot is filled before any other fn
-    // monomorph could be referenced, but nested fn types raise mangling
-    // ambiguities not worth solving for the MVP). The param-shape rejections
-    // (non-identifier name, optional/rest, missing annotation) live in
-    // `convertType` now, so they never reach this branch.
+    // mandatory (no contextual inference yet); no rest/optional/default. The
+    // param-shape rejections (non-identifier name, optional/rest, missing
+    // annotation) live in `convertType` now, so they never reach this branch.
     if (node.kind === "type_fn") {
       const params: ParamInfo[] = [];
       const seenNames = new Set<string>();
@@ -3795,9 +3796,6 @@ class Emitter {
         const paramAnchor: { pos: number } = { pos: p.pos };
         const pt = this.typeFromAnnotation(p.type, paramAnchor, sf);
         this.assertNotVoid(pt, paramAnchor, "fn-type parameter");
-        if (pt.kind === "fn") {
-          throw this.typeErr(paramAnchor, "nested fn types in fn parameters are unsupported (Phase 1.5-3.5e)");
-        }
         if (seenNames.has(p.name)) {
           throw this.typeErr(paramAnchor, `duplicate parameter name '${p.name}'`);
         }
@@ -3806,9 +3804,6 @@ class Emitter {
       }
       const returnAnchor: { pos: number } = { pos: node.returnType.pos };
       const ret = this.typeFromAnnotation(node.returnType, returnAnchor, sf);
-      if (ret.kind === "fn") {
-        throw this.typeErr(nodeAnchor, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
-      }
       const ft: TopazType = { kind: "fn", params, returnType: ret };
       this.recordFnMonomorph(ft);
       return ft;
@@ -4204,9 +4199,6 @@ class Emitter {
         throw new CodegenError(paramAnchor, "arrow function parameter requires a type annotation (no contextual type available)");
       }
       this.assertNotVoid(pt, paramAnchor, "arrow parameter");
-      if (pt.kind === "fn") {
-        throw new CodegenError(paramAnchor, "nested fn types in arrow parameters are unsupported (Phase 1.5-3.5e)");
-      }
       if (seenNames.has(p.name)) {
         throw new CodegenError(paramAnchor, `duplicate parameter name '${p.name}'`);
       }
@@ -4225,9 +4217,6 @@ class Emitter {
       returnType = expectedFn.returnType;
     } else {
       throw new CodegenError({ pos: arrow.pos }, "arrow function requires an explicit return type annotation (no contextual type available)");
-    }
-    if (returnType.kind === "fn") {
-      throw new CodegenError({ pos: arrow.pos }, "nested fn types in arrow return position are unsupported (Phase 1.5-3.5e)");
     }
     if (returnType.kind === "void" && arrow.body.kind !== "arrow_block_body") {
       throw new CodegenError({ pos: arrow.pos }, "void-returning arrows require block bodies");
