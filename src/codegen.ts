@@ -5861,7 +5861,8 @@ class Emitter {
     if (typeMaybe === undefined) return undefined;
     const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
     const varType = this.typeFromAnnotation(typeMaybe, typeAnchor, sf);
-    this.assertNotVoid(varType, d, "module global type");
+    const declAnchor: { pos: number } = { pos: d.pos };
+    this.assertNotVoid(varType, declAnchor, "module global type");
     const bindingAnchor: { pos: number } = { pos: d.pos };
     this.scope.declareBinding(d.name, varType, d.declKind === "const", bindingAnchor);
     this.moduleGlobalTypes.set(d.name, varType);
@@ -5933,14 +5934,16 @@ class Emitter {
     // missing initializer, rest / default / property rename / nested pattern)
     // now live in convert (`convertVarDeclList`). The empty-pattern check and
     // the receiver-shape / field-existence semantic checks stay here.
+    const declAnchor: { pos: number } = { pos: decl.pos };
+    const initAnchor: { pos: number } = { pos: decl.init.pos };
     if (decl.bindings.length === 0) {
-      throw new CodegenError(decl, "empty object destructuring pattern is unsupported");
+      throw new CodegenError(declAnchor, "empty object destructuring pattern is unsupported");
     }
 
     const recvType = this.inferType(decl.init);
     this.assertNotVoid(
       recvType,
-      decl,
+      initAnchor,
       "destructuring initializer (void-returning call cannot be destructured)",
     );
 
@@ -5954,7 +5957,7 @@ class Emitter {
     if (isClassType(recvType)) {
       const cls = this.classes.get(classNameOf(recvType)!);
       if (!cls) {
-        throw new CodegenError(decl, `internal: class '${classNameOf(recvType)!}' not registered`);
+        throw new CodegenError(declAnchor, `internal: class '${classNameOf(recvType)!}' not registered`);
       }
       fields = cls.fields;
       methods = new Set<string>();
@@ -5966,7 +5969,7 @@ class Emitter {
     } else if (isInterfaceType(recvType)) {
       const iface = this.interfaces.get(interfaceNameOf(recvType)!);
       if (!iface) {
-        throw new CodegenError(decl, `internal: interface '${interfaceNameOf(recvType)!}' not registered`);
+        throw new CodegenError(declAnchor, `internal: interface '${interfaceNameOf(recvType)!}' not registered`);
       }
       fields = iface.fields;
       methods = new Set<string>();
@@ -5977,32 +5980,33 @@ class Emitter {
       receiverName = iface.name;
     } else if (recvType.kind === "union") {
       throw new CodegenError(
-        decl,
+        initAnchor,
         `object destructuring on \`${typeIdent(recvType)}\` requires narrowing first (e.g. \`if (x !== undefined)\` or \`x!\`)`,
       );
     } else if (recvType.kind === "dunion") {
       throw new CodegenError(
-        decl,
+        initAnchor,
         "object destructuring on a discriminated union is unsupported (narrow with `switch (x.kind)` first)",
       );
     } else {
       throw new CodegenError(
-        decl,
+        initAnchor,
         `object destructuring requires a class or interface receiver; got ${typeIdent(recvType)}`,
       );
     }
 
     for (const b of decl.bindings) {
       const fname = b.name;
+      const fieldAnchor: { pos: number } = { pos: b.pos };
       if (!fields.has(fname)) {
         if (methods.has(fname)) {
           throw new CodegenError(
-            b,
+            fieldAnchor,
             `'${fname}' is a method of '${receiverName}', not a field - methods cannot be destructured (method-as-value is unsupported)`,
           );
         }
         throw new CodegenError(
-          b,
+          fieldAnchor,
           `${receiverKind} '${receiverName}' has no field '${fname}'`,
         );
       }
@@ -6037,17 +6041,21 @@ class Emitter {
     // Phase 1.5-6e-2: convert guarantees a simple-identifier name. A `var_decl`
     // with no initializer is rejected here (let / const require an initializer
     // in this subset).
-    if (!decl.init) {
-      throw new CodegenError(decl, "variable declaration must have an initializer");
+    const declAnchor: { pos: number } = { pos: decl.pos };
+    const initMaybe = decl.init;
+    if (initMaybe === undefined) {
+      throw new CodegenError(declAnchor, "variable declaration must have an initializer");
     }
     const name = decl.name;
-    const init = decl.init;
+    const init = initMaybe;
 
     let varType: TopazType;
     let initExpr: string;
-    if (decl.type) {
-      varType = this.typeFromAnnotation(decl.type, decl, g_currentModule!);
-      this.assertNotVoid(varType, decl, "variable type");
+    const typeMaybe = decl.type;
+    if (typeMaybe !== undefined) {
+      const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
+      varType = this.typeFromAnnotation(typeMaybe, typeAnchor, g_currentModule!);
+      this.assertNotVoid(varType, declAnchor, "variable type");
       // emitWithExpected threads `varType` through ArrayLiteral / NewExpression
       // context typing and applies class -> interface coercion when needed.
       initExpr = this.emitWithExpected(init, varType);
@@ -6072,8 +6080,7 @@ class Emitter {
       if (isConst && varType.kind === "dunion" && initBareTypeable) {
         const initType = this.inferType(init);
         if (isClassType(initType) && varType.variants.includes(classNameOf(initType)!)) {
-          const bindingAnchor: { pos: number } = { pos: decl.pos };
-          this.scope.declareBinding(name, varType, isConst, bindingAnchor);
+          this.scope.declareBinding(name, varType, isConst, declAnchor);
           this.scope.narrow(name, initType);
           return { type: varType, cName: name, initStr: ` = ${initExpr}` };
         }
@@ -6091,7 +6098,7 @@ class Emitter {
         );
       }
       varType = this.inferType(init);
-      this.assertNotVoid(varType, decl, "variable initializer (void-returning call cannot be stored)");
+      this.assertNotVoid(varType, declAnchor, "variable initializer (void-returning call cannot be stored)");
       if (init.kind === "array_lit") {
         initExpr = this.emitArrayLiteral(init, varType);
       } else if (init.kind === "new_expr") {
@@ -6100,8 +6107,7 @@ class Emitter {
         initExpr = this.emitExpression(init);
       }
     }
-    const bindingAnchor: { pos: number } = { pos: decl.pos };
-    this.scope.declareBinding(name, varType, isConst, bindingAnchor);
+    this.scope.declareBinding(name, varType, isConst, declAnchor);
     return { type: varType, cName: name, initStr: ` = ${initExpr}` };
   }
 
