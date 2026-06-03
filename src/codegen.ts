@@ -8099,17 +8099,19 @@ class Emitter {
       }
       if (this.genericFunctions.has(callee.name)) {
         const resolved = this.resolveGenericCall(callee, expr)!;
+        const callAnchor: { pos: number } = { pos: expr.pos };
         const args = this.emitCallArgs(
           expr.args,
           resolved.sig.params,
           `${callee.name}()`,
-          expr,
+          callAnchor,
         ).join(", ");
         return `${resolved.mangled}(${args})`;
       }
       const sig = this.resolveFunctionSig(callee.name, callee);
       if (sig) {
-        const args = this.emitCallArgs(expr.args, sig.params, `${callee.name}()`, expr).join(", ");
+        const callAnchor: { pos: number } = { pos: expr.pos };
+        const args = this.emitCallArgs(expr.args, sig.params, `${callee.name}()`, callAnchor).join(", ");
         return `${sig.cName}(${args})`;
       }
       // Phase 1.5-3.5e: fn-typed local (a binding holding an arrow / fn
@@ -9248,7 +9250,7 @@ class Emitter {
     const base = this.emitExpression(callee.receiver);
     const argParts = [
       base,
-      ...this.emitCallArgs(expr.args, method.params, `${cls.name}.${mname}`, expr),
+      ...this.emitCallArgs(expr.args, method.params, `${cls.name}.${mname}`, { pos: expr.pos }),
     ];
     return `topaz_class_${cls.name}_method_${mname}(${argParts.join(", ")})`;
   }
@@ -9272,7 +9274,7 @@ class Emitter {
     const baseStr = this.emitExpression(callee.receiver);
     const argParts = [
       `${tmp}.data`,
-      ...this.emitCallArgs(expr.args, sig.params, `${iface.name}.${mname}`, expr),
+      ...this.emitCallArgs(expr.args, sig.params, `${iface.name}.${mname}`, { pos: expr.pos }),
     ];
     return `({ ${cTypeName(baseType)} ${tmp} = ${baseStr}; ${tmp}.vt->${mname}(${argParts.join(", ")}); })`;
   }
