@@ -3625,12 +3625,13 @@ class Emitter {
     // Phase 1.5-3e: class union with a shared `kind: "literal"` discriminator
     // collapses into a `dunion` (tagged fat pointer) at this site.
     if (node.kind === "type_union") {
-      const variants = node.variants.map((t) => {
+      const variants: TopazType[] = [];
+      for (const t of node.variants) {
         const variantAnchor: { pos: number } = { pos: t.pos };
         const vt = this.typeFromAnnotation(t, variantAnchor, sf);
         this.assertNotVoid(vt, variantAnchor, "union variant");
-        return vt;
-      });
+        variants.push(vt);
+      }
       const dunion = this.tryMakeDiscriminatedUnion(variants, nodeAnchor);
       if (dunion !== undefined) return dunion;
       return makeUnion(variants);
