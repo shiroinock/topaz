@@ -3684,15 +3684,17 @@ class Emitter {
           if (node.typeArgs.length > 0) {
             throw this.typeErr(nodeAnchor, `type alias '${refName}' takes no type arguments (Phase 1.5-6 prep)`);
           }
-          if (alias.resolved !== undefined) return alias.resolved;
+          const cachedAliasType = alias.resolved;
+          if (cachedAliasType !== undefined) return cachedAliasType;
           if (alias.resolving) {
             throw this.typeErr(nodeAnchor, `circular type alias '${refName}'`);
           }
           alias.resolving = true;
           const aliasAnchor: { pos: number } = { pos: alias.body.pos };
-          alias.resolved = this.typeFromAnnotation(alias.body, aliasAnchor, alias.sf);
+          const resolvedAliasType = this.typeFromAnnotation(alias.body, aliasAnchor, alias.sf);
+          alias.resolved = resolvedAliasType;
           alias.resolving = false;
-          return alias.resolved;
+          return resolvedAliasType;
         }
       }
       if (refName === "Array") {
