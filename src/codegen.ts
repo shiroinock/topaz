@@ -7315,18 +7315,14 @@ class Emitter {
         const polarity = tok === "&&";
         const lhs = this.emitExpression(expr.lhs);
         const n = this.extractNarrowing(expr.lhs, polarity);
-        let rhs: string;
-        if (n) {
+        if (n !== undefined) {
           this.scope.push();
-          try {
-            this.scope.narrow(n.name, n.type);
-            rhs = this.emitExpression(expr.rhs);
-          } finally {
-            this.scope.pop();
-          }
-        } else {
-          rhs = this.emitExpression(expr.rhs);
+          this.scope.narrow(n.name, n.type);
+          const rhs = this.emitExpression(expr.rhs);
+          this.scope.pop();
+          return `(${lhs} ${polarity ? "&&" : "||"} ${rhs})`;
         }
+        const rhs = this.emitExpression(expr.rhs);
         return `(${lhs} ${polarity ? "&&" : "||"} ${rhs})`;
       }
       const op = this.binaryOp(expr);
