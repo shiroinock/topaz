@@ -4521,178 +4521,257 @@ class Emitter {
     captures: Map<string, TopazType>,
   ): void {
     const locals = new Set<string>(paramNames);
-    // Walk an arrow body's statements / expressions, tracking new local
-    // bindings in `localSet` (flat, mirroring the pre-migration tsc walk which
-    // added every declaration name to one set as it descended) and reporting
-    // free identifier references via `onIdent`. Nested arrows do not descend;
-    // they are handed to `onArrow` instead.
-    const walkStmt = (
-      s: Stmt,
-      localSet: Set<string>,
-      onIdent: (name: string) => void,
-      onArrow: (a: ArrowExpr) => void,
-    ): void => {
-      const we = (e: Expr) => walkExpr(e, localSet, onIdent, onArrow);
-      const ws = (st: Stmt) => walkStmt(st, localSet, onIdent, onArrow);
-      switch (s.kind) {
-        case "expr_stmt": we(s.expr); return;
-        case "var_decl":
-          localSet.add(s.name);
-          if (s.init) we(s.init);
-          return;
-        case "var_destr_decl":
-          for (const b of s.bindings) localSet.add(b.name);
-          we(s.init);
-          return;
-        case "block_stmt": for (const st of s.stmts) ws(st); return;
-        case "if_stmt":
-          we(s.cond); ws(s.thenBranch);
-          if (s.elseBranch) ws(s.elseBranch);
-          return;
-        case "while_stmt": we(s.cond); ws(s.body); return;
-        case "do_while_stmt": ws(s.body); we(s.cond); return;
-        case "for_stmt":
-          if (s.init) {
-            if (s.init.kind === "for_init_decl") ws(s.init.decl);
-            else we(s.init.expr);
-          }
-          if (s.cond) we(s.cond);
-          if (s.update) we(s.update);
-          ws(s.body);
-          return;
-        case "for_of_stmt":
-          if (s.binding.kind === "for_of_single") localSet.add(s.binding.name);
-          else { localSet.add(s.binding.first); localSet.add(s.binding.second); }
-          we(s.source);
-          ws(s.body);
-          return;
-        case "switch_stmt":
-          we(s.discriminant);
-          for (const c of s.cases) {
-            if (c.test) we(c.test);
-            for (const st of c.stmts) ws(st);
-          }
-          return;
-        case "try_stmt":
-          for (const st of s.tryBlock.stmts) ws(st);
-          if (s.catchClause) {
-            if (s.catchClause.bindingName) localSet.add(s.catchClause.bindingName);
-            for (const st of s.catchClause.body.stmts) ws(st);
-          }
-          if (s.finallyBlock) for (const st of s.finallyBlock.stmts) ws(st);
-          return;
-        case "return_stmt": if (s.value) we(s.value); return;
-        case "throw_stmt": we(s.value); return;
-        case "break_stmt":
-        case "continue_stmt":
-        case "empty_stmt":
-          return;
-      }
-    };
-    const walkExpr = (
-      e: Expr,
-      localSet: Set<string>,
-      onIdent: (name: string) => void,
-      onArrow: (a: ArrowExpr) => void,
-    ): void => {
-      const we = (x: Expr) => walkExpr(x, localSet, onIdent, onArrow);
-      switch (e.kind) {
-        case "ident":
-          if (!localSet.has(e.name) && !isBuiltinName(e.name)) onIdent(e.name);
-          return;
-        case "num_lit":
-        case "str_lit":
-        case "bool_lit":
-        case "null_lit":
-        case "undefined_lit":
-        case "this_expr":
-        case "import_meta_url":
-          return;
-        case "template_lit":
-          for (const sub of e.subs) we(sub.expr);
-          return;
-        case "array_lit":
-          for (const el of e.elems) we(el.expr);
-          return;
-        case "object_lit":
-          for (const m of e.props) {
-            if (m.kind === "prop_kv") we(m.value);
-            else if (m.kind === "prop_spread") we(m.expr);
-            else { // prop_shorthand `{ x }` reads the variable `x`
-              if (!localSet.has(m.name) && !isBuiltinName(m.name)) onIdent(m.name);
-            }
-          }
-          return;
-        case "paren_expr": we(e.inner); return;
-        case "call_expr":
-          we(e.callee);
-          for (const a of e.args) we(a);
-          return;
-        case "new_expr":
-          we(e.callee);
-          for (const a of e.args) we(a);
-          return;
-        case "prop_access": we(e.receiver); return;
-        case "elem_access": we(e.receiver); we(e.index); return;
-        case "prefix_op":
-        case "postfix_op": we(e.operand); return;
-        case "bin_op": we(e.lhs); we(e.rhs); return;
-        case "instanceof_expr": we(e.lhs); we(e.rhs); return;
-        case "typeof_expr": we(e.operand); return;
-        case "ternary_expr": we(e.cond); we(e.thenBranch); we(e.elseBranch); return;
-        case "assign_expr": we(e.target); we(e.value); return;
-        case "non_null": we(e.operand); return;
-        case "spread_expr": we(e.operand); return;
-        case "arrow_expr": onArrow(e); return;
-      }
-    };
-
-    const outerOnIdent = (name: string) => {
+    const outerOnIdent = (name: string): void => {
       if (captures.has(name)) return;
       const b = this.scope.lookupAcrossBarrier(name);
-      if (b) captures.set(name, b.type);
+      if (b !== undefined) captures.set(name, b.type);
     };
-    const outerOnArrow = (inner: ArrowExpr) => {
-      // Nested arrow: collect its free identifiers against *our* scope and
-      // promote them to our captures if they're not our locals. We do NOT
-      // descend into its body for our own locals.
-      const innerLocals = new Set<string>();
-      for (const p of inner.params) innerLocals.add(p.name);
-      const innerCaps = new Map<string, TopazType>();
-      const innerOnIdent = (name: string) => {
-        const b = this.scope.lookupAcrossBarrier(name);
-        if (b) innerCaps.set(name, b.type);
-      };
-      const innerOnArrow = (a: ArrowExpr) => {
-        // Recurse into deeper arrows too (their free vars also bubble up).
-        const deeperLocals = new Set<string>(innerLocals);
-        for (const p of a.params) deeperLocals.add(p.name);
-        const deeperBody = a.body;
-        if (deeperBody.kind === "arrow_block_body") {
-          for (const st of deeperBody.stmts) walkStmt(st, deeperLocals, innerOnIdent, innerOnArrow);
-        } else {
-          walkExpr(deeperBody.expr, deeperLocals, innerOnIdent, innerOnArrow);
-        }
-      };
-      const innerBody = inner.body;
-      if (innerBody.kind === "arrow_block_body") {
-        for (const st of innerBody.stmts) walkStmt(st, innerLocals, innerOnIdent, innerOnArrow);
-      } else {
-        walkExpr(innerBody.expr, innerLocals, innerOnIdent, innerOnArrow);
-      }
-      for (const name of innerCaps.keys()) {
-        if (locals.has(name)) continue;
-        if (captures.has(name)) continue;
-        const b = this.scope.lookupAcrossBarrier(name);
-        if (b) captures.set(name, b.type);
-      }
+    const outerOnArrow = (inner: ArrowExpr): void => {
+      this.collectCapturesNestedArrow(inner, locals, captures);
     };
 
     const body = arrow.body;
     if (body.kind === "arrow_block_body") {
-      for (const s of body.stmts) walkStmt(s, locals, outerOnIdent, outerOnArrow);
+      for (const s of body.stmts) this.collectCapturesWalkStmt(s, locals, outerOnIdent, outerOnArrow);
     } else {
-      walkExpr(body.expr, locals, outerOnIdent, outerOnArrow);
+      this.collectCapturesWalkExpr(body.expr, locals, outerOnIdent, outerOnArrow);
+    }
+  }
+
+  // Walk an arrow body's statements / expressions, tracking new local bindings
+  // in `localSet` (flat, matching the old tsc walk) and reporting free
+  // identifier references through callbacks. Nested arrows are function
+  // boundaries and are handed to `onArrow`.
+  private collectCapturesWalkStmt(
+    s: Stmt,
+    localSet: Set<string>,
+    onIdent: (name: string) => void,
+    onArrow: (a: ArrowExpr) => void,
+  ): void {
+    switch (s.kind) {
+      case "expr_stmt":
+        this.collectCapturesWalkExpr(s.expr, localSet, onIdent, onArrow);
+        return;
+      case "var_decl":
+        localSet.add(s.name);
+        const varDeclInit = s.init;
+        if (varDeclInit !== undefined) this.collectCapturesWalkExpr(varDeclInit, localSet, onIdent, onArrow);
+        return;
+      case "var_destr_decl":
+        for (const b of s.bindings) localSet.add(b.name);
+        this.collectCapturesWalkExpr(s.init, localSet, onIdent, onArrow);
+        return;
+      case "block_stmt":
+        for (const st of s.stmts) this.collectCapturesWalkStmt(st, localSet, onIdent, onArrow);
+        return;
+      case "if_stmt":
+        this.collectCapturesWalkExpr(s.cond, localSet, onIdent, onArrow);
+        this.collectCapturesWalkStmt(s.thenBranch, localSet, onIdent, onArrow);
+        const ifElseBranch = s.elseBranch;
+        if (ifElseBranch !== undefined) this.collectCapturesWalkStmt(ifElseBranch, localSet, onIdent, onArrow);
+        return;
+      case "while_stmt":
+        this.collectCapturesWalkExpr(s.cond, localSet, onIdent, onArrow);
+        this.collectCapturesWalkStmt(s.body, localSet, onIdent, onArrow);
+        return;
+      case "do_while_stmt":
+        this.collectCapturesWalkStmt(s.body, localSet, onIdent, onArrow);
+        this.collectCapturesWalkExpr(s.cond, localSet, onIdent, onArrow);
+        return;
+      case "for_stmt":
+        const forInit = s.init;
+        if (forInit !== undefined) {
+          if (forInit.kind === "for_init_decl") {
+            this.collectCapturesWalkStmt(forInit.decl, localSet, onIdent, onArrow);
+          } else {
+            this.collectCapturesWalkExpr(forInit.expr, localSet, onIdent, onArrow);
+          }
+        }
+        const forCond = s.cond;
+        if (forCond !== undefined) this.collectCapturesWalkExpr(forCond, localSet, onIdent, onArrow);
+        const forUpdate = s.update;
+        if (forUpdate !== undefined) this.collectCapturesWalkExpr(forUpdate, localSet, onIdent, onArrow);
+        this.collectCapturesWalkStmt(s.body, localSet, onIdent, onArrow);
+        return;
+      case "for_of_stmt":
+        const forOfBinding = s.binding;
+        switch (forOfBinding.kind) {
+          case "for_of_single":
+            localSet.add(forOfBinding.name);
+            break;
+          case "for_of_pair":
+            localSet.add(forOfBinding.first);
+            localSet.add(forOfBinding.second);
+            break;
+        }
+        this.collectCapturesWalkExpr(s.source, localSet, onIdent, onArrow);
+        this.collectCapturesWalkStmt(s.body, localSet, onIdent, onArrow);
+        return;
+      case "switch_stmt":
+        this.collectCapturesWalkExpr(s.discriminant, localSet, onIdent, onArrow);
+        for (const c of s.cases) {
+          const test = c.test;
+          if (test !== undefined) this.collectCapturesWalkExpr(test, localSet, onIdent, onArrow);
+          for (const st of c.stmts) this.collectCapturesWalkStmt(st, localSet, onIdent, onArrow);
+        }
+        return;
+      case "try_stmt":
+        for (const st of s.tryBlock.stmts) this.collectCapturesWalkStmt(st, localSet, onIdent, onArrow);
+        const tryCatchClause = s.catchClause;
+        if (tryCatchClause !== undefined) {
+          const catchBindingName = tryCatchClause.bindingName;
+          if (catchBindingName !== undefined) localSet.add(catchBindingName);
+          for (const st of tryCatchClause.body.stmts) this.collectCapturesWalkStmt(st, localSet, onIdent, onArrow);
+        }
+        const tryFinallyBlock = s.finallyBlock;
+        if (tryFinallyBlock !== undefined) {
+          for (const st of tryFinallyBlock.stmts) this.collectCapturesWalkStmt(st, localSet, onIdent, onArrow);
+        }
+        return;
+      case "return_stmt":
+        const returnValue = s.value;
+        if (returnValue !== undefined) this.collectCapturesWalkExpr(returnValue, localSet, onIdent, onArrow);
+        return;
+      case "throw_stmt":
+        this.collectCapturesWalkExpr(s.value, localSet, onIdent, onArrow);
+        return;
+      case "break_stmt":
+      case "continue_stmt":
+      case "empty_stmt":
+        return;
+    }
+  }
+
+  private collectCapturesWalkExpr(
+    e: Expr,
+    localSet: Set<string>,
+    onIdent: (name: string) => void,
+    onArrow: (a: ArrowExpr) => void,
+  ): void {
+    switch (e.kind) {
+      case "ident":
+        if (!localSet.has(e.name) && !isBuiltinName(e.name)) onIdent(e.name);
+        return;
+      case "num_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "this_expr":
+      case "import_meta_url":
+        return;
+      case "template_lit":
+        for (const sub of e.subs) this.collectCapturesWalkExpr(sub.expr, localSet, onIdent, onArrow);
+        return;
+      case "array_lit":
+        for (const el of e.elems) this.collectCapturesWalkExpr(el.expr, localSet, onIdent, onArrow);
+        return;
+      case "object_lit":
+        for (const m of e.props) {
+          switch (m.kind) {
+            case "prop_kv":
+              this.collectCapturesWalkExpr(m.value, localSet, onIdent, onArrow);
+              break;
+            case "prop_spread":
+              this.collectCapturesWalkExpr(m.expr, localSet, onIdent, onArrow);
+              break;
+            case "prop_shorthand":
+              if (!localSet.has(m.name) && !isBuiltinName(m.name)) onIdent(m.name);
+              break;
+          }
+        }
+        return;
+      case "paren_expr":
+        this.collectCapturesWalkExpr(e.inner, localSet, onIdent, onArrow);
+        return;
+      case "call_expr":
+        this.collectCapturesWalkExpr(e.callee, localSet, onIdent, onArrow);
+        for (const a of e.args) this.collectCapturesWalkExpr(a, localSet, onIdent, onArrow);
+        return;
+      case "new_expr":
+        this.collectCapturesWalkExpr(e.callee, localSet, onIdent, onArrow);
+        for (const a of e.args) this.collectCapturesWalkExpr(a, localSet, onIdent, onArrow);
+        return;
+      case "prop_access":
+        this.collectCapturesWalkExpr(e.receiver, localSet, onIdent, onArrow);
+        return;
+      case "elem_access":
+        this.collectCapturesWalkExpr(e.receiver, localSet, onIdent, onArrow);
+        this.collectCapturesWalkExpr(e.index, localSet, onIdent, onArrow);
+        return;
+      case "prefix_op":
+        this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onArrow);
+        return;
+      case "postfix_op":
+        this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onArrow);
+        return;
+      case "bin_op":
+        this.collectCapturesWalkExpr(e.lhs, localSet, onIdent, onArrow);
+        this.collectCapturesWalkExpr(e.rhs, localSet, onIdent, onArrow);
+        return;
+      case "instanceof_expr":
+        this.collectCapturesWalkExpr(e.lhs, localSet, onIdent, onArrow);
+        this.collectCapturesWalkExpr(e.rhs, localSet, onIdent, onArrow);
+        return;
+      case "typeof_expr":
+        this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onArrow);
+        return;
+      case "ternary_expr":
+        this.collectCapturesWalkExpr(e.cond, localSet, onIdent, onArrow);
+        this.collectCapturesWalkExpr(e.thenBranch, localSet, onIdent, onArrow);
+        this.collectCapturesWalkExpr(e.elseBranch, localSet, onIdent, onArrow);
+        return;
+      case "assign_expr":
+        this.collectCapturesWalkExpr(e.target, localSet, onIdent, onArrow);
+        this.collectCapturesWalkExpr(e.value, localSet, onIdent, onArrow);
+        return;
+      case "non_null":
+        this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onArrow);
+        return;
+      case "spread_expr":
+        this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onArrow);
+        return;
+      case "arrow_expr":
+        onArrow(e);
+        return;
+    }
+  }
+
+  private collectCapturesNestedArrow(
+    inner: ArrowExpr,
+    outerLocals: Set<string>,
+    captures: Map<string, TopazType>,
+  ): void {
+    const innerCaps = new Map<string, TopazType>();
+    const innerOnIdent = (name: string): void => {
+      const b = this.scope.lookupAcrossBarrier(name);
+      if (b !== undefined) innerCaps.set(name, b.type);
+    };
+    const emptyParentLocals = new Set<string>();
+    this.collectCapturesWalkNestedArrow(inner, emptyParentLocals, innerOnIdent);
+    for (const name of innerCaps.keys()) {
+      if (outerLocals.has(name)) continue;
+      if (captures.has(name)) continue;
+      const b = this.scope.lookupAcrossBarrier(name);
+      if (b !== undefined) captures.set(name, b.type);
+    }
+  }
+
+  private collectCapturesWalkNestedArrow(
+    arrow: ArrowExpr,
+    parentLocalSet: Set<string>,
+    onIdent: (name: string) => void,
+  ): void {
+    const localSet = new Set<string>(parentLocalSet);
+    for (const p of arrow.params) localSet.add(p.name);
+    const onArrow = (a: ArrowExpr): void => {
+      this.collectCapturesWalkNestedArrow(a, localSet, onIdent);
+    };
+    const body = arrow.body;
+    if (body.kind === "arrow_block_body") {
+      for (const st of body.stmts) this.collectCapturesWalkStmt(st, localSet, onIdent, onArrow);
+    } else {
+      this.collectCapturesWalkExpr(body.expr, localSet, onIdent, onArrow);
     }
   }
 
