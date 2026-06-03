@@ -7827,12 +7827,12 @@ class Emitter {
     let acc: string | undefined = undefined;
 
     if (expr.head !== "") {
-      acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(expr.head, expr));
+      acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(expr.head, { pos: expr.pos }));
     }
     for (const sub of expr.subs) {
       acc = this.appendTemplatePiece(acc, stringify(sub.expr));
       if (sub.cookedAfter !== "") {
-        acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(sub.cookedAfter, expr));
+        acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(sub.cookedAfter, { pos: expr.pos }));
       }
     }
     // All-empty template (`${a}` with empty head + empty tail) still needs to
@@ -10500,11 +10500,11 @@ class Emitter {
       if (lit !== undefined) {
         if (lit !== expected.value) {
           throw new CodegenError(
-            expr,
+            { pos: expr.pos },
             `type mismatch: expected ${typeIdent(expected)}, got string literal "${lit}"`,
           );
         }
-        return this.emitStringLiteralText(lit, expr);
+        return this.emitStringLiteralText(lit, { pos: expr.pos });
       }
     }
     if (expr.kind === "array_lit") {
