@@ -9722,8 +9722,13 @@ class Emitter {
     if (expr.kind === "ident") {
       const local = this.scope.lookup(expr.name);
       const captureContext = this.captureContext;
-      if (local === undefined && captureContext !== undefined && captureContext.captures.has(expr.name)) {
-        return captureContext.captures.get(expr.name)!;
+      if (local === undefined) {
+        if (captureContext !== undefined) {
+          const capturedType = captureContext.captures.get(expr.name);
+          if (capturedType !== undefined) {
+            return capturedType;
+          }
+        }
       }
       if (local !== undefined) return local.type;
       // Phase 1.5-3.5g-array-fn: top-level functions are addressable as fn
