@@ -7939,7 +7939,7 @@ class Emitter {
     }
     if (expr.optional) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
       );
     }
@@ -7949,7 +7949,7 @@ class Emitter {
     for (const a of expr.args) {
       if (a.kind === "spread_expr") {
         throw new CodegenError(
-          a,
+          { pos: a.pos },
           "spread in call arguments is unsupported (rewrite as a loop, e.g. `for (const x of xs) f(x)`)",
         );
       }
@@ -9974,7 +9974,7 @@ class Emitter {
       }
       if (expr.optional) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
         );
       }
