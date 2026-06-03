@@ -5471,7 +5471,8 @@ class Emitter {
       return this.emitTryStatement(stmt, indent);
     }
 
-    unsupported(stmt, "statement");
+    const stmtAnchor: { pos: number } = { pos: stmt.pos };
+    throw new CodegenError(stmtAnchor, `unsupported statement (${stmt.kind})`);
   }
 
   // Phase 1.5-1: throw a class instance. The runtime helper expects `void *`
