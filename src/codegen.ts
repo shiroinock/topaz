@@ -4355,9 +4355,12 @@ class Emitter {
   // capture initialization). Handles narrowed scalar opt unions and narrowed
   // dunion / unknown the same way emitExpression's identifier branch does.
   private emitCapturedIdentifier(name: string, _capturedType: TopazType, anchor: { pos: number }): string {
-    const b = this.scope.lookup(name);
-    if (!b) throw new CodegenError(anchor, `capture '${name}' is not visible at the arrow construction site`);
-    const base = this.scope.lookupBase(name)!;
+    const bMaybe = this.scope.lookup(name);
+    if (bMaybe === undefined) throw new CodegenError(anchor, `capture '${name}' is not visible at the arrow construction site`);
+    const b = bMaybe;
+    const baseMaybe = this.scope.lookupBase(name);
+    if (baseMaybe === undefined) throw new CodegenError(anchor, `capture '${name}' has no base binding at the arrow construction site`);
+    const base = baseMaybe;
     if (isScalarOptUnion(base.type) && !typeEq(base.type, b.type)) {
       return `(${name}).value`;
     }
@@ -4871,8 +4874,10 @@ class Emitter {
       if (!polarity) return undefined;
       if (cond.lhs.kind !== "ident") return undefined;
       if (cond.rhs.kind !== "ident") return undefined;
-      const b = this.scope.lookup(cond.lhs.name);
-      if (!b || b.type.kind !== "unknown") return undefined;
+      const bMaybe = this.scope.lookup(cond.lhs.name);
+      if (bMaybe === undefined) return undefined;
+      const b = bMaybe;
+      if (b.type.kind !== "unknown") return undefined;
       if (!this.classes.has(cond.rhs.name)) return undefined;
       return { name: cond.lhs.name, type: classOf(cond.rhs.name) };
     }
@@ -4909,8 +4914,9 @@ class Emitter {
     if (leftIsUndef === rightIsUndef) return undefined;
     const varNode = leftIsUndef ? cond.rhs : cond.lhs;
     if (varNode.kind !== "ident") return undefined;
-    const b = this.scope.lookup(varNode.name);
-    if (!b) return undefined;
+    const bMaybe = this.scope.lookup(varNode.name);
+    if (bMaybe === undefined) return undefined;
+    const b = bMaybe;
     if (!containsUndefined(b.type)) return undefined;
     // Strip-undefined when `(x !== undefined)` is true, or `(x === undefined)` is false.
     const stripUndef = (op === "!==") === polarity;
@@ -4949,8 +4955,10 @@ class Emitter {
     }
     if (pa.receiver.kind !== "ident") return undefined;
     const idName = pa.receiver.name;
-    const b = this.scope.lookup(idName);
-    if (!b || b.type.kind !== "dunion") return undefined;
+    const bMaybe = this.scope.lookup(idName);
+    if (bMaybe === undefined) return undefined;
+    const b = bMaybe;
+    if (b.type.kind !== "dunion") return undefined;
     const dunion = b.type;
     if (pa.name !== dunion.discriminator) return undefined;
     let matchCls: string | undefined;
@@ -4960,7 +4968,7 @@ class Emitter {
         break;
       }
     }
-    if (!matchCls) return undefined;
+    if (matchCls === undefined) return undefined;
     const selectsMatch = (op === "===") === polarity;
     if (selectsMatch) return { name: idName, type: classOf(matchCls) };
     if (dunion.variants.length === 2) {
@@ -6284,12 +6292,13 @@ class Emitter {
       // identifier resolves only via captureContext, rewrite the read to go
       // through the env struct.
       const local = this.scope.lookup(expr.name);
-      if (!local && this.captureContext && this.captureContext.captures.has(expr.name)) {
-        const envType = this.captureContext.envType;
+      const captureContext = this.captureContext;
+      if (local === undefined && captureContext !== undefined && captureContext.captures.has(expr.name)) {
+        const envType = captureContext.envType;
         return `(((${envType} *)__topaz_env)->${expr.name})`;
       }
       const b = local;
-      if (!b) {
+      if (b === undefined) {
         const sig = this.resolveFunctionSig(expr.name, expr);
         if (sig) return this.emitTopLevelFunctionValue(sig);
         throw new CodegenError(expr, `unknown identifier '${expr.name}'`);
@@ -6298,7 +6307,11 @@ class Emitter {
       // struct (`topaz_opt_<scalar>`) but narrowing has stripped the
       // `undefined` variant, reads must reach through `.value`. Reference /
       // interface T | undefined share T's C type, so no accessor is needed.
-      const base = this.scope.lookupBase(expr.name)!;
+      const baseMaybe = this.scope.lookupBase(expr.name);
+      if (baseMaybe === undefined) {
+        throw new CodegenError(expr, `identifier '${expr.name}' has no base binding`);
+      }
+      const base = baseMaybe;
       if (isScalarOptUnion(base.type) && !typeEq(base.type, b.type)) {
         return `(${expr.name}).value`;
       }
@@ -8743,10 +8756,11 @@ class Emitter {
     }
     if (expr.kind === "ident") {
       const local = this.scope.lookup(expr.name);
-      if (!local && this.captureContext && this.captureContext.captures.has(expr.name)) {
-        return this.captureContext.captures.get(expr.name)!;
+      const captureContext = this.captureContext;
+      if (local === undefined && captureContext !== undefined && captureContext.captures.has(expr.name)) {
+        return captureContext.captures.get(expr.name)!;
       }
-      if (local) return local.type;
+      if (local !== undefined) return local.type;
       // Phase 1.5-3.5g-array-fn: top-level functions are addressable as fn
       // values when referenced by name (`seeds.map(makeAdder)`). Generic
       // functions need a call-site type-arg list to monomorphize, so they
@@ -9473,10 +9487,11 @@ class Emitter {
 
   private checkAssignTarget(target: Expr, anchor: { pos: number }): void {
     if (target.kind === "ident") {
-      const b = this.scope.lookup(target.name);
-      if (!b) {
+      const bMaybe = this.scope.lookup(target.name);
+      if (bMaybe === undefined) {
         throw new CodegenError(target, `unknown identifier '${target.name}'`);
       }
+      const b = bMaybe;
       if (b.isConst) {
         throw new CodegenError(anchor, `cannot assign to const '${target.name}'`);
       }
