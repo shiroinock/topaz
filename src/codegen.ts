@@ -3341,12 +3341,13 @@ class Emitter {
     const declSf = info.sf;
     const savedG = g_currentModule;
     const savedT = this.currentTypeModule;
-    if (declSf) {
+    if (declSf !== undefined) {
       g_currentModule = declSf;
       this.currentTypeModule = declSf;
     }
     try {
-      const anchor = ctor.decl ?? info.decl;
+      const ctorDecl = ctor.decl;
+      const anchor: { pos: number } = ctorDecl !== undefined ? { pos: ctorDecl.pos } : { pos: info.decl.pos };
       for (const p of ctor.params) {
         this.scope.declareBinding(p.name, p.type, /* isConst */ false, anchor);
       }
@@ -3364,15 +3365,15 @@ class Emitter {
       // ctor carries params, each param maps 1:1 to a field of the same name
       // (recordAnonClass guarantees this) and we emit `this->f = f;` for each
       // in field order.
-      if (!ctor.decl && ctor.params.length > 0) {
+      if (ctorDecl === undefined && ctor.params.length > 0) {
         for (const p of ctor.params) {
           bodyLines.push(`  ${TOPAZ_THIS}->${p.name} = ${p.name};`);
         }
       }
       // Phase 1.5-6 prep: auto-synthesized ctors (decl === undefined) have no
       // user body — the field initializer block above is the entire body.
-      if (ctor.decl) {
-        for (const s of ctor.decl.body.stmts) {
+      if (ctorDecl !== undefined) {
+        for (const s of ctorDecl.body.stmts) {
           if (s.kind === "return_stmt") {
             throw new CodegenError(s, "`return` inside a constructor is unsupported");
           }
