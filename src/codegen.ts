@@ -4106,15 +4106,18 @@ class Emitter {
       if (expr.args.length !== 2) {
         throw new CodegenError({ pos: expr.pos }, "Map.set expects exactly two arguments");
       }
-      this.expectType(expr.args[0], mapKey(baseType)!);
-      this.expectType(expr.args[1], mapValue(baseType)!);
+      const keyArg = expr.args[0];
+      const valueArg = expr.args[1];
+      this.expectType(keyArg, mapKey(baseType)!);
+      this.expectType(valueArg, mapValue(baseType)!);
       return T_VOID;
     }
     if (isSetType(baseType) && callee.name === "add") {
       if (expr.args.length !== 1) {
         throw new CodegenError({ pos: expr.pos }, "Set.add expects exactly one argument");
       }
-      this.expectType(expr.args[0], setElem(baseType)!);
+      const valueArg = expr.args[0];
+      this.expectType(valueArg, setElem(baseType)!);
       return T_VOID;
     }
     return undefined;
@@ -9253,32 +9256,37 @@ class Emitter {
     const base = this.emitExpression(callee.receiver);
     if (method === "set") {
       if (expr.args.length !== 2) {
-        throw new CodegenError(expr, "Map.set expects exactly two arguments");
+        throw new CodegenError({ pos: expr.pos }, "Map.set expects exactly two arguments");
       }
+      const keyArg = expr.args[0];
+      const valueArg = expr.args[1];
       // emitWithExpected enables class -> interface coercion for the value
       // when V is an interface; keys are still scalar so this is a no-op for
       // them, but the helper handles both uniformly.
-      const ke = this.emitWithExpected(expr.args[0]!, k);
-      const ve = this.emitWithExpected(expr.args[1]!, v);
+      const ke = this.emitWithExpected(keyArg, k);
+      const ve = this.emitWithExpected(valueArg, v);
       return `topaz_map_${name}_set(${base}, ${ke}, ${ve})`;
     }
     if (method === "get") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Map.get expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Map.get expects exactly one argument");
       }
-      return `topaz_map_${name}_get(${base}, ${this.emitWithExpected(expr.args[0]!, k)})`;
+      const keyArg = expr.args[0];
+      return `topaz_map_${name}_get(${base}, ${this.emitWithExpected(keyArg, k)})`;
     }
     if (method === "has") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Map.has expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Map.has expects exactly one argument");
       }
-      return `topaz_map_${name}_has(${base}, ${this.emitWithExpected(expr.args[0]!, k)})`;
+      const keyArg = expr.args[0];
+      return `topaz_map_${name}_has(${base}, ${this.emitWithExpected(keyArg, k)})`;
     }
     if (method === "delete") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Map.delete expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Map.delete expects exactly one argument");
       }
-      return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(expr.args[0]!, k)})`;
+      const keyArg = expr.args[0];
+      return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(keyArg, k)})`;
     }
     // Phase 1.5-3.5g-iterator: `.values()` / `.keys()` now yield an Iterator<T>
     // value — a fat pointer struct allocated on the arena. The for-of dispatch
@@ -9287,23 +9295,23 @@ class Emitter {
     // via for-of (which uses the while-form lowering instead).
     if (method === "values") {
       if (expr.args.length !== 0) {
-        throw new CodegenError(expr, "Map.values takes no arguments");
+        throw new CodegenError({ pos: expr.pos }, "Map.values takes no arguments");
       }
       return this.emitIterConstruction(callee.receiver, baseType, "map_values", v, "value");
     }
     if (method === "keys") {
       if (expr.args.length !== 0) {
-        throw new CodegenError(expr, "Map.keys takes no arguments");
+        throw new CodegenError({ pos: expr.pos }, "Map.keys takes no arguments");
       }
       return this.emitIterConstruction(callee.receiver, baseType, "map_keys", k, "key");
     }
     if (method === "entries") {
       throw new CodegenError(
-        callee,
+        { pos: callee.pos },
         "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
       );
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
   private emitClassMethodCall(
@@ -9363,38 +9371,41 @@ class Emitter {
     const base = this.emitExpression(callee.receiver);
     if (method === "add") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Set.add expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Set.add expects exactly one argument");
       }
-      return `topaz_set_${name}_add(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
+      const valueArg = expr.args[0];
+      return `topaz_set_${name}_add(${base}, ${this.emitWithExpected(valueArg, elem)})`;
     }
     if (method === "has") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Set.has expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Set.has expects exactly one argument");
       }
-      return `topaz_set_${name}_has(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
+      const valueArg = expr.args[0];
+      return `topaz_set_${name}_has(${base}, ${this.emitWithExpected(valueArg, elem)})`;
     }
     if (method === "delete") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Set.delete expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Set.delete expects exactly one argument");
       }
-      return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
+      const valueArg = expr.args[0];
+      return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(valueArg, elem)})`;
     }
     // Phase 1.5-3.5g-iterator: Set.values() / Set.keys() yield an Iterator<T>;
     // both share `set_values` semantics (Set yields elem for either, matching
     // JS), so we always pass source="set_values" + field="key".
     if (method === "values" || method === "keys") {
       if (expr.args.length !== 0) {
-        throw new CodegenError(expr, `Set.${method} takes no arguments`);
+        throw new CodegenError({ pos: expr.pos }, `Set.${method} takes no arguments`);
       }
       return this.emitIterConstruction(callee.receiver, baseType, "set_values", elem, "key");
     }
     if (method === "entries") {
       throw new CodegenError(
-        callee,
+        { pos: callee.pos },
         "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
       );
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
   // Phase 1.5-3.5d helpers: resolve / lower optional chain accesses.
@@ -10211,7 +10222,7 @@ class Emitter {
           const v = mapValue(baseType)!;
           const m = prop.name;
           if (m === "set") {
-            throw new CodegenError(expr, "Map.set returns void in this dialect and cannot be used as a value");
+            throw new CodegenError({ pos: expr.pos }, "Map.set returns void in this dialect and cannot be used as a value");
           }
           // Phase 1.5-3c: Map.get returns `V | undefined`. Callers must narrow
           // with `if (x !== undefined)` before using as V; the runtime returns
@@ -10232,7 +10243,7 @@ class Emitter {
         if (isSetType(baseType)) {
           const m = prop.name;
           if (m === "add") {
-            throw new CodegenError(expr, "Set.add returns void in this dialect and cannot be used as a value");
+            throw new CodegenError({ pos: expr.pos }, "Set.add returns void in this dialect and cannot be used as a value");
           }
           if (m === "has" || m === "delete") return T_BOOLEAN;
           if (m === "values" || m === "keys") {
