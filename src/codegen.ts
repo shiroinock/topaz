@@ -4981,6 +4981,7 @@ class Emitter {
     subs: Map<string, TopazType>,
     anchor: { pos: number },
   ): void {
+    const paramTypeAnchor: { pos: number } = { pos: paramTypeNode.pos };
     if (paramTypeNode.kind === "type_array") {
       if (!isArrayType(argType)) return;
       const elem = arrayElem(argType);
@@ -4994,7 +4995,7 @@ class Emitter {
       if (params.includes(refName)) {
         if (typeArgs.length > 0) {
           throw new CodegenError(
-            paramTypeNode,
+            paramTypeAnchor,
             `type parameter '${refName}' cannot have type arguments`,
           );
         }
@@ -5012,23 +5013,50 @@ class Emitter {
         if (!isArrayType(argType)) return;
         const elem = arrayElem(argType);
         if (elem === undefined) return;
-        this.unifyTypeParam(typeArgs[0]!, elem, params, subs, anchor);
+        const firstTypeArg: TypeNode | undefined = typeArgs[0];
+        if (firstTypeArg !== undefined) {
+          this.unifyTypeParam(firstTypeArg, elem, params, subs, anchor);
+        } else {
+          throwInternalCodegenError("unifyTypeParam: missing Array type argument");
+        }
         return;
       }
       if (refName === "Map" && typeArgs.length === 2) {
         if (!isMapType(argType)) return;
         const k = mapKey(argType);
         const v = mapValue(argType);
-        if (k === undefined || v === undefined) return;
-        this.unifyTypeParam(typeArgs[0]!, k, params, subs, anchor);
-        this.unifyTypeParam(typeArgs[1]!, v, params, subs, anchor);
+        if (k !== undefined) {
+          if (v !== undefined) {
+            const keyTypeArg: TypeNode | undefined = typeArgs[0];
+            const valueTypeArg: TypeNode | undefined = typeArgs[1];
+            if (keyTypeArg !== undefined) {
+              if (valueTypeArg !== undefined) {
+                this.unifyTypeParam(keyTypeArg, k, params, subs, anchor);
+                this.unifyTypeParam(valueTypeArg, v, params, subs, anchor);
+              } else {
+                throwInternalCodegenError("unifyTypeParam: missing Map type argument");
+              }
+            } else {
+              throwInternalCodegenError("unifyTypeParam: missing Map type argument");
+            }
+          } else {
+            return;
+          }
+        } else {
+          return;
+        }
         return;
       }
       if (refName === "Set" && typeArgs.length === 1) {
         if (!isSetType(argType)) return;
         const elem = setElem(argType);
         if (elem === undefined) return;
-        this.unifyTypeParam(typeArgs[0]!, elem, params, subs, anchor);
+        const firstTypeArg: TypeNode | undefined = typeArgs[0];
+        if (firstTypeArg !== undefined) {
+          this.unifyTypeParam(firstTypeArg, elem, params, subs, anchor);
+        } else {
+          throwInternalCodegenError("unifyTypeParam: missing Set type argument");
+        }
         return;
       }
       // Phase 1.4c-3: generic class on the parameter side. The argument's
@@ -5037,14 +5065,26 @@ class Emitter {
       // `classMonomorphs` and unify pairwise.
       if (this.genericClasses.has(refName) && typeArgs.length > 0) {
         if (!isClassType(argType)) return;
-        const argClassName = classNameOf(argType)!;
+        const argClassNameMaybe = classNameOf(argType);
+        if (argClassNameMaybe === undefined) return;
+        const argClassName: string = argClassNameMaybe;
         const argMonoMaybe = this.classMonomorphs.get(argClassName);
         if (argMonoMaybe === undefined) return;
         const argMono: ClassMonomorphInfo = argMonoMaybe;
         if (argMono.origName !== refName) return;
         if (argMono.typeArgs.length !== typeArgs.length) return;
         for (let i = 0; i < typeArgs.length; i++) {
-          this.unifyTypeParam(typeArgs[i]!, argMono.typeArgs[i]!, params, subs, anchor);
+          const paramTypeArg: TypeNode | undefined = typeArgs[i];
+          const argMonoTypeArg: TopazType | undefined = argMono.typeArgs[i];
+          if (paramTypeArg !== undefined) {
+            if (argMonoTypeArg !== undefined) {
+              this.unifyTypeParam(paramTypeArg, argMonoTypeArg, params, subs, anchor);
+            } else {
+              throwInternalCodegenError("unifyTypeParam: missing generic class type argument");
+            }
+          } else {
+            throwInternalCodegenError("unifyTypeParam: missing generic class type argument");
+          }
         }
         return;
       }
