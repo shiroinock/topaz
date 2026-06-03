@@ -7540,7 +7540,7 @@ class Emitter {
     }
     const elem = this.firstArrayLiteralElementType(expr);
     const arr = arrayOf(elem);
-    if (!arr) {
+    if (arr === undefined) {
       throw new CodegenError({ pos: expr.pos }, `no Array monomorph for element type ${typeIdent(elem)}`);
     }
     this.recordArrayMonomorph(arr);
@@ -7635,7 +7635,7 @@ class Emitter {
       const k = this.typeFromAnnotation(expr.typeArgs[0], expr, g_currentModule!);
       const v = this.typeFromAnnotation(expr.typeArgs[1], expr, g_currentModule!);
       const t = mapOf(k, v);
-      if (!t) {
+      if (t === undefined) {
         throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
       }
       if (expected !== undefined && !typeEq(expected, t)) {
@@ -7705,7 +7705,7 @@ class Emitter {
     if (expr.typeArgs.length === 1) {
       const elem = this.typeFromAnnotation(expr.typeArgs[0], expr, g_currentModule!);
       const t = setOf(elem);
-      if (!t) {
+      if (t === undefined) {
         throw new CodegenError({ pos: expr.pos }, `no Set monomorph for element type ${typeIdent(elem)}`);
       }
       if (expected !== undefined && !typeEq(expected, t)) {
@@ -9737,7 +9737,7 @@ class Emitter {
         }
       }
       const arr = arrayOf(elem);
-      if (!arr) {
+      if (arr === undefined) {
         throw new CodegenError({ pos: expr.pos }, `no Array monomorph for element type ${typeIdent(elem)}`);
       }
       this.recordArrayMonomorph(arr);
@@ -10279,7 +10279,7 @@ class Emitter {
         const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
         const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
         const t = mapOf(k, v);
-        if (!t) throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
+        if (t === undefined) throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         this.recordMapMonomorph(t);
         return t;
       }
