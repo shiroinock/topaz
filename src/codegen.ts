@@ -2863,7 +2863,7 @@ class Emitter {
       hashFn = `topaz_hash_${tag2}`;
       eqFn = `topaz_key_eq_${tag2}`;
     } else {
-      throw new Error(`unexpected set element type ${typeIdent(elem)} for monomorph emission`);
+      throwInternalCodegenError(`unexpected set element type ${typeIdent(elem)} for monomorph emission`);
     }
     return `TOPAZ_SET_DEFINE(${tag}, ${cElem}, ${hashFn}, ${eqFn})`;
   }
