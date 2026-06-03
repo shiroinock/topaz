@@ -5174,14 +5174,30 @@ class Emitter {
     // polarity === true. `instanceof` is its own Topaz node kind.
     if (cond.kind === "instanceof_expr") {
       if (!polarity) return undefined;
-      if (cond.lhs.kind !== "ident") return undefined;
-      if (cond.rhs.kind !== "ident") return undefined;
-      const bMaybe = this.scope.lookup(cond.lhs.name);
+      const lhs = cond.lhs;
+      const rhs = cond.rhs;
+      let lhsName = "";
+      switch (lhs.kind) {
+        case "ident":
+          lhsName = lhs.name;
+          break;
+        default:
+          return undefined;
+      }
+      let rhsName = "";
+      switch (rhs.kind) {
+        case "ident":
+          rhsName = rhs.name;
+          break;
+        default:
+          return undefined;
+      }
+      const bMaybe = this.scope.lookup(lhsName);
       if (bMaybe === undefined) return undefined;
       const b = bMaybe;
       if (b.type.kind !== "unknown") return undefined;
-      if (!this.classes.has(cond.rhs.name)) return undefined;
-      return { name: cond.lhs.name, type: classOf(cond.rhs.name) };
+      if (!this.classes.has(rhsName)) return undefined;
+      return { name: lhsName, type: classOf(rhsName) };
     }
     if (cond.kind !== "bin_op") return undefined;
     const op = cond.op;
@@ -5210,13 +5226,20 @@ class Emitter {
     // undefined check below requires both sides to be identifiers, so this
     // property-access form never collides with it.
     const dn = this.extractDiscriminatorNarrowing(cond, op, polarity);
-    if (dn) return dn;
+    if (dn !== undefined) return dn;
     const leftIsUndef = cond.lhs.kind === "undefined_lit";
     const rightIsUndef = cond.rhs.kind === "undefined_lit";
     if (leftIsUndef === rightIsUndef) return undefined;
     const varNode = leftIsUndef ? cond.rhs : cond.lhs;
-    if (varNode.kind !== "ident") return undefined;
-    const bMaybe = this.scope.lookup(varNode.name);
+    let varName = "";
+    switch (varNode.kind) {
+      case "ident":
+        varName = varNode.name;
+        break;
+      default:
+        return undefined;
+    }
+    const bMaybe = this.scope.lookup(varName);
     if (bMaybe === undefined) return undefined;
     const b = bMaybe;
     if (!containsUndefined(b.type)) return undefined;
@@ -5224,10 +5247,10 @@ class Emitter {
     const stripUndef = (op === "!==") === polarity;
     if (stripUndef) {
       const inner = withoutUndefined(b.type);
-      if (!inner) return undefined;
-      return { name: varNode.name, type: inner };
+      if (inner === undefined) return undefined;
+      return { name: varName, type: inner };
     }
-    return { name: varNode.name, type: T_UNDEFINED };
+    return { name: varName, type: T_UNDEFINED };
   }
 
   // Phase 1.5-6 prep #19: interpret `<id>.<disc> === "lit"` (either argument
