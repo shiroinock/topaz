@@ -6232,6 +6232,8 @@ class Emitter {
     // Phase 1.5-6e-2: `for await`, non-decl bindings, multi-decl, `var`, and an
     // initializer on the binding are all rejected in convert. The binding is
     // already parsed into `for_of_single` / `for_of_pair`.
+    const stmtAnchor: { pos: number } = { pos: stmt.pos };
+    const sourceAnchor: { pos: number } = { pos: stmt.source.pos };
     const binding = stmt.binding;
     const isConst = binding.declKind === "const";
     const bindingType =
@@ -6385,7 +6387,7 @@ class Emitter {
     // for missing elements which we don't want to leak in for-of binding).
     if (binding.kind === "for_of_pair") {
       throw new CodegenError(
-        stmt,
+        stmtAnchor,
         "destructuring binding in for-of is only supported for .entries() on Map / Set",
       );
     }
@@ -6426,18 +6428,23 @@ class Emitter {
         hint = " (string iteration is unsupported; index with `[i]` instead)";
       }
       throw new CodegenError(
-        stmt.source,
+        sourceAnchor,
         `for-of requires an Array<T>, Set<T>, Iterator<T>, Map.values(), Map.keys(), or Map.entries() (got ${typeIdent(rhsType)})${hint}`,
       );
     }
     this.recordArrayMonomorph(rhsType);
-    const elemType = arrayElem(rhsType)!;
+    const elemTypeMaybe = arrayElem(rhsType);
+    if (elemTypeMaybe === undefined) {
+      throw new CodegenError(sourceAnchor, "internal error: Array for-of missing element type");
+    }
+    const elemType = elemTypeMaybe;
 
-    if (bindingType) {
-      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentModule!);
+    if (bindingType !== undefined) {
+      const bindingTypeAnchor: { pos: number } = { pos: bindingType.pos };
+      const declared = this.typeFromAnnotation(bindingType, bindingTypeAnchor, g_currentModule!);
       if (!typeEq(declared, elemType)) {
         throw new CodegenError(
-          bindingType,
+          bindingTypeAnchor,
           `for-of binding type ${typeIdent(declared)} does not match array element type ${typeIdent(elemType)}`,
         );
       }
@@ -6456,39 +6463,34 @@ class Emitter {
     // lookups see the right element type. We also push a second frame for
     // the body itself so any narrowing inside the loop pops cleanly.
     this.scope.push();
-    try {
-      const bindingAnchor: { pos: number } = { pos: stmt.pos };
-      this.scope.declareBinding(bindName, elemType, isConst, bindingAnchor);
-      this.scope.push();
-      this.pushLoopCtx("loop");
-      try {
-        const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
-          ? stmt.body.stmts
-          : [stmt.body];
-        const stmtLines: string[] = [];
-        for (const s of stmtList) {
-          stmtLines.push(this.emitStatement(s, indent + 2));
-          this.applyCarryNarrowing(s);
-        }
+    this.scope.declareBinding(bindName, elemType, isConst, stmtAnchor);
+    this.scope.push();
+    this.pushLoopCtx("loop");
 
-        const lines: string[] = [];
-        lines.push(`${pad}{`);
-        lines.push(`${pad}  ${arrCType} ${arrTmp} = ${rhsExpr};`);
-        lines.push(
-          `${pad}  for (size_t ${idxTmp} = 0; ${idxTmp} < ${arrTmp}->len; ${idxTmp}++) {`,
-        );
-        lines.push(`${innerPad}${elemCType} ${bindName} = ${arrTmp}->data[${idxTmp}];`);
-        if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
-        lines.push(`${pad}  }`);
-        lines.push(`${pad}}`);
-        return lines.join("\n");
-      } finally {
-        this.popLoopCtx();
-        this.scope.pop();
-      }
-    } finally {
-      this.scope.pop();
+    const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
+      ? stmt.body.stmts
+      : [stmt.body];
+    const stmtLines: string[] = [];
+    for (const s of stmtList) {
+      stmtLines.push(this.emitStatement(s, indent + 2));
+      this.applyCarryNarrowing(s);
     }
+
+    const lines: string[] = [];
+    lines.push(`${pad}{`);
+    lines.push(`${pad}  ${arrCType} ${arrTmp} = ${rhsExpr};`);
+    lines.push(
+      `${pad}  for (size_t ${idxTmp} = 0; ${idxTmp} < ${arrTmp}->len; ${idxTmp}++) {`,
+    );
+    lines.push(`${innerPad}${elemCType} ${bindName} = ${arrTmp}->data[${idxTmp}];`);
+    if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+    lines.push(`${pad}  }`);
+    lines.push(`${pad}}`);
+
+    this.popLoopCtx();
+    this.scope.pop();
+    this.scope.pop();
+    return lines.join("\n");
   }
 
 
