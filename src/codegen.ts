@@ -3345,50 +3345,49 @@ class Emitter {
       g_currentModule = declSf;
       this.currentTypeModule = declSf;
     }
-    try {
-      const ctorDecl = ctor.decl;
-      const anchor: { pos: number } = ctorDecl !== undefined ? { pos: ctorDecl.pos } : { pos: info.decl.pos };
-      for (const p of ctor.params) {
-        this.scope.declareBinding(p.name, p.type, /* isConst */ false, anchor);
-      }
-      const bodyLines: string[] = [];
-      bodyLines.push("{");
-      bodyLines.push(
-        `  topaz_class_${info.name} *${TOPAZ_THIS} = (topaz_class_${info.name} *)topaz_arena_calloc(1, sizeof(*${TOPAZ_THIS}));`,
-      );
-      bodyLines.push(
-        `  ${TOPAZ_THIS}->__topaz_class_tag = &topaz_class_${info.name}_tag;`,
-      );
-      this.emitFieldInitializers(info, bodyLines);
-      // Phase 1.5-6 prep: positional all-args auto-ctor (anonymous class
-      // synthesized from a TypeLiteral). When `decl === undefined` and the
-      // ctor carries params, each param maps 1:1 to a field of the same name
-      // (recordAnonClass guarantees this) and we emit `this->f = f;` for each
-      // in field order.
-      if (ctorDecl === undefined && ctor.params.length > 0) {
-        for (const p of ctor.params) {
-          bodyLines.push(`  ${TOPAZ_THIS}->${p.name} = ${p.name};`);
-        }
-      }
-      // Phase 1.5-6 prep: auto-synthesized ctors (decl === undefined) have no
-      // user body — the field initializer block above is the entire body.
-      if (ctorDecl !== undefined) {
-        for (const s of ctorDecl.body.stmts) {
-          if (s.kind === "return_stmt") {
-            throw new CodegenError(s, "`return` inside a constructor is unsupported");
-          }
-          bodyLines.push(this.emitStatement(s, 1));
-        }
-      }
-      bodyLines.push(`  return ${TOPAZ_THIS};`);
-      bodyLines.push("}");
-      return `${this.constructorSignature(info, ctor)} ${bodyLines.join("\n")}`;
-    } finally {
-      this.scope.pop();
-      this.currentClass = undefined;
-      g_currentModule = savedG;
-      this.currentTypeModule = savedT;
+    const ctorDecl = ctor.decl;
+    const anchor: { pos: number } = ctorDecl !== undefined ? { pos: ctorDecl.pos } : { pos: info.decl.pos };
+    for (const p of ctor.params) {
+      this.scope.declareBinding(p.name, p.type, /* isConst */ false, anchor);
     }
+    const bodyLines: string[] = [];
+    bodyLines.push("{");
+    bodyLines.push(
+      `  topaz_class_${info.name} *${TOPAZ_THIS} = (topaz_class_${info.name} *)topaz_arena_calloc(1, sizeof(*${TOPAZ_THIS}));`,
+    );
+    bodyLines.push(
+      `  ${TOPAZ_THIS}->__topaz_class_tag = &topaz_class_${info.name}_tag;`,
+    );
+    this.emitFieldInitializers(info, bodyLines);
+    // Phase 1.5-6 prep: positional all-args auto-ctor (anonymous class
+    // synthesized from a TypeLiteral). When `decl === undefined` and the
+    // ctor carries params, each param maps 1:1 to a field of the same name
+    // (recordAnonClass guarantees this) and we emit `this->f = f;` for each
+    // in field order.
+    if (ctorDecl === undefined && ctor.params.length > 0) {
+      for (const p of ctor.params) {
+        bodyLines.push(`  ${TOPAZ_THIS}->${p.name} = ${p.name};`);
+      }
+    }
+    // Phase 1.5-6 prep: auto-synthesized ctors (decl === undefined) have no
+    // user body — the field initializer block above is the entire body.
+    if (ctorDecl !== undefined) {
+      for (const s of ctorDecl.body.stmts) {
+        if (s.kind === "return_stmt") {
+          const stmtAnchor: { pos: number } = { pos: s.pos };
+          throw new CodegenError(stmtAnchor, "`return` inside a constructor is unsupported");
+        }
+        bodyLines.push(this.emitStatement(s, 1));
+      }
+    }
+    bodyLines.push(`  return ${TOPAZ_THIS};`);
+    bodyLines.push("}");
+    const rendered = `${this.constructorSignature(info, ctor)} ${bodyLines.join("\n")}`;
+    this.scope.pop();
+    this.currentClass = undefined;
+    g_currentModule = savedG;
+    this.currentTypeModule = savedT;
+    return rendered;
   }
 
   // Phase 1.5-6 prep: each field initializer (`x: T = init;`) becomes a
@@ -3405,7 +3404,7 @@ class Emitter {
     if (info.fieldInits.size === 0) return;
     for (const fname of info.fieldOrder) {
       const init = info.fieldInits.get(fname);
-      if (!init) continue;
+      if (init === undefined) continue;
       const fty = info.fields.get(fname)!;
       const initC = this.emitWithExpected(init, fty);
       out.push(`  ${TOPAZ_THIS}->${fname} = ${initC};`);
@@ -3419,19 +3418,24 @@ class Emitter {
     this.currentReturnType = method.returnType;
     this.liveTryFrames = 0;
     this.scope.push();
-    try {
-      for (const p of method.params) {
-        this.scope.declareBinding(p.name, p.type, /* isConst */ false, method.decl);
-      }
-      // Methods only exist on user-declared classes, so `info.sf` is defined.
-      const body = this.emitBlockBoundary(method.decl.body, info.sf!);
-      return `${this.methodSignature(info, method)} ${body}`;
-    } finally {
-      this.scope.pop();
-      this.currentClass = undefined;
-      this.currentReturnType = prevRet;
-      this.liveTryFrames = prevLive;
+    const methodAnchor: { pos: number } = { pos: method.decl.pos };
+    for (const p of method.params) {
+      this.scope.declareBinding(p.name, p.type, /* isConst */ false, methodAnchor);
     }
+    // Methods only exist on user-declared classes, so `info.sf` is defined.
+    const methodSf = info.sf;
+    let body = "";
+    if (methodSf === undefined) {
+      throwInternalCodegenError(`missing source module for method '${info.name}.${method.decl.name}'`);
+    } else {
+      body = this.emitBlockBoundary(method.decl.body, methodSf);
+    }
+    const rendered = `${this.methodSignature(info, method)} ${body}`;
+    this.scope.pop();
+    this.currentClass = undefined;
+    this.currentReturnType = prevRet;
+    this.liveTryFrames = prevLive;
+    return rendered;
   }
 
   // Phase 1.4b: each interface gets a vtable struct. Fields become get/set
