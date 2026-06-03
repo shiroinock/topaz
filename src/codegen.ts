@@ -4339,14 +4339,15 @@ class Emitter {
   }
 
   private emitArrowBodyText(arrow: ArrowExpr, returnType: TopazType): string {
-    if (arrow.body.kind === "arrow_block_body") {
-      const blk: BlockStmt = { kind: "block_stmt", stmts: arrow.body.stmts, pos: arrow.pos, end: arrow.end };
+    const body = arrow.body;
+    if (body.kind === "arrow_block_body") {
+      const blk: BlockStmt = { kind: "block_stmt", stmts: body.stmts, pos: arrow.pos, end: arrow.end };
       return this.emitBlock(blk, 0);
     }
 
     // Expression body: wrap in `{ return <expr>; }`. emitWithExpected applies
     // the return-type coercion the same way an explicit return statement would.
-    const exprStr = this.emitWithExpected(arrow.body.expr, returnType);
+    const exprStr = this.emitWithExpected(body.expr, returnType);
     return `{\n  return ${exprStr};\n}`;
   }
 
@@ -4535,16 +4536,18 @@ class Emitter {
         // Recurse into deeper arrows too (their free vars also bubble up).
         const deeperLocals = new Set<string>(innerLocals);
         for (const p of a.params) deeperLocals.add(p.name);
-        if (a.body.kind === "arrow_block_body") {
-          for (const st of a.body.stmts) walkStmt(st, deeperLocals, innerOnIdent, innerOnArrow);
+        const deeperBody = a.body;
+        if (deeperBody.kind === "arrow_block_body") {
+          for (const st of deeperBody.stmts) walkStmt(st, deeperLocals, innerOnIdent, innerOnArrow);
         } else {
-          walkExpr(a.body.expr, deeperLocals, innerOnIdent, innerOnArrow);
+          walkExpr(deeperBody.expr, deeperLocals, innerOnIdent, innerOnArrow);
         }
       };
-      if (inner.body.kind === "arrow_block_body") {
-        for (const st of inner.body.stmts) walkStmt(st, innerLocals, innerOnIdent, innerOnArrow);
+      const innerBody = inner.body;
+      if (innerBody.kind === "arrow_block_body") {
+        for (const st of innerBody.stmts) walkStmt(st, innerLocals, innerOnIdent, innerOnArrow);
       } else {
-        walkExpr(inner.body.expr, innerLocals, innerOnIdent, innerOnArrow);
+        walkExpr(innerBody.expr, innerLocals, innerOnIdent, innerOnArrow);
       }
       for (const name of innerCaps.keys()) {
         if (locals.has(name)) continue;
@@ -4554,10 +4557,11 @@ class Emitter {
       }
     };
 
-    if (arrow.body.kind === "arrow_block_body") {
-      for (const s of arrow.body.stmts) walkStmt(s, locals, outerOnIdent, outerOnArrow);
+    const body = arrow.body;
+    if (body.kind === "arrow_block_body") {
+      for (const s of body.stmts) walkStmt(s, locals, outerOnIdent, outerOnArrow);
     } else {
-      walkExpr(arrow.body.expr, locals, outerOnIdent, outerOnArrow);
+      walkExpr(body.expr, locals, outerOnIdent, outerOnArrow);
     }
   }
 
