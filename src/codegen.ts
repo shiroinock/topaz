@@ -3136,13 +3136,12 @@ class Emitter {
     for (const fname of iface.fieldOrder) {
       const want = iface.fields.get(fname)!;
       const got = cls.fields.get(fname);
-      if (!got) {
+      if (got === undefined) {
         throw new CodegenError(
           anchor,
           `class '${cls.name}' is missing field '${fname}' required by interface '${iface.name}'`,
         );
-      }
-      if (!typeEq(got, want)) {
+      } else if (!typeEq(got, want)) {
         throw new CodegenError(
           anchor,
           `class '${cls.name}.${fname}' has type ${typeIdent(got)}, but interface '${iface.name}' requires ${typeIdent(want)}`,
@@ -3152,30 +3151,31 @@ class Emitter {
     for (const mname of iface.methodOrder) {
       const want = iface.methods.get(mname)!;
       const got = cls.methods.get(mname);
-      if (!got) {
+      if (got === undefined) {
         throw new CodegenError(
           anchor,
           `class '${cls.name}' is missing method '${mname}' required by interface '${iface.name}'`,
         );
-      }
-      if (!typeEq(got.returnType, want.returnType)) {
-        throw new CodegenError(
-          anchor,
-          `class '${cls.name}.${mname}' returns ${typeIdent(got.returnType)}, but interface '${iface.name}' requires ${typeIdent(want.returnType)}`,
-        );
-      }
-      if (got.params.length !== want.params.length) {
-        throw new CodegenError(
-          anchor,
-          `class '${cls.name}.${mname}' has ${got.params.length} parameter(s), but interface '${iface.name}' requires ${want.params.length}`,
-        );
-      }
-      for (let i = 0; i < want.params.length; i++) {
-        if (!typeEq(got.params[i]!.type, want.params[i]!.type)) {
+      } else {
+        if (!typeEq(got.returnType, want.returnType)) {
           throw new CodegenError(
             anchor,
-            `class '${cls.name}.${mname}' parameter ${i + 1} has type ${typeIdent(got.params[i]!.type)}, but interface '${iface.name}' requires ${typeIdent(want.params[i]!.type)}`,
+            `class '${cls.name}.${mname}' returns ${typeIdent(got.returnType)}, but interface '${iface.name}' requires ${typeIdent(want.returnType)}`,
           );
+        }
+        if (got.params.length !== want.params.length) {
+          throw new CodegenError(
+            anchor,
+            `class '${cls.name}.${mname}' has ${got.params.length} parameter(s), but interface '${iface.name}' requires ${want.params.length}`,
+          );
+        }
+        for (let i = 0; i < want.params.length; i++) {
+          if (!typeEq(got.params[i]!.type, want.params[i]!.type)) {
+            throw new CodegenError(
+              anchor,
+              `class '${cls.name}.${mname}' parameter ${i + 1} has type ${typeIdent(got.params[i]!.type)}, but interface '${iface.name}' requires ${typeIdent(want.params[i]!.type)}`,
+            );
+          }
         }
       }
     }
