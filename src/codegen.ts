@@ -2993,12 +2993,13 @@ class Emitter {
     // monomorph (the ClassInfo lives under the mangled name, not cls.name);
     // otherwise we look up by the source name.
     const info = infoOverride ?? this.classes.get(cls.name)!;
+    const clsAnchor: { pos: number } = { pos: cls.pos };
     for (const ifaceName of cls.implementsList) {
       if (!this.interfaces.has(ifaceName)) {
-        throw new CodegenError(cls, `unknown interface '${ifaceName}'`);
+        throw new CodegenError(clsAnchor, `unknown interface '${ifaceName}'`);
       }
       if (info.implements.includes(ifaceName)) {
-        throw new CodegenError(cls, `class '${info.name}' lists interface '${ifaceName}' more than once`);
+        throw new CodegenError(clsAnchor, `class '${info.name}' lists interface '${ifaceName}' more than once`);
       }
       info.implements.push(ifaceName);
     }
