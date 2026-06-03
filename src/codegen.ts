@@ -3257,8 +3257,9 @@ class Emitter {
   private collectParams(params: Array<FunctionParam>, sf: SourceModule): ParamInfo[] {
     const out: ParamInfo[] = [];
     for (const p of params) {
-      const annot = this.typeFromAnnotation(p.type, p, sf);
-      this.assertNotVoid(annot, p, "parameter type");
+      const paramAnchor: { pos: number } = { pos: p.pos };
+      const annot = this.typeFromAnnotation(p.type, paramAnchor, sf);
+      this.assertNotVoid(annot, paramAnchor, "parameter type");
       // Phase 1.5-6 prep: `param?: T` is the syntactic sugar for
       // `param: T | undefined`. Lift the declared type into the union here so
       // the rest of codegen (narrowing, undefined wrap helpers, vtable
