@@ -2929,7 +2929,7 @@ class Emitter {
     // value directly. The typedef is already emitted (emitDunionTypedef) ahead
     // of the container macros (see emit() containerMonomorphSlot order).
     if (elem.kind === "dunion") return typeIdent(elem);
-    throw new Error(`unexpected container element type ${typeIdent(elem)}`);
+    throwInternalCodegenError(`unexpected container element type ${typeIdent(elem)}`);
   }
 
   // Phase 1.5-6e-3: consumes the Topaz `InterfaceDecl`. The syntactic rejects
