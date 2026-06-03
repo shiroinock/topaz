@@ -4301,7 +4301,7 @@ class Emitter {
     // `__topaz_env_<N>` by name in its body even though the actual
     // definition lands later in the C file.
     const fwdLines: string[] = [];
-    if (envTypedef) fwdLines.push(envTypedef);
+    if (envTypedef.length > 0) fwdLines.push(envTypedef);
     fwdLines.push(`${fnSig};`);
     this.arrowFwdLines.push(fwdLines.join("\n"));
     this.arrowDefLines.push(`${fnSig} ${bodyText}`);
