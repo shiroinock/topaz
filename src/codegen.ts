@@ -5348,16 +5348,17 @@ class Emitter {
     const pad = "  ".repeat(indent);
 
     if (stmt.kind === "return_stmt") {
+      const stmtAnchor: { pos: number } = { pos: stmt.pos };
       const currentReturnTypeMaybe = this.currentReturnType;
       if (currentReturnTypeMaybe === undefined) {
-        throw new CodegenError(stmt, "`return` outside of a function or method");
+        throw new CodegenError(stmtAnchor, "`return` outside of a function or method");
       }
       const currentReturnType: TopazType = currentReturnTypeMaybe;
       const returnValueMaybe = stmt.value;
       if (returnValueMaybe === undefined) {
         if (currentReturnType.kind !== "void") {
           throw new CodegenError(
-            stmt,
+            stmtAnchor,
             `\`return;\` is only allowed in a void-returning function (current return type is ${typeIdent(currentReturnType)})`,
           );
         }
@@ -5368,7 +5369,7 @@ class Emitter {
       }
       if (currentReturnType.kind === "void") {
         throw new CodegenError(
-          stmt,
+          stmtAnchor,
           "`return <expr>;` is not allowed in a void-returning function (use a bare `return;` or remove it)",
         );
       }
