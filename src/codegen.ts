@@ -4896,21 +4896,41 @@ class Emitter {
       throw new CodegenError(anchor, `internal error: missing generic class '${refName}'`);
     }
     const generic: GenericClassInfo = genericMaybe;
-    if (!typeArgNodes || typeArgNodes.length !== generic.typeParams.length) {
+    let providedTypeArgCount = 0;
+    if (typeArgNodes !== undefined) {
+      providedTypeArgCount = typeArgNodes.length;
+    }
+    if (typeArgNodes === undefined || providedTypeArgCount !== generic.typeParams.length) {
       throw this.typeErr(
         anchor,
-        `${refName} expects ${generic.typeParams.length} type argument(s), got ${typeArgNodes?.length ?? 0}`,
+        `${refName} expects ${generic.typeParams.length} type argument(s), got ${providedTypeArgCount}`,
       );
     }
+    const concreteTypeArgNodes: Array<TypeNode> = typeArgNodes;
     // Type args can themselves reference the surrounding type-param scope
     // (e.g. a generic class field of type `Box<T>`), so resolve under the
     // current scope without swapping.
     const subs = new Map<string, TopazType>();
     for (let i = 0; i < generic.typeParams.length; i++) {
-      const t = this.typeFromAnnotation(typeArgNodes[i]!, anchor, sf);
-      subs.set(generic.typeParams[i]!, t);
+      if (i < concreteTypeArgNodes.length && i < generic.typeParams.length) {
+        const typeArgNode = concreteTypeArgNodes[i];
+        const typeParam = generic.typeParams[i];
+        const t = this.typeFromAnnotation(typeArgNode, anchor, sf);
+        subs.set(typeParam, t);
+      } else {
+        throwInternalCodegenError("instantiateGenericClass: missing type argument");
+      }
     }
-    const typeArgs = generic.typeParams.map((tp) => subs.get(tp)!);
+    const typeArgs: Array<TopazType> = [];
+    for (const tp of generic.typeParams) {
+      const tMaybe = subs.get(tp);
+      if (tMaybe !== undefined) {
+        const t: TopazType = tMaybe;
+        typeArgs.push(t);
+      } else {
+        throwInternalCodegenError("instantiateGenericClass: missing type argument substitution");
+      }
+    }
     const mangled = mangleMonomorph(generic.name, typeArgs);
     if (this.classMonomorphs.has(mangled)) {
       return classOf(mangled);
@@ -4939,11 +4959,8 @@ class Emitter {
     // resolve in the generic class's module (collectClassMembers sets it).
     const prevScope = this.typeParamScope;
     this.typeParamScope = subs;
-    try {
-      this.collectClassMembers(generic.decl, generic.sf, info);
-    } finally {
-      this.typeParamScope = prevScope;
-    }
+    this.collectClassMembers(generic.decl, generic.sf, info);
+    this.typeParamScope = prevScope;
     return classOf(mangled);
   }
 
