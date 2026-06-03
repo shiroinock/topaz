@@ -8109,7 +8109,7 @@ class Emitter {
         return `${resolved.mangled}(${args})`;
       }
       const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
-      if (sig) {
+      if (sig !== undefined) {
         const callAnchor: { pos: number } = { pos: expr.pos };
         const args = this.emitCallArgs(expr.args, sig.params, `${callee.name}()`, callAnchor).join(", ");
         return `${sig.cName}(${args})`;
@@ -9593,7 +9593,7 @@ class Emitter {
       // functions need a call-site type-arg list to monomorphize, so they
       // stay rejected here.
       const sig = this.resolveFunctionSig(expr.name, { pos: expr.pos });
-      if (sig) {
+      if (sig !== undefined) {
         const fnType: TopazType = { kind: "fn", params: sig.params, returnType: sig.returnType };
         this.recordFnMonomorph(fnType);
         return fnType;
@@ -10259,7 +10259,7 @@ class Emitter {
           return resolved.sig.returnType;
         }
         const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
-        if (sig) return sig.returnType;
+        if (sig !== undefined) return sig.returnType;
         // Phase 1.5-3.5e: fn-typed local — look up its inferred type and use
         // its declared return type.
         const calleeType = this.inferType(callee);
