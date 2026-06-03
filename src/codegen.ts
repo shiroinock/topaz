@@ -3185,8 +3185,11 @@ class Emitter {
 
   private classImplements(className: string, ifaceName: string): boolean {
     const cls = this.classes.get(className);
-    if (!cls) return false;
-    return cls.implements.includes(ifaceName);
+    if (cls === undefined) {
+      return false;
+    } else {
+      return cls.implements.includes(ifaceName);
+    }
   }
 
   // Phase 1.5-6e-3: consumes the Topaz `ClassFieldMember`. Name-identifier,
