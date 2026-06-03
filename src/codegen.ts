@@ -7955,85 +7955,79 @@ class Emitter {
       }
     }
 
-    if (
-      callee.kind === "prop_access" &&
-      callee.receiver.kind === "ident" &&
-      callee.receiver.name === "console" &&
-      // Phase 1.5-6 prep #26: console.error shares console.log's one-argument
-      // scalar lowering, differing only in the runtime stream (stderr).
-      (callee.name === "log" || callee.name === "error")
-    ) {
-      const method = callee.name;
-      this.checkConsoleCallArgs(expr, method);
-      const arg = expr.args[0]!;
-      const t = this.inferType(arg);
-      const family = method === "log" ? "log" : "error";
-      const fn =
-        t.kind === "boolean" ? `topaz_console_${family}_boolean`
-        : t.kind === "string" ? `topaz_console_${family}_string`
-        : `topaz_console_${family}_number`;
-      return `${fn}(${this.emitExpression(arg)})`;
-    }
-
-    // Phase 1.5-6 prep #26: process.exit(code?) -> never. Lowered to the
-    // runtime exit wrapper; arity 0 defaults to 0 (Node's default code). The
-    // `process` identifier is synthetic (no real binding), same model as
-    // `console` above.
-    if (
-      callee.kind === "prop_access" &&
-      callee.receiver.kind === "ident" &&
-      callee.receiver.name === "process" &&
-      callee.name === "exit"
-    ) {
-      return this.emitProcessExit(expr);
-    }
-
-    // Phase 1.5-6 prep #26: process.stdout.write(s) / process.stderr.write(s)
-    // -> void. Recognized syntactically (the `process.stdout` receiver is never
-    // evaluated as a value).
-    if (
-      callee.kind === "prop_access" &&
-      callee.receiver.kind === "prop_access" &&
-      callee.receiver.receiver.kind === "ident" &&
-      callee.receiver.receiver.name === "process" &&
-      (callee.receiver.name === "stdout" || callee.receiver.name === "stderr") &&
-      callee.name === "write"
-    ) {
-      return this.emitProcessStreamWrite(expr, callee.receiver.name);
-    }
-
-    // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
-    // syntactically (the `String` identifier is not a real binding — we don't
-    // model a `String` global namespace, only this single static method).
-    if (
-      callee.kind === "prop_access" &&
-      callee.receiver.kind === "ident" &&
-      callee.receiver.name === "String"
-    ) {
-      return this.emitStringStaticCall(expr, callee);
-    }
-
     if (callee.kind === "prop_access") {
-      const baseType = this.inferType(callee.receiver);
+      const prop = callee;
+      const receiver = prop.receiver;
+      if (receiver.kind === "ident") {
+        if (
+          receiver.name === "console" &&
+          // Phase 1.5-6 prep #26: console.error shares console.log's one-argument
+          // scalar lowering, differing only in the runtime stream (stderr).
+          (prop.name === "log" || prop.name === "error")
+        ) {
+          const method = prop.name;
+          this.checkConsoleCallArgs(expr, method);
+          const arg = expr.args[0]!;
+          const t = this.inferType(arg);
+          const family = method === "log" ? "log" : "error";
+          const fn =
+            t.kind === "boolean" ? `topaz_console_${family}_boolean`
+            : t.kind === "string" ? `topaz_console_${family}_string`
+            : `topaz_console_${family}_number`;
+          return `${fn}(${this.emitExpression(arg)})`;
+        }
+
+        // Phase 1.5-6 prep #26: process.exit(code?) -> never. Lowered to the
+        // runtime exit wrapper; arity 0 defaults to 0 (Node's default code).
+        // The `process` identifier is synthetic, same model as `console`.
+        if (receiver.name === "process" && prop.name === "exit") {
+          return this.emitProcessExit(expr);
+        }
+
+        // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
+        // syntactically (the `String` identifier is not a real binding — we
+        // don't model a `String` global namespace, only this static method).
+        if (receiver.name === "String") {
+          return this.emitStringStaticCall(expr, prop);
+        }
+      }
+
+      // Phase 1.5-6 prep #26: process.stdout.write(s) /
+      // process.stderr.write(s) -> void. Recognized syntactically (the
+      // `process.stdout` receiver is never evaluated as a value).
+      if (receiver.kind === "prop_access") {
+        const receiverProp = receiver;
+        const receiverBase = receiverProp.receiver;
+        if (
+          receiverBase.kind === "ident" &&
+          receiverBase.name === "process" &&
+          (receiverProp.name === "stdout" || receiverProp.name === "stderr") &&
+          prop.name === "write"
+        ) {
+          return this.emitProcessStreamWrite(expr, receiverProp.name);
+        }
+      }
+
+      const baseType = this.inferType(prop.receiver);
       if (isArrayType(baseType)) {
-        return this.emitArrayMethodCall(expr, callee, baseType);
+        return this.emitArrayMethodCall(expr, prop, baseType);
       }
       if (isMapType(baseType)) {
-        return this.emitMapMethodCall(expr, callee, baseType);
+        return this.emitMapMethodCall(expr, prop, baseType);
       }
       if (isSetType(baseType)) {
-        return this.emitSetMethodCall(expr, callee, baseType);
+        return this.emitSetMethodCall(expr, prop, baseType);
       }
       if (baseType.kind === "string") {
-        return this.emitStringMethodCall(expr, callee);
+        return this.emitStringMethodCall(expr, prop);
       }
       if (isClassType(baseType)) {
-        return this.emitClassMethodCall(expr, callee, baseType);
+        return this.emitClassMethodCall(expr, prop, baseType);
       }
       if (isInterfaceType(baseType)) {
-        return this.emitInterfaceMethodCall(expr, callee, baseType);
+        return this.emitInterfaceMethodCall(expr, prop, baseType);
       }
-      throw new CodegenError(callee, `unsupported method '.${callee.name}' on ${typeIdent(baseType)}`);
+      throw new CodegenError(prop, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
     }
 
     if (callee.kind === "ident") {
@@ -9968,9 +9962,12 @@ class Emitter {
       const callee = expr.callee;
       // Phase 1.5-3.5d: optional method call `a?.b()` — the result is the
       // method's return type widened to `R | undefined`.
-      if (callee.kind === "prop_access" && callee.optional) {
-        const { sig } = this.resolveOptionalMethodSig(callee);
-        return makeUnion([sig.returnType, T_UNDEFINED]);
+      if (callee.kind === "prop_access") {
+        const prop = callee;
+        if (prop.optional) {
+          const { sig } = this.resolveOptionalMethodSig(prop);
+          return makeUnion([sig.returnType, T_UNDEFINED]);
+        }
       }
       if (expr.optional) {
         throw new CodegenError(
@@ -9978,55 +9975,53 @@ class Emitter {
           "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
         );
       }
-      if (
-        callee.kind === "prop_access" &&
-        callee.receiver.kind === "ident" &&
-        callee.receiver.name === "console" &&
-        (callee.name === "log" || callee.name === "error")
-      ) {
-        throw new CodegenError(expr, `console.${callee.name} returns void and cannot be used as a value`);
-      }
-      // Phase 1.5-6 prep #26: process.exit returns `never`, process.*.write
-      // returns void — neither is usable as a value.
-      if (
-        callee.kind === "prop_access" &&
-        callee.receiver.kind === "ident" &&
-        callee.receiver.name === "process" &&
-        callee.name === "exit"
-      ) {
-        throw new CodegenError(expr, "process.exit returns `never` and cannot be used as a value");
-      }
-      if (
-        callee.kind === "prop_access" &&
-        callee.receiver.kind === "prop_access" &&
-        callee.receiver.receiver.kind === "ident" &&
-        callee.receiver.receiver.name === "process" &&
-        (callee.receiver.name === "stdout" || callee.receiver.name === "stderr") &&
-        callee.name === "write"
-      ) {
-        throw new CodegenError(expr, `process.${callee.receiver.name}.write returns void and cannot be used as a value`);
-      }
-      // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
-      // syntactically (mirrors emitCall) — the `String` identifier has no
-      // real binding, so we must short-circuit before `inferType(callee.receiver)`.
-      if (
-        callee.kind === "prop_access" &&
-        callee.receiver.kind === "ident" &&
-        callee.receiver.name === "String"
-      ) {
-        return this.inferStringStaticReturn(expr, callee);
-      }
       if (callee.kind === "prop_access") {
-        const baseType = this.inferType(callee.receiver);
+        const prop = callee;
+        const receiver = prop.receiver;
+        if (receiver.kind === "ident") {
+          if (
+            receiver.name === "console" &&
+            (prop.name === "log" || prop.name === "error")
+          ) {
+            throw new CodegenError(expr, `console.${prop.name} returns void and cannot be used as a value`);
+          }
+          // Phase 1.5-6 prep #26: process.exit returns `never`, process.*.write
+          // returns void — neither is usable as a value.
+          if (receiver.name === "process" && prop.name === "exit") {
+            throw new CodegenError(expr, "process.exit returns `never` and cannot be used as a value");
+          }
+          // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
+          // syntactically (mirrors emitCall) — the `String` identifier has no
+          // real binding, so we must short-circuit before `inferType(receiver)`.
+          if (receiver.name === "String") {
+            return this.inferStringStaticReturn(expr, prop);
+          }
+        }
+        if (receiver.kind === "prop_access") {
+          const receiverProp = receiver;
+          const receiverBase = receiverProp.receiver;
+          if (
+            receiverBase.kind === "ident" &&
+            receiverBase.name === "process" &&
+            (receiverProp.name === "stdout" || receiverProp.name === "stderr") &&
+            prop.name === "write"
+          ) {
+            throw new CodegenError(
+              expr,
+              `process.${receiverProp.name}.write returns void and cannot be used as a value`,
+            );
+          }
+        }
+        const baseType = this.inferType(prop.receiver);
         if (isArrayType(baseType)) {
           const elem = arrayElem(baseType)!;
-          if (callee.name === "push") {
+          if (prop.name === "push") {
             throw new CodegenError(expr, "Array.push returns void in this dialect and cannot be used as a value");
           }
-          if (callee.name === "pop") {
+          if (prop.name === "pop") {
             return elem;
           }
-          if (callee.name === "map") {
+          if (prop.name === "map") {
             if (expr.args.length !== 1) {
               throw new CodegenError(expr, "Array.map expects exactly one argument");
             }
@@ -10051,7 +10046,7 @@ class Emitter {
             this.recordArrayMonomorph(result);
             return result;
           }
-          if (callee.name === "slice") {
+          if (prop.name === "slice") {
             if (expr.args.length > 2) {
               throw new CodegenError(expr, "Array.slice expects at most two arguments");
             }
@@ -10067,7 +10062,7 @@ class Emitter {
             // dst monomorph is the same as src; no new Array<T> to register.
             return baseType;
           }
-          if (callee.name === "includes") {
+          if (prop.name === "includes") {
             if (expr.args.length === 0) {
               throw new CodegenError(expr, "Array.includes expects exactly one argument");
             }
@@ -10092,7 +10087,7 @@ class Emitter {
             }
             return T_BOOLEAN;
           }
-          if (callee.name === "filter") {
+          if (prop.name === "filter") {
             if (expr.args.length !== 1) {
               throw new CodegenError(expr, "Array.filter expects exactly one argument");
             }
@@ -10107,7 +10102,7 @@ class Emitter {
             // dst monomorph is the same as src; no new Array<T> to register.
             return baseType;
           }
-          if (callee.name === "join") {
+          if (prop.name === "join") {
             if (expr.args.length > 1) {
               throw new CodegenError(expr, "Array.join expects at most one argument");
             }
@@ -10129,11 +10124,11 @@ class Emitter {
             this.recordArrayJoinMonomorph(baseType);
             return T_STRING;
           }
-          throw new CodegenError(callee, `unsupported method '.${callee.name}' on ${typeIdent(baseType)}`);
+          throw new CodegenError(prop, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
         }
         if (isMapType(baseType)) {
           const v = mapValue(baseType)!;
-          const m = callee.name;
+          const m = prop.name;
           if (m === "set") {
             throw new CodegenError(expr, "Map.set returns void in this dialect and cannot be used as a value");
           }
@@ -10151,10 +10146,10 @@ class Emitter {
               "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
             );
           }
-          throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+          throw new CodegenError(prop, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isSetType(baseType)) {
-          const m = callee.name;
+          const m = prop.name;
           if (m === "add") {
             throw new CodegenError(expr, "Set.add returns void in this dialect and cannot be used as a value");
           }
@@ -10168,28 +10163,28 @@ class Emitter {
               "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
             );
           }
-          throw new CodegenError(callee, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+          throw new CodegenError(prop, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (baseType.kind === "string") {
-          return this.inferStringMethodReturn(expr, callee);
+          return this.inferStringMethodReturn(expr, prop);
         }
         if (isClassType(baseType)) {
           const cls = this.classes.get(classNameOf(baseType)!)!;
-          const method = cls.methods.get(callee.name);
+          const method = cls.methods.get(prop.name);
           if (!method) {
-            throw new CodegenError(callee, `class '${cls.name}' has no method '${callee.name}'`);
+            throw new CodegenError(prop, `class '${cls.name}' has no method '${prop.name}'`);
           }
           return method.returnType;
         }
         if (isInterfaceType(baseType)) {
           const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-          const sig = iface.methods.get(callee.name);
+          const sig = iface.methods.get(prop.name);
           if (!sig) {
-            throw new CodegenError(callee, `interface '${iface.name}' has no method '${callee.name}'`);
+            throw new CodegenError(prop, `interface '${iface.name}' has no method '${prop.name}'`);
           }
           return sig.returnType;
         }
-        throw new CodegenError(callee, `unsupported method '.${callee.name}' on ${typeIdent(baseType)}`);
+        throw new CodegenError(prop, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
       }
       if (callee.kind === "ident") {
         // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
