@@ -2918,7 +2918,7 @@ class Emitter {
         `static inline topaz_boolean topaz_key_eq_${tag}(${cty} a, ${cty} b) { return a.data == b.data; }`,
       ];
     }
-    throw new Error(`unexpected set element type ${typeIdent(elem)} for helper emission`);
+    throwInternalCodegenError(`unexpected set element type ${typeIdent(elem)} for helper emission`);
   }
 
   private cElemTypeForContainer(elem: TopazType): string {
