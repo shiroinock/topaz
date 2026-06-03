@@ -3064,7 +3064,8 @@ class Emitter {
     // は保守的に「無代入」扱い (1.5-3 で flow narrowing が入った後で再評価)。
     // generic class の monomorph 経路 (infoOverride) は同じ ctor decl を見る
     // ので結果が同じになるため skip する。
-    if (!infoOverride) {
+    const hasInfoOverride = infoOverride !== undefined;
+    if (!hasInfoOverride) {
       this.verifyDefiniteFieldInit(info);
     }
     for (const ifaceName of info.implements) {
