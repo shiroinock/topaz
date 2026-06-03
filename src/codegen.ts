@@ -3112,9 +3112,20 @@ class Emitter {
       const e = s.expr;
       if (e.kind !== "assign_expr") continue;
       if (e.op !== "=") continue;
-      if (e.target.kind !== "prop_access") continue;
-      if (e.target.receiver.kind !== "this_expr") continue;
-      out.add(e.target.name);
+      const target = e.target;
+      let assignedField: string = "";
+      let hasAssignedField = false;
+      switch (target.kind) {
+        case "prop_access":
+          if (target.receiver.kind === "this_expr") {
+            assignedField = target.name;
+            hasAssignedField = true;
+          }
+          break;
+        default:
+          break;
+      }
+      if (hasAssignedField) out.add(assignedField);
     }
   }
 
