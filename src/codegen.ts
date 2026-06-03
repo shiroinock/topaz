@@ -104,6 +104,11 @@ type CheckedNodePathBasenameArgs = {
   hasExt: boolean;
 };
 
+type CheckedParseIntArgs = {
+  sArg: Expr;
+  radixArg: Expr;
+};
+
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
@@ -9108,55 +9113,60 @@ class Emitter {
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
   // auto-radix is unsupported); both args are type-checked here so emit-side
   // and infer-side reject in lockstep (mirrors checkNodeFsReadFileSyncArgs).
-  private checkParseIntArgs(expr: CallExpr): void {
+  private checkParseIntArgs(expr: CallExpr): CheckedParseIntArgs {
     if (expr.args.length !== 2) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "parseInt expects exactly two arguments: (s: string, radix: number)",
       );
     }
-    const sType = this.inferType(expr.args[0]!);
+    const sArg = expr.args[0];
+    const sType = this.inferType(sArg);
     if (sType.kind !== "string") {
       throw new CodegenError(
-        expr.args[0]!,
+        { pos: sArg.pos },
         `parseInt first argument must be string, got ${typeIdent(sType)}`,
       );
     }
-    const rType = this.inferType(expr.args[1]!);
+    const radixArg = expr.args[1];
+    const rType = this.inferType(radixArg);
     if (rType.kind !== "number") {
       throw new CodegenError(
-        expr.args[1]!,
+        { pos: radixArg.pos },
         `parseInt radix argument must be number, got ${typeIdent(rType)}`,
       );
     }
+    return { sArg, radixArg };
   }
 
   private emitParseInt(expr: CallExpr): string {
-    this.checkParseIntArgs(expr);
-    const s = this.emitWithExpected(expr.args[0]!, T_STRING);
-    const radix = this.emitWithExpected(expr.args[1]!, T_NUMBER);
+    const checkedArgs = this.checkParseIntArgs(expr);
+    const s = this.emitWithExpected(checkedArgs.sArg, T_STRING);
+    const radix = this.emitWithExpected(checkedArgs.radixArg, T_NUMBER);
     return `topaz_parse_int(${s}, ${radix})`;
   }
 
-  private checkParseFloatArgs(expr: CallExpr): void {
+  private checkParseFloatArgs(expr: CallExpr): Expr {
     if (expr.args.length !== 1) {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "parseFloat expects exactly one argument: (s: string)",
       );
     }
-    const sType = this.inferType(expr.args[0]!);
+    const sArg = expr.args[0];
+    const sType = this.inferType(sArg);
     if (sType.kind !== "string") {
       throw new CodegenError(
-        expr.args[0]!,
+        { pos: sArg.pos },
         `parseFloat argument must be string, got ${typeIdent(sType)}`,
       );
     }
+    return sArg;
   }
 
   private emitParseFloat(expr: CallExpr): string {
-    this.checkParseFloatArgs(expr);
-    const s = this.emitWithExpected(expr.args[0]!, T_STRING);
+    const sArg = this.checkParseFloatArgs(expr);
+    const s = this.emitWithExpected(sArg, T_STRING);
     return `topaz_parse_float(${s})`;
   }
 
