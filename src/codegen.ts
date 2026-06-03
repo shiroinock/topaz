@@ -7440,43 +7440,7 @@ class Emitter {
         break;
       }
     }
-    let arrType: TopazType;
-    if (expr.elems.length === 0) {
-      if (!expected || !isArrayType(expected)) {
-        throw new CodegenError(
-          expr,
-          "cannot infer element type of empty array literal; add an `Array<T>` annotation",
-        );
-      }
-      arrType = expected;
-    } else if (expected && isArrayType(expected)) {
-      // With a known expected Array<T>, use T as the element type so each
-      // fixed element can coerce to it (class -> interface). Spread sources
-      // still require EXACT elem match (no per-element coercion through spread).
-      arrType = expected;
-    } else {
-      // Infer from the first element: spread -> source's elem, fixed -> its type.
-      const first = expr.elems[0]!;
-      let elem: TopazType;
-      if (first.kind === "spread") {
-        const srcType = this.inferType(first.expr);
-        if (!isArrayType(srcType)) {
-          throw new CodegenError(
-            first.expr,
-            `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
-          );
-        }
-        elem = arrayElem(srcType)!;
-      } else {
-        elem = this.inferType(first.expr);
-      }
-      const arr = arrayOf(elem);
-      if (!arr) {
-        throw new CodegenError(expr, `no Array monomorph for element type ${typeIdent(elem)}`);
-      }
-      arrType = arr;
-      this.recordArrayMonomorph(arrType);
-    }
+    const arrType = this.resolveArrayLiteralType(expr, expected);
     const elemType = arrayElem(arrType)!;
     const name = arrayShortName(arrType);
     const id = this.tmpCounter++;
@@ -7537,6 +7501,50 @@ class Emitter {
     return `({ ${parts.join(" ")} ${tmp}; })`;
   }
 
+  private firstArrayLiteralElementType(expr: ArrayLitExpr): TopazType {
+    // Infer from the first element: spread -> source's elem, fixed -> its type.
+    const first = expr.elems[0]!;
+    if (first.kind === "spread") {
+      const srcType = this.inferType(first.expr);
+      if (!isArrayType(srcType)) {
+        throw new CodegenError(
+          first.expr,
+          `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
+        );
+      }
+      return arrayElem(srcType)!;
+    }
+    return this.inferType(first.expr);
+  }
+
+  private resolveArrayLiteralType(
+    expr: ArrayLitExpr,
+    expected: TopazType | undefined,
+  ): TopazType {
+    if (expr.elems.length === 0) {
+      if (!expected || !isArrayType(expected)) {
+        throw new CodegenError(
+          expr,
+          "cannot infer element type of empty array literal; add an `Array<T>` annotation",
+        );
+      }
+      return expected;
+    }
+    if (expected && isArrayType(expected)) {
+      // With a known expected Array<T>, use T as the element type so each
+      // fixed element can coerce to it (class -> interface). Spread sources
+      // still require EXACT elem match (no per-element coercion through spread).
+      return expected;
+    }
+    const elem = this.firstArrayLiteralElementType(expr);
+    const arr = arrayOf(elem);
+    if (!arr) {
+      throw new CodegenError(expr, `no Array monomorph for element type ${typeIdent(elem)}`);
+    }
+    this.recordArrayMonomorph(arr);
+    return arr;
+  }
+
   private emitNewExpression(
     expr: NewExpr,
     expected: TopazType | undefined,
@@ -7567,29 +7575,7 @@ class Emitter {
       );
     }
     if (name === "Map") {
-      let mapType: TopazType;
-      if (expr.typeArgs.length === 2) {
-        const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
-        const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
-        const t = mapOf(k, v);
-        if (!t) {
-          throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
-        }
-        if (expected && !typeEq(expected, t)) {
-          throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
-        }
-        mapType = t;
-      } else if (expr.typeArgs.length !== 0) {
-        throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
-      } else {
-        if (!expected || !isMapType(expected)) {
-          throw new CodegenError(
-            expr,
-            "cannot infer Map type arguments; write `new Map<K, V>()` or annotate the binding",
-          );
-        }
-        mapType = expected;
-      }
+      const mapType = this.resolveMapConstructorType(expr, expected);
       this.recordMapMonomorph(mapType);
       return `topaz_map_${mapShortName(mapType)}_new()`;
     }
@@ -7639,6 +7625,34 @@ class Emitter {
     throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
   }
 
+  private resolveMapConstructorType(
+    expr: NewExpr,
+    expected: TopazType | undefined,
+  ): TopazType {
+    if (expr.typeArgs.length === 2) {
+      const k = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
+      const v = this.typeFromAnnotation(expr.typeArgs[1]!, expr, g_currentModule!);
+      const t = mapOf(k, v);
+      if (!t) {
+        throw new CodegenError(expr, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
+      }
+      if (expected && !typeEq(expected, t)) {
+        throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
+      }
+      return t;
+    }
+    if (expr.typeArgs.length !== 0) {
+      throw new CodegenError(expr, "Map<K, V> requires exactly two type arguments");
+    }
+    if (!expected || !isMapType(expected)) {
+      throw new CodegenError(
+        expr,
+        "cannot infer Map type arguments; write `new Map<K, V>()` or annotate the binding",
+      );
+    }
+    return expected;
+  }
+
   private setConstructorSourceType(source: Expr, elem: TopazType): TopazType {
     const sourceType = this.inferType(source);
     let sourceElem: TopazType | undefined = undefined;
@@ -7672,7 +7686,20 @@ class Emitter {
       throw new CodegenError(expr, "Set() constructor expects at most one argument");
     }
 
-    let setType: TopazType;
+    const setType = this.resolveSetConstructorDeclaredType(expr, expected);
+
+    const elem = setElem(setType)!;
+    if (expr.args.length === 1) {
+      this.setConstructorSourceType(expr.args[0]!, elem);
+    }
+    this.recordSetMonomorph(setType);
+    return setType;
+  }
+
+  private resolveSetConstructorDeclaredType(
+    expr: NewExpr,
+    expected: TopazType | undefined,
+  ): TopazType {
     if (expr.typeArgs.length === 1) {
       const elem = this.typeFromAnnotation(expr.typeArgs[0]!, expr, g_currentModule!);
       const t = setOf(elem);
@@ -7682,25 +7709,18 @@ class Emitter {
       if (expected && !typeEq(expected, t)) {
         throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
-      setType = t;
-    } else if (expr.typeArgs.length !== 0) {
+      return t;
+    }
+    if (expr.typeArgs.length !== 0) {
       throw new CodegenError(expr, "Set<T> requires exactly one type argument");
-    } else {
-      if (!expected || !isSetType(expected)) {
-        throw new CodegenError(
-          expr,
-          "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
-        );
-      }
-      setType = expected;
     }
-
-    const elem = setElem(setType)!;
-    if (expr.args.length === 1) {
-      this.setConstructorSourceType(expr.args[0]!, elem);
+    if (!expected || !isSetType(expected)) {
+      throw new CodegenError(
+        expr,
+        "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
+      );
     }
-    this.recordSetMonomorph(setType);
-    return setType;
+    return expected;
   }
 
   private emitSetIterableConstructor(
@@ -8325,23 +8345,7 @@ class Emitter {
       // key equality), strict byte compare for string, scalar `==` for
       // boolean, reference identity for class (pointer compare) and iface
       // (fat pointer .data compare).
-      let eqExpr: string;
-      if (elem.kind === "number") {
-        eqExpr = `((${lhs}) == (${tVar})) || ((${lhs}) != (${lhs}) && (${tVar}) != (${tVar}))`;
-      } else if (elem.kind === "boolean") {
-        eqExpr = `(${lhs}) == (${tVar})`;
-      } else if (elem.kind === "string") {
-        eqExpr = `topaz_string_eq((${lhs}), (${tVar}))`;
-      } else if (isClassType(elem)) {
-        eqExpr = `(${lhs}) == (${tVar})`;
-      } else if (isInterfaceType(elem)) {
-        eqExpr = `((${lhs}).data) == ((${tVar}).data)`;
-      } else {
-        throw new CodegenError(
-          expr,
-          `Array.includes is unsupported for element type ${typeIdent(elem)}`,
-        );
-      }
+      const eqExpr = this.arrayIncludesEqExpr(elem, lhs, tVar, expr);
       return (
         `({ ${srcTy} ${srcVar} = ${base}; ` +
         `${elemTy} ${tVar} = ${tStr}; ` +
@@ -8400,25 +8404,54 @@ class Emitter {
           `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
         );
       }
-      // Separator must be `string`. Missing → default ",".
-      let sepStr: string;
-      if (expr.args.length === 1) {
-        const sepType = this.inferType(expr.args[0]!);
-        if (sepType.kind !== "string") {
-          throw new CodegenError(
-            expr.args[0]!,
-            `Array.join separator must be string, got ${typeIdent(sepType)}`,
-          );
-        }
-        sepStr = this.emitWithExpected(expr.args[0]!, T_STRING);
-      } else {
-        // `","` static literal as a `topaz_string` compound literal.
-        sepStr = `((topaz_string){ ",", 1 })`;
-      }
+      const sepStr = this.emitArrayJoinSeparator(expr);
       this.recordArrayJoinMonomorph(baseType);
       return `topaz_array_${name}_join(${base}, ${sepStr})`;
     }
     throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+  }
+
+  private arrayIncludesEqExpr(
+    elem: TopazType,
+    lhs: string,
+    tVar: string,
+    expr: CallExpr,
+  ): string {
+    if (elem.kind === "number") {
+      return `((${lhs}) == (${tVar})) || ((${lhs}) != (${lhs}) && (${tVar}) != (${tVar}))`;
+    }
+    if (elem.kind === "boolean") {
+      return `(${lhs}) == (${tVar})`;
+    }
+    if (elem.kind === "string") {
+      return `topaz_string_eq((${lhs}), (${tVar}))`;
+    }
+    if (isClassType(elem)) {
+      return `(${lhs}) == (${tVar})`;
+    }
+    if (isInterfaceType(elem)) {
+      return `((${lhs}).data) == ((${tVar}).data)`;
+    }
+    throw new CodegenError(
+      expr,
+      `Array.includes is unsupported for element type ${typeIdent(elem)}`,
+    );
+  }
+
+  private emitArrayJoinSeparator(expr: CallExpr): string {
+    // Separator must be `string`. Missing -> default ",".
+    if (expr.args.length === 1) {
+      const sepType = this.inferType(expr.args[0]!);
+      if (sepType.kind !== "string") {
+        throw new CodegenError(
+          expr.args[0]!,
+          `Array.join separator must be string, got ${typeIdent(sepType)}`,
+        );
+      }
+      return this.emitWithExpected(expr.args[0]!, T_STRING);
+    }
+    // `","` static literal as a `topaz_string` compound literal.
+    return `((topaz_string){ ",", 1 })`;
   }
 
   // Phase 1.5-6 prep #10/#6f/#6i: String.prototype.charCodeAt / .slice /
@@ -9694,18 +9727,8 @@ class Emitter {
       // elem, fixed -> its type). Subsequent elements are validated by emit-time
       // type checks; inferType only needs the elem to look up the monomorph.
       const first = expr.elems[0]!;
-      let elem: TopazType;
-      if (first.kind === "spread") {
-        const srcType = this.inferType(first.expr);
-        if (!isArrayType(srcType)) {
-          throw new CodegenError(
-            first.expr,
-            `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
-          );
-        }
-        elem = arrayElem(srcType)!;
-      } else {
-        elem = this.inferType(first.expr);
+      const elem = this.firstArrayLiteralElementType(expr);
+      if (first.kind !== "spread") {
         for (let i = 1; i < expr.elems.length; i++) {
           const e = expr.elems[i]!;
           if (e.kind !== "spread") this.expectType(e.expr, elem);
