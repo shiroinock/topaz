@@ -9532,13 +9532,9 @@ class Emitter {
     const id = this.tmpCounter++;
     const tmp = `__topaz_oc_${id}`;
     const ct = cTypeName(args.baseType);
-    let isAbsent: string;
-    if (isInterfaceType(args.inner)) {
-      isAbsent = `${tmp}.data == NULL`;
-    } else {
-      // class / array / map / set: pointer-sentinel
-      isAbsent = `${tmp} == NULL`;
-    }
+    const isAbsent = isInterfaceType(args.inner)
+      ? `${tmp}.data == NULL`
+      : `${tmp} == NULL`; // class / array / map / set: pointer-sentinel
     const resultType = makeUnion([args.accessType, T_UNDEFINED]);
     const absentStr = this.emitUndefinedLiteral(resultType, args.anchor);
     const presentRaw = args.emitPresent(tmp);
