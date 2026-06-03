@@ -8108,7 +8108,7 @@ class Emitter {
         ).join(", ");
         return `${resolved.mangled}(${args})`;
       }
-      const sig = this.resolveFunctionSig(callee.name, callee);
+      const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
       if (sig) {
         const callAnchor: { pos: number } = { pos: expr.pos };
         const args = this.emitCallArgs(expr.args, sig.params, `${callee.name}()`, callAnchor).join(", ");
@@ -8121,7 +8121,7 @@ class Emitter {
       if (calleeType.kind === "fn") {
         return this.emitFnValueCall(expr, callee, calleeType);
       }
-      throw new CodegenError(callee, `unknown function '${callee.name}'`);
+      throw new CodegenError({ pos: callee.pos }, `unknown function '${callee.name}'`);
     }
 
     // Phase 1.5-3.5e: any other expression that types as a fn value (e.g.
@@ -9592,7 +9592,7 @@ class Emitter {
       // values when referenced by name (`seeds.map(makeAdder)`). Generic
       // functions need a call-site type-arg list to monomorphize, so they
       // stay rejected here.
-      const sig = this.resolveFunctionSig(expr.name, expr);
+      const sig = this.resolveFunctionSig(expr.name, { pos: expr.pos });
       if (sig) {
         const fnType: TopazType = { kind: "fn", params: sig.params, returnType: sig.returnType };
         this.recordFnMonomorph(fnType);
@@ -10258,13 +10258,13 @@ class Emitter {
           const resolved = this.resolveGenericCall(callee, expr)!;
           return resolved.sig.returnType;
         }
-        const sig = this.resolveFunctionSig(callee.name, callee);
+        const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
         if (sig) return sig.returnType;
         // Phase 1.5-3.5e: fn-typed local — look up its inferred type and use
         // its declared return type.
         const calleeType = this.inferType(callee);
         if (calleeType.kind === "fn") return calleeType.returnType;
-        throw new CodegenError(callee, `unknown function '${callee.name}'`);
+        throw new CodegenError({ pos: callee.pos }, `unknown function '${callee.name}'`);
       }
       // Phase 1.5-3.5e: any other expression that types as a fn value.
       const ct = this.inferType(callee);
