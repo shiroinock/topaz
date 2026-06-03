@@ -3225,8 +3225,10 @@ class Emitter {
   // Phase 1.5-6e-3: consumes the Topaz ctor member (`ClassMethodMember` with
   // `isCtor`). Generic-ctor / missing-body rejection live in convert.
   private collectConstructor(info: ClassInfo, m: ClassMethodMember, sf: SourceModule): void {
-    if (info.ctor) {
-      throw new CodegenError(m, `class '${info.name}' has multiple constructors`);
+    const ctorAnchor: { pos: number } = { pos: m.pos };
+    const existingCtor = info.ctor;
+    if (existingCtor !== undefined) {
+      throw new CodegenError(ctorAnchor, `class '${info.name}' has multiple constructors`);
     }
     const params = this.collectParams(m.params, sf);
     info.ctor = { params, decl: m };
