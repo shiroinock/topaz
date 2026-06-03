@@ -6264,24 +6264,59 @@ class Emitter {
                     "for-of over .entries() requires destructuring binding `for (const [k, v] of ...)`",
                   );
                 }
-                let keyType: TopazType;
-                let valueType: TopazType;
                 if (isMapType(baseType)) {
                   this.recordMapMonomorph(baseType);
-                  keyType = mapKey(baseType)!;
-                  valueType = mapValue(baseType)!;
-                } else {
-                  // Set.entries() yields [elem, elem] pairs (matches JS).
-                  this.recordSetMonomorph(baseType);
-                  keyType = setElem(baseType)!;
-                  valueType = setElem(baseType)!;
+                  const keyTypeMaybe = mapKey(baseType);
+                  if (keyTypeMaybe === undefined) {
+                    throw new CodegenError({ pos: callExpr.pos }, "internal error: Map.entries() missing key type");
+                  }
+                  const valueTypeMaybe = mapValue(baseType);
+                  if (valueTypeMaybe === undefined) {
+                    throw new CodegenError({ pos: callExpr.pos }, "internal error: Map.entries() missing value type");
+                  }
+                  const pairInfo: {
+                    keyType: TopazType;
+                    valueType: TopazType;
+                    secondField: "value";
+                  } = { keyType: keyTypeMaybe, valueType: valueTypeMaybe, secondField: "value" };
+                  const bindSpec: {
+                    kind: "pair";
+                    firstName: string; firstField: string; firstType: TopazType;
+                    secondName: string; secondField: string; secondType: TopazType;
+                  } = {
+                    kind: "pair",
+                    firstName: binding.first, firstField: "key", firstType: pairInfo.keyType,
+                    secondName: binding.second, secondField: "value", secondType: pairInfo.valueType,
+                  };
+                  return this.emitForOfHashLowering(
+                    stmt, indent, baseType, callee.receiver,
+                    bindSpec,
+                    undefined, isConst,
+                  );
                 }
+                // Set.entries() yields [elem, elem] pairs (matches JS).
+                this.recordSetMonomorph(baseType);
+                const elemTypeMaybe = setElem(baseType);
+                if (elemTypeMaybe === undefined) {
+                  throw new CodegenError({ pos: callExpr.pos }, "internal error: Set.entries() missing element type");
+                }
+                const pairInfo: {
+                  keyType: TopazType;
+                  valueType: TopazType;
+                  secondField: "key";
+                } = { keyType: elemTypeMaybe, valueType: elemTypeMaybe, secondField: "key" };
+                const bindSpec: {
+                  kind: "pair";
+                  firstName: string; firstField: string; firstType: TopazType;
+                  secondName: string; secondField: string; secondType: TopazType;
+                } = {
+                  kind: "pair",
+                  firstName: binding.first, firstField: "key", firstType: pairInfo.keyType,
+                  secondName: binding.second, secondField: "key", secondType: pairInfo.valueType,
+                };
                 return this.emitForOfHashLowering(
                   stmt, indent, baseType, callee.receiver,
-                  { kind: "pair",
-                    firstName: binding.first, firstField: "key", firstType: keyType,
-                    secondName: binding.second, secondField: isMapType(baseType) ? "value" : "key", secondType: valueType,
-                  },
+                  bindSpec,
                   undefined, isConst,
                 );
               }
@@ -6292,26 +6327,50 @@ class Emitter {
                   `for-of over .${methodName}() takes a single binding, not destructuring`,
                 );
               }
-              let bindType: TopazType;
-              let field: "key" | "value";
               if (isMapType(baseType)) {
                 this.recordMapMonomorph(baseType);
                 if (methodName === "values") {
-                  bindType = mapValue(baseType)!;
-                  field = "value";
-                } else {
-                  bindType = mapKey(baseType)!;
-                  field = "key";
+                  const bindTypeMaybe = mapValue(baseType);
+                  if (bindTypeMaybe === undefined) {
+                    throw new CodegenError({ pos: callExpr.pos }, "internal error: Map.values() missing value type");
+                  }
+                  const singleInfo: { bindType: TopazType; field: "value" } =
+                    { bindType: bindTypeMaybe, field: "value" };
+                  const bindSpec: { kind: "single"; name: string; field: string; type: TopazType } =
+                    { kind: "single", name: binding.name, field: "value", type: singleInfo.bindType };
+                  return this.emitForOfHashLowering(
+                    stmt, indent, baseType, callee.receiver,
+                    bindSpec,
+                    bindingType, isConst,
+                  );
                 }
-              } else {
-                // Set: both .values() and .keys() yield the element (matches JS).
-                this.recordSetMonomorph(baseType);
-                bindType = setElem(baseType)!;
-                field = "key";
+                const bindTypeMaybe = mapKey(baseType);
+                if (bindTypeMaybe === undefined) {
+                  throw new CodegenError({ pos: callExpr.pos }, "internal error: Map.keys() missing key type");
+                }
+                const singleInfo: { bindType: TopazType; field: "key" } =
+                  { bindType: bindTypeMaybe, field: "key" };
+                const bindSpec: { kind: "single"; name: string; field: string; type: TopazType } =
+                  { kind: "single", name: binding.name, field: "key", type: singleInfo.bindType };
+                return this.emitForOfHashLowering(
+                  stmt, indent, baseType, callee.receiver,
+                  bindSpec,
+                  bindingType, isConst,
+                );
               }
+              // Set: both .values() and .keys() yield the element (matches JS).
+              this.recordSetMonomorph(baseType);
+              const bindTypeMaybe = setElem(baseType);
+              if (bindTypeMaybe === undefined) {
+                throw new CodegenError({ pos: callExpr.pos }, "internal error: Set values/keys missing element type");
+              }
+              const singleInfo: { bindType: TopazType; field: "key" } =
+                { bindType: bindTypeMaybe, field: "key" };
+              const bindSpec: { kind: "single"; name: string; field: string; type: TopazType } =
+                { kind: "single", name: binding.name, field: "key", type: singleInfo.bindType };
               return this.emitForOfHashLowering(
                 stmt, indent, baseType, callee.receiver,
-                { kind: "single", name: binding.name, field, type: bindType },
+                bindSpec,
                 bindingType, isConst,
               );
             }
@@ -6449,11 +6508,11 @@ class Emitter {
     containerType: TopazType,
     recvExpr: Expr,
     bindSpec:
-      | { kind: "single"; name: string; field: "key" | "value"; type: TopazType }
+      | { kind: "single"; name: string; field: string; type: TopazType }
       | {
           kind: "pair";
-          firstName: string; firstField: "key" | "value"; firstType: TopazType;
-          secondName: string; secondField: "key" | "value"; secondType: TopazType;
+          firstName: string; firstField: string; firstType: TopazType;
+          secondName: string; secondField: string; secondType: TopazType;
         },
     bindingType: TypeNode | undefined,
     isConst: boolean,
