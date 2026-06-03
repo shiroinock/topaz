@@ -4284,8 +4284,9 @@ class Emitter {
     // it. Outer frames remain hidden behind the barrier.
     this.scope.pushBarrier();
     this.scope.push();
+    const arrowAnchor: { pos: number } = { pos: arrow.pos };
     for (const p of params) {
-      this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrow);
+      this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrowAnchor);
     }
     let bodyText: string;
     if (arrow.body.kind === "arrow_block_body") {
