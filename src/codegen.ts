@@ -6860,13 +6860,14 @@ class Emitter {
     // `loopCtx` stack maintained while emitting. The top frame is the nearest
     // enclosing loop / switch (matching the old parent walk's nearest-first
     // semantics).
+    const stmtAnchor: { pos: number } = { pos: stmt.pos };
     const top = this.loopCtx;
     if (top === undefined) {
-      throw new CodegenError(stmt, "`continue` outside of a loop");
+      throw new CodegenError(stmtAnchor, "`continue` outside of a loop");
     }
     if (top.kind === "switch") {
       throw new CodegenError(
-        stmt,
+        stmtAnchor,
         "`continue` inside `switch` is unsupported (switch lowers to do/while(0))",
       );
     }
