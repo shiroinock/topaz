@@ -7522,7 +7522,7 @@ class Emitter {
     expected: TopazType | undefined,
   ): TopazType {
     if (expr.elems.length === 0) {
-      if (!expected || !isArrayType(expected)) {
+      if (expected === undefined || !isArrayType(expected)) {
         throw new CodegenError(
           { pos: expr.pos },
           "cannot infer element type of empty array literal; add an `Array<T>` annotation",
@@ -7530,11 +7530,13 @@ class Emitter {
       }
       return expected;
     }
-    if (expected && isArrayType(expected)) {
-      // With a known expected Array<T>, use T as the element type so each
-      // fixed element can coerce to it (class -> interface). Spread sources
-      // still require EXACT elem match (no per-element coercion through spread).
-      return expected;
+    if (expected !== undefined) {
+      if (isArrayType(expected)) {
+        // With a known expected Array<T>, use T as the element type so each
+        // fixed element can coerce to it (class -> interface). Spread sources
+        // still require EXACT elem match (no per-element coercion through spread).
+        return expected;
+      }
     }
     const elem = this.firstArrayLiteralElementType(expr);
     const arr = arrayOf(elem);
@@ -7607,7 +7609,7 @@ class Emitter {
       // Class -> interface coercion happens at the caller's site (the
       // surrounding emitWithExpected); here we only need to confirm the new
       // expression isn't being asked to produce a different concrete type.
-      if (expected && !typeEq(expected, t) && !this.isAssignableTo(t, expected)) {
+      if (expected !== undefined && !typeEq(expected, t) && !this.isAssignableTo(t, expected)) {
         throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       if (!cls.ctor) {
@@ -7636,7 +7638,7 @@ class Emitter {
       if (!t) {
         throw new CodegenError({ pos: expr.pos }, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
       }
-      if (expected && !typeEq(expected, t)) {
+      if (expected !== undefined && !typeEq(expected, t)) {
         throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       return t;
@@ -7644,7 +7646,7 @@ class Emitter {
     if (expr.typeArgs.length !== 0) {
       throw new CodegenError({ pos: expr.pos }, "Map<K, V> requires exactly two type arguments");
     }
-    if (!expected || !isMapType(expected)) {
+    if (expected === undefined || !isMapType(expected)) {
       throw new CodegenError(
         { pos: expr.pos },
         "cannot infer Map type arguments; write `new Map<K, V>()` or annotate the binding",
@@ -7706,7 +7708,7 @@ class Emitter {
       if (!t) {
         throw new CodegenError({ pos: expr.pos }, `no Set monomorph for element type ${typeIdent(elem)}`);
       }
-      if (expected && !typeEq(expected, t)) {
+      if (expected !== undefined && !typeEq(expected, t)) {
         throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       return t;
@@ -7714,7 +7716,7 @@ class Emitter {
     if (expr.typeArgs.length !== 0) {
       throw new CodegenError({ pos: expr.pos }, "Set<T> requires exactly one type argument");
     }
-    if (!expected || !isSetType(expected)) {
+    if (expected === undefined || !isSetType(expected)) {
       throw new CodegenError(
         { pos: expr.pos },
         "cannot infer Set type argument; write `new Set<T>()` or annotate the binding",
