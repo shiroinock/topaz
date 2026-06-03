@@ -7614,7 +7614,8 @@ class Emitter {
       if (expected !== undefined && !typeEq(expected, t) && !this.isAssignableTo(t, expected)) {
         throw new CodegenError(newAnchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
-      if (!cls.ctor) {
+      const ctor = cls.ctor;
+      if (ctor === undefined) {
         // Reachable only when a class has no fields (we require a ctor when
         // fields exist), so this is a structurally empty class.
         if (args.length !== 0) {
@@ -7622,7 +7623,7 @@ class Emitter {
         }
         return `topaz_class_${className}_new()`;
       }
-      const params = cls.ctor.params;
+      const params = ctor.params;
       const argStr = this.emitCallArgs(args, params, `${cls.name}()`, expr).join(", ");
       return `topaz_class_${className}_new(${argStr})`;
     }
