@@ -3237,15 +3237,16 @@ class Emitter {
   // Phase 1.5-6e-3: consumes the Topaz `ClassMethodMember`. Name-identifier,
   // generic / optional / generator / missing-body rejection live in convert.
   private collectMethod(info: ClassInfo, m: ClassMethodMember, sf: SourceModule): void {
+    const methodAnchor: { pos: number } = { pos: m.pos };
     const mname = m.name;
     if (info.methods.has(mname)) {
-      throw new CodegenError(m, `redeclaration of method '${mname}'`);
+      throw new CodegenError(methodAnchor, `redeclaration of method '${mname}'`);
     }
     if (info.fields.has(mname)) {
-      throw new CodegenError(m, `method '${mname}' conflicts with a field of the same name`);
+      throw new CodegenError(methodAnchor, `method '${mname}' conflicts with a field of the same name`);
     }
     const params = this.collectParams(m.params, sf);
-    const returnType = this.typeFromAnnotation(m.returnType, m, sf);
+    const returnType = this.typeFromAnnotation(m.returnType, methodAnchor, sf);
     info.methods.set(mname, { params, returnType, decl: m });
   }
 
