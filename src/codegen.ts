@@ -7112,8 +7112,15 @@ class Emitter {
       // 0, set by the constructor to a per-class sentinel address; the check
       // dereferences the void* payload through that field.
       this.inferType(expr); // type-check
-      if (expr.rhs.kind !== "ident") throw new CodegenError(expr, "`instanceof` right-hand side must be a concrete class name");
-      const cls = expr.rhs.name;
+      const rhs = expr.rhs;
+      let rhsName: string | undefined = undefined;
+      if (rhs.kind === "ident") {
+        rhsName = rhs.name;
+      }
+      if (rhsName === undefined) {
+        throw new CodegenError({ pos: rhs.pos }, "`instanceof` right-hand side must be a concrete class name");
+      }
+      const cls = rhsName;
       const id = this.tmpCounter++;
       const tmp = `__topaz_io_${id}`;
       const left = this.emitExpression(expr.lhs);
@@ -9757,20 +9764,25 @@ class Emitter {
       const lt = this.inferType(expr.lhs);
       if (lt.kind !== "unknown" && !isClassType(lt)) {
         throw new CodegenError(
-          expr.lhs,
+          { pos: expr.lhs.pos },
           `\`instanceof\` requires left side to be \`unknown\` or a class instance (got ${typeIdent(lt)})`,
         );
       }
-      if (expr.rhs.kind !== "ident") {
+      const rhs = expr.rhs;
+      let rhsName: string | undefined = undefined;
+      if (rhs.kind === "ident") {
+        rhsName = rhs.name;
+      }
+      if (rhsName === undefined) {
         throw new CodegenError(
-          expr.rhs,
+          { pos: rhs.pos },
           "`instanceof` right side must be a class name",
         );
       }
-      if (!this.classes.has(expr.rhs.name)) {
+      if (!this.classes.has(rhsName)) {
         throw new CodegenError(
-          expr.rhs,
-          `unknown class '${expr.rhs.name}' on right side of \`instanceof\``,
+          { pos: rhs.pos },
+          `unknown class '${rhsName}' on right side of \`instanceof\``,
         );
       }
       return T_BOOLEAN;
