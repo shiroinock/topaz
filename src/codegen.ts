@@ -3004,6 +3004,7 @@ class Emitter {
       info.implements.push(ifaceName);
     }
     for (const m of cls.members) {
+      const memberAnchor: { pos: number } = { pos: m.pos };
       // Phase 1.5-6 prep: public / private / protected / readonly は no-op
       // として受理(C 出力に可視性概念は無く、readonly も runtime 強制しない)。
       // static / abstract / override は意味が変わるので引き続き明示エラー。
@@ -3013,8 +3014,17 @@ class Emitter {
         if (mod === "public" || mod === "private" || mod === "protected" || mod === "readonly") {
           continue;
         }
-        const cap = mod.charAt(0).toUpperCase() + mod.slice(1);
-        throw new CodegenError(m, `class member modifier '${cap}Keyword' is unsupported`);
+        let cap: string = "";
+        if (mod === "static") {
+          cap = "Static";
+        } else if (mod === "abstract") {
+          cap = "Abstract";
+        } else if (mod === "override") {
+          cap = "Override";
+        } else {
+          throwInternalCodegenError(`unknown class member modifier '${mod}'`);
+        }
+        throw new CodegenError(memberAnchor, `class member modifier '${cap}Keyword' is unsupported`);
       }
       if (m.kind === "class_field") {
         this.collectField(info, m, sf);
