@@ -3324,7 +3324,7 @@ class Emitter {
     const name = method.decl.name;
     const ownerArg = `topaz_class_${info.name} *${TOPAZ_THIS}`;
     const tail = method.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
-    const params = tail ? `${ownerArg}, ${tail}` : ownerArg;
+    const params = tail.length > 0 ? `${ownerArg}, ${tail}` : ownerArg;
     return `static ${cReturnTypeName(method.returnType)} topaz_class_${info.name}_method_${name}(${params})`;
   }
 
