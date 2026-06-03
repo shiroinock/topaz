@@ -4246,7 +4246,11 @@ class Emitter {
     // resolve to outer-scope bindings via `lookupAcrossBarrier`. Locals
     // declared inside the body and the param names themselves are excluded.
     const captures = new Map<string, TopazType>();
-    this.collectCaptures(arrow, new Set(params.map((p) => p.name)), captures);
+    const excludedNames = new Set<string>();
+    for (const p of params) {
+      excludedNames.add(p.name);
+    }
+    this.collectCaptures(arrow, excludedNames, captures);
 
     const envIsEmpty = captures.size === 0;
     let envTypedef = "";
@@ -5470,7 +5474,10 @@ class Emitter {
         throw new CodegenError(decl, `internal: class '${classNameOf(recvType)!}' not registered`);
       }
       fields = cls.fields;
-      methods = new Set(cls.methods.keys());
+      methods = new Set<string>();
+      for (const methodName of cls.methods.keys()) {
+        methods.add(methodName);
+      }
       receiverKind = "class";
       receiverName = cls.name;
     } else if (isInterfaceType(recvType)) {
@@ -5479,7 +5486,10 @@ class Emitter {
         throw new CodegenError(decl, `internal: interface '${interfaceNameOf(recvType)!}' not registered`);
       }
       fields = iface.fields;
-      methods = new Set(iface.methods.keys());
+      methods = new Set<string>();
+      for (const methodName of iface.methods.keys()) {
+        methods.add(methodName);
+      }
       receiverKind = "iface";
       receiverName = iface.name;
     } else if (recvType.kind === "union") {
