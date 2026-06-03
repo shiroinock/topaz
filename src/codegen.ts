@@ -2944,34 +2944,36 @@ class Emitter {
       const info = this.interfaces.get(iface.name)!;
       for (const m of iface.members) {
         if (m.kind === "interface_field") {
+          const memberAnchor: { pos: number } = { pos: m.pos };
           const fname = m.name;
           if (info.fields.has(fname) || info.methods.has(fname)) {
-            throw new CodegenError(m, `duplicate member '${fname}' in interface '${info.name}'`);
+            throw new CodegenError(memberAnchor, `duplicate member '${fname}' in interface '${info.name}'`);
           }
-          const t = this.typeFromAnnotation(m.type, m, sf);
-          this.assertNotVoid(t, m, "interface field type");
+          const t = this.typeFromAnnotation(m.type, memberAnchor, sf);
+          this.assertNotVoid(t, memberAnchor, "interface field type");
           if (t.kind === "fn") {
-            throw new CodegenError(m, "fn-typed interface fields are unsupported (Phase 1.5-3.5e)");
+            throw new CodegenError(memberAnchor, "fn-typed interface fields are unsupported (Phase 1.5-3.5e)");
           }
           info.fields.set(fname, t);
           info.fieldOrder.push(fname);
         } else {
+          const memberAnchor: { pos: number } = { pos: m.pos };
           const mname = m.name;
           if (info.fields.has(mname) || info.methods.has(mname)) {
-            throw new CodegenError(m, `duplicate member '${mname}' in interface '${info.name}'`);
+            throw new CodegenError(memberAnchor, `duplicate member '${mname}' in interface '${info.name}'`);
           }
           const params = this.collectParams(m.params, sf);
-          const returnType = this.typeFromAnnotation(m.returnType, m, sf);
+          const returnType = this.typeFromAnnotation(m.returnType, memberAnchor, sf);
           // Phase 1.5-3.5e: interface vtable struct is emitted before the fn
           // typedef slot, so fn types in interface methods would forward-
           // reference an undeclared typedef. Reject at collection time.
           for (const p of params) {
             if (p.type.kind === "fn") {
-              throw new CodegenError(m, "fn-typed parameters on interface methods are unsupported (Phase 1.5-3.5e)");
+              throw new CodegenError(memberAnchor, "fn-typed parameters on interface methods are unsupported (Phase 1.5-3.5e)");
             }
           }
           if (returnType.kind === "fn") {
-            throw new CodegenError(m, "fn-typed return on interface methods is unsupported (Phase 1.5-3.5e)");
+            throw new CodegenError(memberAnchor, "fn-typed return on interface methods is unsupported (Phase 1.5-3.5e)");
           }
           info.methods.set(mname, { params, returnType });
           info.methodOrder.push(mname);
