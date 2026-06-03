@@ -4838,11 +4838,13 @@ class Emitter {
 
     const typeArgs: Array<TopazType> = [];
     for (const tp of generic.typeParams) {
-      const t = subs.get(tp);
-      if (t === undefined) {
+      const tMaybe = subs.get(tp);
+      if (tMaybe !== undefined) {
+        const t: TopazType = tMaybe;
+        typeArgs.push(t);
+      } else {
         throwInternalCodegenError("resolveGenericCall: missing type argument substitution");
       }
-      typeArgs.push(t);
     }
     const mangled = mangleMonomorph(generic.name, typeArgs);
 
