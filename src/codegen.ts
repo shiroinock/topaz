@@ -4047,26 +4047,27 @@ class Emitter {
       return { kind: "fn", params, returnType };
     }
     const t = this.inferType(cb);
-    if (t.kind !== "fn") {
-      throw new CodegenError(cbAnchor, `${label} callback must be a function value, got ${typeIdent(t)}`);
-    }
-    if (t.params.length !== paramTypes.length) {
-      throw new CodegenError(
-        { pos: cb.pos },
-        `${label} callback arity ${t.params.length} does not match expected ${paramTypes.length}`,
-      );
-    }
-    for (let i = 0; i < paramTypes.length; i++) {
-      const gotParam = t.params[i];
-      const expectedParam = paramTypes[i];
-      if (!typeEq(gotParam.type, expectedParam)) {
+    if (t.kind === "fn") {
+      const fnType = t;
+      if (fnType.params.length !== paramTypes.length) {
         throw new CodegenError(
           { pos: cb.pos },
-          `${label} callback parameter ${i} type ${typeIdent(gotParam.type)} does not match expected ${typeIdent(expectedParam)}`,
+          `${label} callback arity ${fnType.params.length} does not match expected ${paramTypes.length}`,
         );
       }
+      for (let i = 0; i < paramTypes.length; i++) {
+        const gotParam = fnType.params[i];
+        const expectedParam = paramTypes[i];
+        if (!typeEq(gotParam.type, expectedParam)) {
+          throw new CodegenError(
+            { pos: cb.pos },
+            `${label} callback parameter ${i} type ${typeIdent(gotParam.type)} does not match expected ${typeIdent(expectedParam)}`,
+          );
+        }
+      }
+      return fnType;
     }
-    return t;
+    throw new CodegenError(cbAnchor, `${label} callback must be a function value, got ${typeIdent(t)}`);
   }
 
   // Phase 1.5-3.5e: emit a typedef for a fn signature. The struct holds a
@@ -4076,13 +4077,16 @@ class Emitter {
   // arrows with no captures (env is just NULL) so the call site dispatch is
   // uniform.
   private emitFnTypedef(t: TopazType): string {
-    if (t.kind !== "fn") throwInternalCodegenError("emitFnTypedef: not a fn type");
-    const name = typeIdent(t);
-    const ret = cReturnTypeName(t.returnType);
-    const paramList = t.params.length === 0
-      ? "void *"
-      : ["void *", ...t.params.map((p) => cTypeName(p.type))].join(", ");
-    return `typedef struct ${name} {\n  ${ret} (*fn)(${paramList});\n  void *env;\n} ${name};`;
+    if (t.kind === "fn") {
+      const fnType = t;
+      const name = typeIdent(fnType);
+      const ret = cReturnTypeName(fnType.returnType);
+      const paramList = fnType.params.length === 0
+        ? "void *"
+        : ["void *", ...fnType.params.map((p) => cTypeName(p.type))].join(", ");
+      return `typedef struct ${name} {\n  ${ret} (*fn)(${paramList});\n  void *env;\n} ${name};`;
+    }
+    throwInternalCodegenError("emitFnTypedef: not a fn type");
   }
 
   private fnValueWrapperName(sig: TopLevelFunctionSig): string {
@@ -7344,21 +7348,28 @@ class Emitter {
     callee: Expr,
     fnType: TopazType,
   ): string {
-    if (fnType.kind !== "fn") throwInternalCodegenError("emitFnValueCall: not fn");
-    if (expr.args.length !== fnType.params.length) {
-      throw new CodegenError(
-        expr,
-        `fn value expects ${fnType.params.length} argument(s), got ${expr.args.length}`,
-      );
+    if (fnType.kind === "fn") {
+      const fnValueType = fnType;
+      if (expr.args.length !== fnValueType.params.length) {
+        throw new CodegenError(
+          expr,
+          `fn value expects ${fnValueType.params.length} argument(s), got ${expr.args.length}`,
+        );
+      }
+      const argParts: string[] = [];
+      for (let i = 0; i < expr.args.length; i++) {
+        const a = expr.args[i];
+        const p = fnValueType.params[i];
+        argParts.push(this.emitWithExpected(a, p.type));
+      }
+      const args = argParts.join(", ");
+      const tmp = `__topaz_fc_${this.tmpCounter++}`;
+      const calleeStr = this.emitExpression(callee);
+      const fnTypeName = typeIdent(fnValueType);
+      const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
+      return `({ ${fnTypeName} ${tmp} = ${calleeStr}; ${tmp}.fn(${callArgs}); })`;
     }
-    const args = expr.args
-      .map((a, i) => this.emitWithExpected(a, fnType.params[i]!.type))
-      .join(", ");
-    const tmp = `__topaz_fc_${this.tmpCounter++}`;
-    const calleeStr = this.emitExpression(callee);
-    const fnTypeName = typeIdent(fnType);
-    const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
-    return `({ ${fnTypeName} ${tmp} = ${calleeStr}; ${tmp}.fn(${callArgs}); })`;
+    throwInternalCodegenError("emitFnValueCall: not fn");
   }
 
   // Phase 1.5-6 prep: lower an IIFE `(arrow)(args)` where the arrow has no
@@ -7388,15 +7399,22 @@ class Emitter {
       returnType: expected,
     };
     const fnType = this.inferArrowType(arrow, expectedFn);
-    if (fnType.kind !== "fn") throwInternalCodegenError("emitContextualIIFE: not fn");
-    const arrowStr = this.emitArrowFunction(arrow, expectedFn);
-    const args = expr.args
-      .map((a, i) => this.emitWithExpected(a, fnType.params[i]!.type))
-      .join(", ");
-    const tmp = `__topaz_fc_${this.tmpCounter++}`;
-    const fnTypeName = typeIdent(fnType);
-    const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
-    return `({ ${fnTypeName} ${tmp} = ${arrowStr}; ${tmp}.fn(${callArgs}); })`;
+    if (fnType.kind === "fn") {
+      const fnValueType = fnType;
+      const arrowStr = this.emitArrowFunction(arrow, expectedFn);
+      const argParts: string[] = [];
+      for (let i = 0; i < expr.args.length; i++) {
+        const a = expr.args[i];
+        const p = fnValueType.params[i];
+        argParts.push(this.emitWithExpected(a, p.type));
+      }
+      const args = argParts.join(", ");
+      const tmp = `__topaz_fc_${this.tmpCounter++}`;
+      const fnTypeName = typeIdent(fnValueType);
+      const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
+      return `({ ${fnTypeName} ${tmp} = ${arrowStr}; ${tmp}.fn(${callArgs}); })`;
+    }
+    throwInternalCodegenError("emitContextualIIFE: not fn");
   }
 
   private emitArrayMethodCall(
