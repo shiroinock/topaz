@@ -3868,7 +3868,8 @@ class Emitter {
     const params = sig.params
       .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
-    return `static ${cReturnTypeName(sig.returnType)} ${sig.cName}(${params || "void"})`;
+    const paramsTail = params.length > 0 ? params : "void";
+    return `static ${cReturnTypeName(sig.returnType)} ${sig.cName}(${paramsTail})`;
   }
 
   private emitFunctionDefinition(fn: FunctionDecl, sf: SourceModule): string {
@@ -3903,7 +3904,8 @@ class Emitter {
     const params = sig.params
       .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
-    return `static ${cReturnTypeName(sig.returnType)} ${mangled}(${params || "void"})`;
+    const paramsTail = params.length > 0 ? params : "void";
+    return `static ${cReturnTypeName(sig.returnType)} ${mangled}(${paramsTail})`;
   }
 
   private emitMonomorphDefinition(mono: MonomorphInfo): string {
