@@ -7913,18 +7913,18 @@ class Emitter {
     const t = this.inferType(arg);
     if (t.kind === "undefined" || t.kind === "union") {
       throw new CodegenError(
-        arg,
+        { pos: arg.pos },
         `console.${method} on ${typeIdent(t)} is unsupported (narrow it with \`if (x !== undefined)\` first)`,
       );
     }
     if (t.kind === "unknown") {
       throw new CodegenError(
-        arg,
+        { pos: arg.pos },
         `console.${method} on \`unknown\` is unsupported (narrow it with \`if (x instanceof ClassName)\` first)`,
       );
     }
     if (isReferenceType(t) || isInterfaceType(t)) {
-      throw new CodegenError(arg, `console.${method} on ${typeIdent(t)} is unsupported`);
+      throw new CodegenError({ pos: arg.pos }, `console.${method} on ${typeIdent(t)} is unsupported`);
     }
   }
 
