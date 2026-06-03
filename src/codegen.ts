@@ -5421,12 +5421,8 @@ class Emitter {
       this.expectType(stmt.cond, T_BOOLEAN);
       const cond = this.emitExpression(stmt.cond);
       this.pushLoopCtx("loop");
-      let body: string;
-      try {
-        body = this.emitStatementAsBlock(stmt.body, indent);
-      } finally {
-        this.popLoopCtx();
-      }
+      const body = this.emitStatementAsBlock(stmt.body, indent);
+      this.popLoopCtx();
       return `${pad}while (${cond}) ${body.trimStart()}`;
     }
 
@@ -5434,12 +5430,8 @@ class Emitter {
       this.expectType(stmt.cond, T_BOOLEAN);
       const cond = this.emitExpression(stmt.cond);
       this.pushLoopCtx("loop");
-      let body: string;
-      try {
-        body = this.emitStatementAsBlock(stmt.body, indent);
-      } finally {
-        this.popLoopCtx();
-      }
+      const body = this.emitStatementAsBlock(stmt.body, indent);
+      this.popLoopCtx();
       return `${pad}do ${body.trimStart()} while (${cond});`;
     }
 
