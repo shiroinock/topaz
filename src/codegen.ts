@@ -8101,6 +8101,24 @@ class Emitter {
         : "(double)NAN";
       return `topaz_string_slice(${base}, ${startExpr}, ${endExpr})`;
     }
+    if (method === "repeat") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError(expr, "String.repeat expects exactly one argument");
+      }
+      const countArg = expr.args[0];
+      if (countArg === undefined) {
+        throw new CodegenError(expr, "String.repeat expects exactly one argument");
+      }
+      const countType = this.inferType(countArg);
+      if (countType.kind !== "number") {
+        throw new CodegenError(
+          countArg,
+          `String.repeat argument must be number, got ${typeIdent(countType)}`,
+        );
+      }
+      const count = this.emitWithExpected(countArg, T_NUMBER);
+      return `topaz_string_repeat(${base}, ${count})`;
+    }
     if (method === "startsWith" || method === "endsWith") {
       if (expr.args.length !== 1) {
         throw new CodegenError(expr, `String.${method} expects exactly one argument`);
@@ -8695,6 +8713,23 @@ class Emitter {
             `String.slice argument must be number, got ${typeIdent(at)}`,
           );
         }
+      }
+      return T_STRING;
+    }
+    if (method === "repeat") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError(expr, "String.repeat expects exactly one argument");
+      }
+      const countArg = expr.args[0];
+      if (countArg === undefined) {
+        throw new CodegenError(expr, "String.repeat expects exactly one argument");
+      }
+      const countType = this.inferType(countArg);
+      if (countType.kind !== "number") {
+        throw new CodegenError(
+          countArg,
+          `String.repeat argument must be number, got ${typeIdent(countType)}`,
+        );
       }
       return T_STRING;
     }
