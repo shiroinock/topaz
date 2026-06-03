@@ -7797,6 +7797,10 @@ class Emitter {
     return `((topaz_string){ ${escaped}, ${byteLen} })`;
   }
 
+  private appendTemplatePiece(current: string | undefined, piece: string): string {
+    return current === undefined ? piece : `topaz_string_concat(${current}, ${piece})`;
+  }
+
   // Phase 1.5-3.5: template literal -> left-associative `topaz_string_concat`
   // chain. ${} substitutions go through `topaz_number_to_string` /
   // `topaz_boolean_to_string` / identity (for string) so that arena alloc cost
@@ -7821,14 +7825,15 @@ class Emitter {
     };
 
     let acc: string | undefined = undefined;
-    const append = (piece: string): void => {
-      acc = acc === undefined ? piece : `topaz_string_concat(${acc}, ${piece})`;
-    };
 
-    if (expr.head !== "") append(this.emitStringLiteralText(expr.head, expr));
+    if (expr.head !== "") {
+      acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(expr.head, expr));
+    }
     for (const sub of expr.subs) {
-      append(stringify(sub.expr));
-      if (sub.cookedAfter !== "") append(this.emitStringLiteralText(sub.cookedAfter, expr));
+      acc = this.appendTemplatePiece(acc, stringify(sub.expr));
+      if (sub.cookedAfter !== "") {
+        acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(sub.cookedAfter, expr));
+      }
     }
     // All-empty template (`${a}` with empty head + empty tail) still needs to
     // yield a `topaz_string` value; fall back to the first substitution which
