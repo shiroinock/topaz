@@ -5482,9 +5482,10 @@ class Emitter {
   private emitThrowStatement(stmt: ThrowStmt, indent: number): string {
     const pad = "  ".repeat(indent);
     const t = this.inferType(stmt.value);
+    const valueAnchor: { pos: number } = { pos: stmt.value.pos };
     if (!isClassType(t)) {
       throw new CodegenError(
-        stmt.value,
+        valueAnchor,
         `throw value must be a class instance (got ${typeIdent(t)})`,
       );
     }
