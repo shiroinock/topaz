@@ -5910,23 +5910,29 @@ class Emitter {
   private tryScalarLiteralInit(
     expr: Expr,
   ): { type: TopazType; cExpr: string } | undefined {
-    if (expr.kind === "num_lit") {
-      const t = expr.text;
-      return { type: T_NUMBER, cExpr: hasDecimalOrExponent(t) ? t : `${t}.0` };
+    switch (expr.kind) {
+      case "num_lit":
+        const t = expr.text;
+        return { type: T_NUMBER, cExpr: hasDecimalOrExponent(t) ? t : `${t}.0` };
+      case "bool_lit":
+        return { type: T_BOOLEAN, cExpr: expr.value ? "true" : "false" };
+      case "prefix_op":
+        if (expr.op !== "-" && expr.op !== "+") {
+          return undefined;
+        }
+        const operand = expr.operand;
+        switch (operand.kind) {
+          case "num_lit":
+            const operandText = operand.text;
+            const num = hasDecimalOrExponent(operandText) ? operandText : `${operandText}.0`;
+            return { type: T_NUMBER, cExpr: `${expr.op}${num}` };
+          default:
+            return undefined;
+        }
+        return undefined;
+      default:
+        return undefined;
     }
-    if (expr.kind === "bool_lit") {
-      return { type: T_BOOLEAN, cExpr: expr.value ? "true" : "false" };
-    }
-    if (
-      expr.kind === "prefix_op" &&
-      (expr.op === "-" || expr.op === "+") &&
-      expr.operand.kind === "num_lit"
-    ) {
-      const t = expr.operand.text;
-      const num = hasDecimalOrExponent(t) ? t : `${t}.0`;
-      return { type: T_NUMBER, cExpr: `${expr.op}${num}` };
-    }
-    return undefined;
   }
 
   // Phase 1.5-6 prep-destructuring: lower `const { a, b } = expr;` to
