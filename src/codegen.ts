@@ -7347,7 +7347,7 @@ class Emitter {
     if (expr.kind === "ternary_expr") {
       return this.emitConditional(expr, /* expected */ undefined);
     }
-    unsupported(expr, "expression");
+    throw new CodegenError({ pos: expr.pos }, `unsupported expression (${expr.kind})`);
   }
 
   // Phase 1.5-6 prep #25: run `fn` with `n`'s narrowing installed on a fresh
@@ -10279,7 +10279,7 @@ class Emitter {
       }
       throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
     }
-    unsupported(expr, "expression");
+    throw new CodegenError({ pos: expr.pos }, `unsupported expression (${expr.kind})`);
   }
 
   private checkAssignTarget(target: Expr, anchor: { pos: number }): void {
