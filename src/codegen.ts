@@ -5265,42 +5265,83 @@ class Emitter {
     op: string,
     polarity: boolean,
   ): { name: string; type: TopazType } | undefined {
-    let pa: PropAccessExpr;
-    let litText: string;
+    let idName = "";
+    let propName = "";
+    let litText = "";
+    let foundMatch = false;
     const leftLit = stringLitText(cond.lhs);
     const rightLit = stringLitText(cond.rhs);
-    if (cond.lhs.kind === "prop_access" && !cond.lhs.optional && cond.lhs.receiver.kind === "ident" && rightLit !== undefined) {
-      pa = cond.lhs;
-      litText = rightLit;
-    } else if (cond.rhs.kind === "prop_access" && !cond.rhs.optional && cond.rhs.receiver.kind === "ident" && leftLit !== undefined) {
-      pa = cond.rhs;
-      litText = leftLit;
-    } else {
-      return undefined;
+    const lhs = cond.lhs;
+    switch (lhs.kind) {
+      case "prop_access":
+        if (!lhs.optional && rightLit !== undefined) {
+          const lhsReceiver = lhs.receiver;
+          switch (lhsReceiver.kind) {
+            case "ident":
+              idName = lhsReceiver.name;
+              propName = lhs.name;
+              litText = rightLit;
+              foundMatch = true;
+              break;
+          }
+        }
+        break;
     }
-    if (pa.receiver.kind !== "ident") return undefined;
-    const idName = pa.receiver.name;
+    if (!foundMatch) {
+      const rhs = cond.rhs;
+      switch (rhs.kind) {
+        case "prop_access":
+          if (!rhs.optional && leftLit !== undefined) {
+            const rhsReceiver = rhs.receiver;
+            switch (rhsReceiver.kind) {
+              case "ident":
+                idName = rhsReceiver.name;
+                propName = rhs.name;
+                litText = leftLit;
+                foundMatch = true;
+                break;
+            }
+          }
+          break;
+      }
+    }
+    if (!foundMatch) return undefined;
     const bMaybe = this.scope.lookup(idName);
     if (bMaybe === undefined) return undefined;
     const b = bMaybe;
-    if (b.type.kind !== "dunion") return undefined;
-    const dunion = b.type;
-    if (pa.name !== dunion.discriminator) return undefined;
-    let matchCls: string | undefined;
-    for (const cname of dunion.variants) {
-      if (this.dunionLiteralFor(dunion, cname) === litText) {
-        matchCls = cname;
-        break;
-      }
+    const bType = b.type;
+    switch (bType.kind) {
+      case "dunion":
+        if (propName !== bType.discriminator) return undefined;
+        let matchCls = "";
+        let foundClass = false;
+        for (const cname of bType.variants) {
+          if (this.dunionLiteralFor(bType, cname) === litText) {
+            matchCls = cname;
+            foundClass = true;
+            break;
+          }
+        }
+        if (!foundClass) return undefined;
+        const selectsMatch = (op === "===") === polarity;
+        if (selectsMatch) return { name: idName, type: classOf(matchCls) };
+        if (bType.variants.length === 2) {
+          let other = "";
+          let foundOther = false;
+          for (const cname of bType.variants) {
+            if (cname !== matchCls) {
+              other = cname;
+              foundOther = true;
+              break;
+            }
+          }
+          if (!foundOther) return undefined;
+          return { name: idName, type: classOf(other) };
+        }
+        return undefined;
+      default:
+        return undefined;
     }
-    if (matchCls === undefined) return undefined;
-    const selectsMatch = (op === "===") === polarity;
-    if (selectsMatch) return { name: idName, type: classOf(matchCls) };
-    if (dunion.variants.length === 2) {
-      const other = dunion.variants.find((v) => v !== matchCls)!;
-      return { name: idName, type: classOf(other) };
-    }
-    return undefined;
   }
 
   private emitStatement(stmt: Stmt, indent: number): string {
