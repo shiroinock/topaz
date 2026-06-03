@@ -5506,31 +5506,39 @@ class Emitter {
 
   private emitTryStatement(stmt: TryStmt, indent: number): string {
     const pad = "  ".repeat(indent);
-    if (stmt.finallyBlock) {
-      throw new CodegenError(stmt.finallyBlock, "`finally` is unsupported (Phase 1.5-1)");
+    const finallyBlockMaybe = stmt.finallyBlock;
+    if (finallyBlockMaybe !== undefined) {
+      const finallyAnchor: { pos: number } = { pos: finallyBlockMaybe.pos };
+      throw new CodegenError(finallyAnchor, "`finally` is unsupported (Phase 1.5-1)");
     }
-    if (!stmt.catchClause) {
-      throw new CodegenError(stmt, "`try` without a `catch` clause is unsupported");
+    const catchClauseMaybe = stmt.catchClause;
+    if (catchClauseMaybe === undefined) {
+      const stmtAnchor: { pos: number } = { pos: stmt.pos };
+      throw new CodegenError(stmtAnchor, "`try` without a `catch` clause is unsupported");
     }
-    const catchClause = stmt.catchClause;
-    if (!catchClause.bindingName) {
+    const catchClause = catchClauseMaybe;
+    const catchAnchor: { pos: number } = { pos: catchClause.pos };
+    const bindingNameMaybe = catchClause.bindingName;
+    if (bindingNameMaybe === undefined) {
       throw new CodegenError(
-        catchClause,
+        catchAnchor,
         "`catch` clause requires a binding (e.g. `catch (e: ClassName)`)",
       );
     }
+    const eName = bindingNameMaybe;
     // Phase 1.5-3f: missing annotation defaults to `unknown`, matching TS's
     // strict-mode `catch (e)` type. `: unknown` is also accepted explicitly.
     // The user must then narrow with `if (e instanceof ClassName)` before
     // touching fields/methods.
-    let errType: TopazType;
-    if (!catchClause.bindingType) {
-      errType = T_UNKNOWN;
-    } else {
-      errType = this.typeFromAnnotation(catchClause.bindingType, catchClause, g_currentModule!);
+    let errType: TopazType = T_UNKNOWN;
+    const bindingTypeMaybe = catchClause.bindingType;
+    if (bindingTypeMaybe !== undefined) {
+      const bindingType = bindingTypeMaybe;
+      const bindingTypeAnchor: { pos: number } = { pos: bindingType.pos };
+      errType = this.typeFromAnnotation(bindingType, bindingTypeAnchor, g_currentModule!);
       if (errType.kind !== "unknown" && !isClassType(errType)) {
         throw new CodegenError(
-          catchClause.bindingType,
+          bindingTypeAnchor,
           `\`catch\` binding type must be a class or \`unknown\` (got ${typeIdent(errType)})`,
         );
       }
@@ -5539,31 +5547,22 @@ class Emitter {
 
     const id = this.tmpCounter++;
     const frame = `__topaz_try_${id}`;
-    const eName = catchClause.bindingName;
 
     this.scope.push();
-    let tryBodyLines: string[];
     // Phase 1.5-X: the frame is live for the duration of the try body, so a
     // `return` emitted within sees liveTryFrames bumped by one (and pops it).
     this.liveTryFrames++;
-    try {
-      tryBodyLines = stmt.tryBlock.stmts.map((s) => this.emitStatement(s, indent + 2));
-    } finally {
-      this.liveTryFrames--;
-      this.scope.pop();
-    }
+    const tryBodyLines = stmt.tryBlock.stmts.map((s) => this.emitStatement(s, indent + 2));
+    this.liveTryFrames--;
+    this.scope.pop();
 
     this.scope.push();
-    let catchBodyStr: string;
-    try {
-      this.scope.declareBinding(eName, errType, /* isConst */ false, catchClause);
-      const catchBodyLines = catchClause.body.stmts.map((s) =>
-        this.emitStatement(s, indent + 2),
-      );
-      catchBodyStr = catchBodyLines.join("\n");
-    } finally {
-      this.scope.pop();
-    }
+    this.scope.declareBinding(eName, errType, /* isConst */ false, catchAnchor);
+    const catchBodyLines = catchClause.body.stmts.map((s) =>
+      this.emitStatement(s, indent + 2),
+    );
+    const catchBodyStr = catchBodyLines.join("\n");
+    this.scope.pop();
 
     const lines: string[] = [];
     lines.push(`${pad}{`);
@@ -5581,7 +5580,7 @@ class Emitter {
         `${pad}    topaz_class_${errClass} *${eName} = (topaz_class_${errClass} *)topaz_throw_value;`,
       );
     }
-    if (catchBodyStr) lines.push(catchBodyStr);
+    if (catchBodyStr.length > 0) lines.push(catchBodyStr);
     lines.push(`${pad}  }`);
     lines.push(`${pad}}`);
     return lines.join("\n");
