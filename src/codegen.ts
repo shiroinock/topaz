@@ -7551,7 +7551,8 @@ class Emitter {
     expr: NewExpr,
     expected: TopazType | undefined,
   ): string {
-    if (expr.callee.kind !== "ident") {
+    const callee = expr.callee;
+    if (callee.kind !== "ident") {
       throw new CodegenError({ pos: expr.pos }, "only `new Map<K, V>()`, `new Set<T>()`, and class instantiation are supported");
     }
     // Phase 1.5-3.5h-spread: same positional-arguments invariant as emitCall.
@@ -7563,7 +7564,7 @@ class Emitter {
         );
       }
     }
-    const name = expr.callee.name;
+    const name = callee.name;
     if (name === "Array") {
       throw new CodegenError(
         { pos: expr.pos },
@@ -10265,10 +10266,11 @@ class Emitter {
       unsupported(callee, "call target");
     }
     if (expr.kind === "new_expr") {
-      if (expr.callee.kind !== "ident") {
+      const callee = expr.callee;
+      if (callee.kind !== "ident") {
         throw new CodegenError({ pos: expr.pos }, "only `new Map<K, V>()` and `new Set<T>()` are supported");
       }
-      const name = expr.callee.name;
+      const name = callee.name;
       if (name === "Map") {
         if (expr.args.length !== 0) {
           throw new CodegenError({ pos: expr.pos }, "Map() constructor arguments are unsupported");
@@ -10503,10 +10505,13 @@ class Emitter {
       // Bare `new Map()` / `new Set()` carries no type info; thread expected
       // through as context. Interface widening is impossible for Map/Set, so
       // forwarding expected unmodified is safe.
-      const isBareMapSet =
-        expr.callee.kind === "ident" &&
-        (expr.callee.name === "Map" || expr.callee.name === "Set") &&
-        expr.typeArgs.length === 0;
+      const callee = expr.callee;
+      let isBareMapSet = false;
+      if (callee.kind === "ident") {
+        isBareMapSet =
+          (callee.name === "Map" || callee.name === "Set") &&
+          expr.typeArgs.length === 0;
+      }
       if (isBareMapSet) {
         return this.emitNewExpression(expr, expected);
       }
