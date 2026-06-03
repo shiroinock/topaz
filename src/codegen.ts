@@ -2874,7 +2874,7 @@ class Emitter {
   // pointer; case-narrowing casts it back via `(topaz_class_<C> *)d.data`.
   private emitDunionTypedef(t: TopazType): string {
     if (t.kind !== "dunion") {
-      throw new Error(`emitDunionTypedef: not a dunion (${typeIdent(t)})`);
+      throwInternalCodegenError(`emitDunionTypedef: not a dunion (${typeIdent(t)})`);
     }
     const name = typeIdent(t);
     return `typedef struct { topaz_string ${t.discriminator}; void *data; } ${name};`;
