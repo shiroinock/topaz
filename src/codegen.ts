@@ -8229,25 +8229,26 @@ class Emitter {
     const base = this.emitExpression(callee.receiver);
     if (method === "push") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Array.push expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Array.push expects exactly one argument");
       }
-      return `topaz_array_${name}_push(${base}, ${this.emitWithExpected(expr.args[0]!, elem)})`;
+      const arg = expr.args[0];
+      return `topaz_array_${name}_push(${base}, ${this.emitWithExpected(arg, elem)})`;
     }
     if (method === "pop") {
       if (expr.args.length !== 0) {
-        throw new CodegenError(expr, "Array.pop expects no arguments");
+        throw new CodegenError({ pos: expr.pos }, "Array.pop expects no arguments");
       }
       return `topaz_array_${name}_pop(${base})`;
     }
     if (method === "map") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Array.map expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Array.map expects exactly one argument");
       }
-      const cb = expr.args[0]!;
+      const cb = expr.args[0];
       const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
       const u = fnType.returnType;
       if (u.kind === "void") {
-        throw new CodegenError(cb, "Array.map callback cannot return `void` (no Array<void> monomorph)");
+        throw new CodegenError({ pos: cb.pos }, "Array.map callback cannot return `void` (no Array<void> monomorph)");
       }
       // The result Array<U> reuses the same monomorph machinery as any other
       // container. undefined / union element types still lack a monomorph;
@@ -8255,13 +8256,13 @@ class Emitter {
       // slot — see recordArrayMonomorph for fn-elem routing).
       if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
         throw new CodegenError(
-          cb,
+          { pos: cb.pos },
           `Array.map callback returning ${typeIdent(u)} is unsupported (no Array<T | undefined> monomorph)`,
         );
       }
       const result = arrayOf(u);
-      if (!result) {
-        throw new CodegenError(expr, `Array.map: cannot form Array<${typeIdent(u)}> result`);
+      if (result === undefined) {
+        throw new CodegenError({ pos: expr.pos }, `Array.map: cannot form Array<${typeIdent(u)}> result`);
       }
       this.recordArrayMonomorph(result);
       this.recordFnMonomorph(fnType);
@@ -8288,7 +8289,7 @@ class Emitter {
     }
     if (method === "slice") {
       if (expr.args.length > 2) {
-        throw new CodegenError(expr, "Array.slice expects at most two arguments");
+        throw new CodegenError({ pos: expr.pos }, "Array.slice expects at most two arguments");
       }
       // Type-check each present argument as `number` up-front so the error
       // surfaces here rather than as a cryptic C compile error inside the
@@ -8297,17 +8298,21 @@ class Emitter {
         const at = this.inferType(arg);
         if (at.kind !== "number") {
           throw new CodegenError(
-            arg,
+            { pos: arg.pos },
             `Array.slice argument must be number, got ${typeIdent(at)}`,
           );
         }
       }
-      const startExpr = expr.args.length >= 1
-        ? `(double)(${this.emitWithExpected(expr.args[0]!, T_NUMBER)})`
-        : "(double)NAN";
-      const endExpr = expr.args.length >= 2
-        ? `(double)(${this.emitWithExpected(expr.args[1]!, T_NUMBER)})`
-        : "(double)NAN";
+      let startExpr = "(double)NAN";
+      if (expr.args.length >= 1) {
+        const startArg = expr.args[0];
+        startExpr = `(double)(${this.emitWithExpected(startArg, T_NUMBER)})`;
+      }
+      let endExpr = "(double)NAN";
+      if (expr.args.length >= 2) {
+        const endArg = expr.args[1];
+        endExpr = `(double)(${this.emitWithExpected(endArg, T_NUMBER)})`;
+      }
       const id = this.tmpCounter++;
       const srcVar = `__topaz_slice_src_${id}`;
       const rawStartVar = `__topaz_slice_rs_${id}`;
@@ -8335,17 +8340,19 @@ class Emitter {
     }
     if (method === "includes") {
       if (expr.args.length === 0) {
-        throw new CodegenError(expr, "Array.includes expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Array.includes expects exactly one argument");
       }
       if (expr.args.length > 1) {
         // Second `fromIndex` argument is unsupported (would need to negative-
         // index normalize via topaz_slice_normalize, which is not yet wired
         // up — defer to 1.5-3.5f-slice).
-        throw new CodegenError(expr, "Array.includes `fromIndex` argument is unsupported");
+        const fromIndexArg = expr.args[1];
+        throw new CodegenError({ pos: fromIndexArg.pos }, "Array.includes `fromIndex` argument is unsupported");
       }
+      const target = expr.args[0];
       // `target` must match elem exactly. emitWithExpected handles class -> iface
       // coercion automatically when elem is an interface.
-      const tStr = this.emitWithExpected(expr.args[0]!, elem);
+      const tStr = this.emitWithExpected(target, elem);
       const id = this.tmpCounter++;
       const srcVar = `__topaz_inc_src_${id}`;
       const tVar = `__topaz_inc_t_${id}`;
@@ -8358,7 +8365,7 @@ class Emitter {
       // key equality), strict byte compare for string, scalar `==` for
       // boolean, reference identity for class (pointer compare) and iface
       // (fat pointer .data compare).
-      const eqExpr = this.arrayIncludesEqExpr(elem, lhs, tVar, expr);
+      const eqExpr = this.arrayIncludesEqExpr(elem, lhs, tVar, { pos: expr.pos });
       return (
         `({ ${srcTy} ${srcVar} = ${base}; ` +
         `${elemTy} ${tVar} = ${tStr}; ` +
@@ -8370,15 +8377,15 @@ class Emitter {
     }
     if (method === "filter") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "Array.filter expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "Array.filter expects exactly one argument");
       }
-      const cb = expr.args[0]!;
+      const cb = expr.args[0];
       const fnType = this.inferCallbackFn(cb, [elem], "Array.filter");
       // Strict boolean — JS truthy/falsy coercion is not adopted (consistent
       // with `if` / `while` condition strictness).
       if (fnType.returnType.kind !== "boolean") {
         throw new CodegenError(
-          cb,
+          { pos: cb.pos },
           `Array.filter callback must return boolean, got ${typeIdent(fnType.returnType)}`,
         );
       }
@@ -8405,7 +8412,7 @@ class Emitter {
     }
     if (method === "join") {
       if (expr.args.length > 1) {
-        throw new CodegenError(expr, "Array.join expects at most one argument");
+        throw new CodegenError({ pos: expr.pos }, "Array.join expects at most one argument");
       }
       // Elem type is restricted to scalar 3 (number / boolean / string).
       // class / iface / nested container / fn / optional / union: format
@@ -8413,22 +8420,26 @@ class Emitter {
       // a string array first).
       if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
         );
       }
-      const sepStr = this.emitArrayJoinSeparator(expr);
+      let sepStr = "((topaz_string){ \",\", 1 })";
+      if (expr.args.length === 1) {
+        const sepArg = expr.args[0];
+        sepStr = this.emitArrayJoinSeparator(sepArg);
+      }
       this.recordArrayJoinMonomorph(baseType);
       return `topaz_array_${name}_join(${base}, ${sepStr})`;
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
   }
 
   private arrayIncludesEqExpr(
     elem: TopazType,
     lhs: string,
     tVar: string,
-    expr: CallExpr,
+    anchor: { pos: number },
   ): string {
     if (elem.kind === "number") {
       return `((${lhs}) == (${tVar})) || ((${lhs}) != (${lhs}) && (${tVar}) != (${tVar}))`;
@@ -8446,25 +8457,20 @@ class Emitter {
       return `((${lhs}).data) == ((${tVar}).data)`;
     }
     throw new CodegenError(
-      expr,
+      anchor,
       `Array.includes is unsupported for element type ${typeIdent(elem)}`,
     );
   }
 
-  private emitArrayJoinSeparator(expr: CallExpr): string {
-    // Separator must be `string`. Missing -> default ",".
-    if (expr.args.length === 1) {
-      const sepType = this.inferType(expr.args[0]!);
-      if (sepType.kind !== "string") {
-        throw new CodegenError(
-          expr.args[0]!,
-          `Array.join separator must be string, got ${typeIdent(sepType)}`,
-        );
-      }
-      return this.emitWithExpected(expr.args[0]!, T_STRING);
+  private emitArrayJoinSeparator(sepArg: Expr): string {
+    const sepType = this.inferType(sepArg);
+    if (sepType.kind !== "string") {
+      throw new CodegenError(
+        { pos: sepArg.pos },
+        `Array.join separator must be string, got ${typeIdent(sepType)}`,
+      );
     }
-    // `","` static literal as a `topaz_string` compound literal.
-    return `((topaz_string){ ",", 1 })`;
+    return this.emitWithExpected(sepArg, T_STRING);
   }
 
   // Phase 1.5-6 prep #10/#6f/#6i: String.prototype.charCodeAt / .slice /
@@ -10023,45 +10029,45 @@ class Emitter {
         if (isArrayType(baseType)) {
           const elem = arrayElem(baseType)!;
           if (prop.name === "push") {
-            throw new CodegenError(expr, "Array.push returns void in this dialect and cannot be used as a value");
+            throw new CodegenError({ pos: expr.pos }, "Array.push returns void in this dialect and cannot be used as a value");
           }
           if (prop.name === "pop") {
             return elem;
           }
           if (prop.name === "map") {
             if (expr.args.length !== 1) {
-              throw new CodegenError(expr, "Array.map expects exactly one argument");
+              throw new CodegenError({ pos: expr.pos }, "Array.map expects exactly one argument");
             }
-            const cb = expr.args[0]!;
+            const cb = expr.args[0];
             const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
             const u = fnType.returnType;
             if (u.kind === "void") {
-              throw new CodegenError(cb, "Array.map callback cannot return `void` (no Array<void> monomorph)");
+              throw new CodegenError({ pos: cb.pos }, "Array.map callback cannot return `void` (no Array<void> monomorph)");
             }
             // Phase 1.5-3.5g-array-fn: fn return type now routes to Array<fn>
             // via recordArrayMonomorph -> arrayFnMonomorphs.
             if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
               throw new CodegenError(
-                cb,
+                { pos: cb.pos },
                 `Array.map callback returning ${typeIdent(u)} is unsupported (no Array<T | undefined> monomorph)`,
               );
             }
             const result = arrayOf(u);
-            if (!result) {
-              throw new CodegenError(expr, `Array.map: cannot form Array<${typeIdent(u)}> result`);
+            if (result === undefined) {
+              throw new CodegenError({ pos: expr.pos }, `Array.map: cannot form Array<${typeIdent(u)}> result`);
             }
             this.recordArrayMonomorph(result);
             return result;
           }
           if (prop.name === "slice") {
             if (expr.args.length > 2) {
-              throw new CodegenError(expr, "Array.slice expects at most two arguments");
+              throw new CodegenError({ pos: expr.pos }, "Array.slice expects at most two arguments");
             }
             for (const arg of expr.args) {
               const at = this.inferType(arg);
               if (at.kind !== "number") {
                 throw new CodegenError(
-                  arg,
+                  { pos: arg.pos },
                   `Array.slice argument must be number, got ${typeIdent(at)}`,
                 );
               }
@@ -10071,14 +10077,16 @@ class Emitter {
           }
           if (prop.name === "includes") {
             if (expr.args.length === 0) {
-              throw new CodegenError(expr, "Array.includes expects exactly one argument");
+              throw new CodegenError({ pos: expr.pos }, "Array.includes expects exactly one argument");
             }
             if (expr.args.length > 1) {
-              throw new CodegenError(expr, "Array.includes `fromIndex` argument is unsupported");
+              const fromIndexArg = expr.args[1];
+              throw new CodegenError({ pos: fromIndexArg.pos }, "Array.includes `fromIndex` argument is unsupported");
             }
+            const target = expr.args[0];
             // Side-effect: re-check that `target` matches elem so emit-side
             // and infer-side reject in lockstep.
-            this.emitWithExpected(expr.args[0]!, elem);
+            this.emitWithExpected(target, elem);
             // Reject unsupported elem types up-front (mirrors emitArrayMethodCall).
             if (
               elem.kind !== "number" &&
@@ -10088,7 +10096,7 @@ class Emitter {
               !isInterfaceType(elem)
             ) {
               throw new CodegenError(
-                expr,
+                { pos: expr.pos },
                 `Array.includes is unsupported for element type ${typeIdent(elem)}`,
               );
             }
@@ -10096,13 +10104,13 @@ class Emitter {
           }
           if (prop.name === "filter") {
             if (expr.args.length !== 1) {
-              throw new CodegenError(expr, "Array.filter expects exactly one argument");
+              throw new CodegenError({ pos: expr.pos }, "Array.filter expects exactly one argument");
             }
-            const cb = expr.args[0]!;
+            const cb = expr.args[0];
             const fnType = this.inferCallbackFn(cb, [elem], "Array.filter");
             if (fnType.returnType.kind !== "boolean") {
               throw new CodegenError(
-                cb,
+                { pos: cb.pos },
                 `Array.filter callback must return boolean, got ${typeIdent(fnType.returnType)}`,
               );
             }
@@ -10111,19 +10119,20 @@ class Emitter {
           }
           if (prop.name === "join") {
             if (expr.args.length > 1) {
-              throw new CodegenError(expr, "Array.join expects at most one argument");
+              throw new CodegenError({ pos: expr.pos }, "Array.join expects at most one argument");
             }
             if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") {
               throw new CodegenError(
-                expr,
+                { pos: expr.pos },
                 `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
               );
             }
             if (expr.args.length === 1) {
-              const sepType = this.inferType(expr.args[0]!);
+              const sepArg = expr.args[0];
+              const sepType = this.inferType(sepArg);
               if (sepType.kind !== "string") {
                 throw new CodegenError(
-                  expr.args[0]!,
+                  { pos: sepArg.pos },
                   `Array.join separator must be string, got ${typeIdent(sepType)}`,
                 );
               }
