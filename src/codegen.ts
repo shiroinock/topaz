@@ -2791,7 +2791,7 @@ class Emitter {
       // `instanceof` against `.data`.
       cElem = typeIdent(elem);
     } else {
-      throw new Error(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
+      throwInternalCodegenError(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
     return `TOPAZ_ARRAY_DEFINE(${tag}, ${cElem})`;
   }
