@@ -4097,7 +4097,8 @@ class Emitter {
     const params = sig.params
       .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
-    return `static ${cReturnTypeName(sig.returnType)} ${this.fnValueWrapperName(sig)}(void *__topaz_env${params ? ", " + params : ""})`;
+    const paramsTail = params.length > 0 ? ", " + params : "";
+    return `static ${cReturnTypeName(sig.returnType)} ${this.fnValueWrapperName(sig)}(void *__topaz_env${paramsTail})`;
   }
 
   private recordTopLevelFunctionValueWrapper(sig: TopLevelFunctionSig): string {
