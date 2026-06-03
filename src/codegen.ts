@@ -7250,24 +7250,27 @@ class Emitter {
       // T have the same C representation either way, so no branch needed.
       if (tok === "??") {
         const lt = this.inferType(expr.lhs);
-        const inner = withoutUndefined(lt)!;
-        const rt = this.inferType(expr.rhs);
-        const rhsIsOptional = !this.isAssignableTo(rt, inner) && this.isAssignableTo(rt, lt);
-        const expected = rhsIsOptional ? lt : inner;
-        const lhsStr = this.emitExpression(expr.lhs);
-        const rhsStr = this.emitWithExpected(expr.rhs, expected);
-        const id = this.tmpCounter++;
-        const tmp = `__topaz_nc_${id}`;
-        const lct = cTypeName(lt);
-        if (isScalarType(inner)) {
-          const presentBranch = rhsIsOptional ? tmp : `${tmp}.value`;
-          return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.present ? ${presentBranch} : (${rhsStr}); })`;
+        const innerMaybe = withoutUndefined(lt);
+        if (innerMaybe !== undefined) {
+          const rt = this.inferType(expr.rhs);
+          const rhsIsOptional = !this.isAssignableTo(rt, innerMaybe) && this.isAssignableTo(rt, lt);
+          const expected = rhsIsOptional ? lt : innerMaybe;
+          const lhsStr = this.emitExpression(expr.lhs);
+          const rhsStr = this.emitWithExpected(expr.rhs, expected);
+          const id = this.tmpCounter++;
+          const tmp = `__topaz_nc_${id}`;
+          const lct = cTypeName(lt);
+          if (isScalarType(innerMaybe)) {
+            const presentBranch = rhsIsOptional ? tmp : `${tmp}.value`;
+            return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.present ? ${presentBranch} : (${rhsStr}); })`;
+          }
+          // Phase 1.5-6 prep #15: dunion shares iface's `.data == NULL` sentinel.
+          if (isInterfaceType(innerMaybe) || innerMaybe.kind === "dunion") {
+            return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.data != NULL ? ${tmp} : (${rhsStr}); })`;
+          }
+          return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp} != NULL ? ${tmp} : (${rhsStr}); })`;
         }
-        // Phase 1.5-6 prep #15: dunion shares iface's `.data == NULL` sentinel.
-        if (isInterfaceType(inner) || inner.kind === "dunion") {
-          return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp}.data != NULL ? ${tmp} : (${rhsStr}); })`;
-        }
-        return `({ ${lct} ${tmp} = ${lhsStr}; ${tmp} != NULL ? ${tmp} : (${rhsStr}); })`;
+        throwInternalCodegenError("emitExpression: `??` missing optional inner type after inferType");
       }
       // Phase 1.5-3b: `x === undefined` / `x !== undefined` on `T | undefined`.
       // For interface | undefined the fat pointer's .data is the sentinel;
@@ -7284,20 +7287,23 @@ class Emitter {
         if (leftIsUndef !== rightIsUndef) {
           const valueExpr = leftIsUndef ? expr.rhs : expr.lhs;
           const t = this.inferType(valueExpr);
-          const inner = withoutUndefined(t);
-          const op = tok === "===" ? "==" : "!=";
-          const valStr = this.emitExpression(valueExpr);
-          if (inner && isScalarType(inner)) {
-            const want = tok === "===" ? "false" : "true";
-            return `${valStr}.present == ${want}`;
+          const innerMaybe = withoutUndefined(t);
+          if (innerMaybe !== undefined) {
+            const op = tok === "===" ? "==" : "!=";
+            const valStr = this.emitExpression(valueExpr);
+            if (isScalarType(innerMaybe)) {
+              const want = tok === "===" ? "false" : "true";
+              return `${valStr}.present == ${want}`;
+            }
+            // Phase 1.5-6 prep #15: dunion uses the same fat-struct shape as
+            // iface; `.data == NULL` distinguishes the absent sentinel from any
+            // wrapped variant (variant ctors always store a non-NULL class ptr).
+            if (isInterfaceType(innerMaybe) || innerMaybe.kind === "dunion") {
+              return `${valStr}.data ${op} NULL`;
+            }
+            return `${valStr} ${op} NULL`;
           }
-          // Phase 1.5-6 prep #15: dunion uses the same fat-struct shape as
-          // iface; `.data == NULL` distinguishes the absent sentinel from any
-          // wrapped variant (variant ctors always store a non-NULL class ptr).
-          if (inner && (isInterfaceType(inner) || inner.kind === "dunion")) {
-            return `${valStr}.data ${op} NULL`;
-          }
-          return `${valStr} ${op} NULL`;
+          throwInternalCodegenError("emitExpression: undefined equality missing optional inner type after inferType");
         }
       }
       // Phase 1.5-6 prep #19: emit `&&` / `||` with compound-condition
@@ -9898,14 +9904,16 @@ class Emitter {
           // is T when the RHS is T, or T | undefined when the RHS is itself
           // T | undefined (so chained `a ?? b ?? c` keeps optional through
           // the middle layer). The RHS must be assignable to one of those.
+          const exprAnchor = { pos: expr.pos };
           const lt = this.inferType(expr.lhs);
-          const inner = withoutUndefined(lt);
-          if (!inner || typeEq(inner, lt)) {
+          const innerMaybe = withoutUndefined(lt);
+          if (innerMaybe === undefined || typeEq(innerMaybe, lt)) {
             throw new CodegenError(
-              expr,
+              exprAnchor,
               `\`??\` requires the left operand to be \`T | undefined\`; got ${typeIdent(lt)}`,
             );
           }
+          const inner = innerMaybe;
           // Phase 1.5-6 prep #15: dunion shares iface's fat-struct shape, so
           // `??` can use the `.data == NULL` sentinel as the fallback gate.
           if (
@@ -9913,7 +9921,7 @@ class Emitter {
             && !isInterfaceType(inner) && inner.kind !== "dunion"
           ) {
             throw new CodegenError(
-              expr,
+              exprAnchor,
               `\`??\` on ${typeIdent(lt)} is unsupported`,
             );
           }
