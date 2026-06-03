@@ -6095,16 +6095,14 @@ class Emitter {
     const name = decl.name;
     const init = initMaybe;
 
-    let varType: TopazType;
-    let initExpr: string;
     const typeMaybe = decl.type;
     if (typeMaybe !== undefined) {
       const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
-      varType = this.typeFromAnnotation(typeMaybe, typeAnchor, g_currentModule!);
+      const varType = this.typeFromAnnotation(typeMaybe, typeAnchor, g_currentModule!);
       this.assertNotVoid(varType, declAnchor, "variable type");
       // emitWithExpected threads `varType` through ArrayLiteral / NewExpression
       // context typing and applies class -> interface coercion when needed.
-      initExpr = this.emitWithExpected(init, varType);
+      const initExpr = this.emitWithExpected(init, varType);
       // Phase 1.5-6 prep: initializer narrowing. `const x: U = init` where U is
       // a discriminated union and init's static type is a concrete variant
       // keeps the narrowed variant for subsequent reads (tsc CFA narrows the
@@ -6125,12 +6123,17 @@ class Emitter {
         init.kind !== "arrow_expr";
       if (isConst && varType.kind === "dunion" && initBareTypeable) {
         const initType = this.inferType(init);
-        if (isClassType(initType) && varType.variants.includes(classNameOf(initType)!)) {
-          this.scope.declareBinding(name, varType, isConst, declAnchor);
-          this.scope.narrow(name, initType);
-          return { type: varType, cName: name, initStr: ` = ${initExpr}` };
+        if (isClassType(initType)) {
+          const classNameMaybe = classNameOf(initType);
+          if (classNameMaybe !== undefined && varType.variants.includes(classNameMaybe)) {
+            this.scope.declareBinding(name, varType, isConst, declAnchor);
+            this.scope.narrow(name, initType);
+            return { type: varType, cName: name, initStr: ` = ${initExpr}` };
+          }
         }
       }
+      this.scope.declareBinding(name, varType, isConst, declAnchor);
+      return { type: varType, cName: name, initStr: ` = ${initExpr}` };
     } else {
       const initIsBareNew =
         init.kind === "new_expr" &&
@@ -6143,18 +6146,22 @@ class Emitter {
           "cannot infer constructor type arguments; write `new Map<K, V>()` / `new Set<T>()` or annotate the binding",
         );
       }
-      varType = this.inferType(init);
+      const varType = this.inferType(init);
       this.assertNotVoid(varType, declAnchor, "variable initializer (void-returning call cannot be stored)");
       if (init.kind === "array_lit") {
-        initExpr = this.emitArrayLiteral(init, varType);
-      } else if (init.kind === "new_expr") {
-        initExpr = this.emitNewExpression(init, varType);
-      } else {
-        initExpr = this.emitExpression(init);
+        const initExpr = this.emitArrayLiteral(init, varType);
+        this.scope.declareBinding(name, varType, isConst, declAnchor);
+        return { type: varType, cName: name, initStr: ` = ${initExpr}` };
       }
+      if (init.kind === "new_expr") {
+        const initExpr = this.emitNewExpression(init, varType);
+        this.scope.declareBinding(name, varType, isConst, declAnchor);
+        return { type: varType, cName: name, initStr: ` = ${initExpr}` };
+      }
+      const initExpr = this.emitExpression(init);
+      this.scope.declareBinding(name, varType, isConst, declAnchor);
+      return { type: varType, cName: name, initStr: ` = ${initExpr}` };
     }
-    this.scope.declareBinding(name, varType, isConst, declAnchor);
-    return { type: varType, cName: name, initStr: ` = ${initExpr}` };
   }
 
   private emitForStatement(stmt: ForStmt, indent: number): string {
