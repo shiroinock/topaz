@@ -6228,6 +6228,31 @@ class Emitter {
   // or the same reference (class / iface). Arrow closures sidestep that by
   // arena-allocating a fresh env per iteration — by-value capture snapshots
   // the loop var at env construction time.
+  private emitForOfBlockBodyLines(body: BlockStmt, indent: number): string[] {
+    const lines: string[] = [];
+    for (const s of body.stmts) {
+      lines.push(this.emitStatement(s, indent));
+      this.applyCarryNarrowing(s);
+    }
+    return lines;
+  }
+
+  private emitForOfSingleBodyLine(body: Stmt, indent: number): string[] {
+    const lines: string[] = [];
+    lines.push(this.emitStatement(body, indent));
+    this.applyCarryNarrowing(body);
+    return lines;
+  }
+
+  private emitForOfBodyLines(body: Stmt, indent: number): string[] {
+    switch (body.kind) {
+      case "block_stmt":
+        return this.emitForOfBlockBodyLines(body, indent);
+      default:
+        return this.emitForOfSingleBodyLine(body, indent);
+    }
+  }
+
   private emitForOfStatement(stmt: ForOfStmt, indent: number): string {
     // Phase 1.5-6e-2: `for await`, non-decl bindings, multi-decl, `var`, and an
     // initializer on the binding are all rejected in convert. The binding is
@@ -6467,14 +6492,7 @@ class Emitter {
     this.scope.push();
     this.pushLoopCtx("loop");
 
-    const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
-      ? stmt.body.stmts
-      : [stmt.body];
-    const stmtLines: string[] = [];
-    for (const s of stmtList) {
-      stmtLines.push(this.emitStatement(s, indent + 2));
-      this.applyCarryNarrowing(s);
-    }
+    const stmtLines = this.emitForOfBodyLines(stmt.body, indent + 2);
 
     const lines: string[] = [];
     lines.push(`${pad}{`);
@@ -6521,15 +6539,19 @@ class Emitter {
   ): string {
     const pad = "  ".repeat(indent);
 
-    if (bindSpec.kind === "single" && bindingType) {
-      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentModule!);
-      if (!typeEq(declared, bindSpec.type)) {
-        const what =
-          bindSpec.field === "value" ? "value" : (isMapType(containerType) ? "key" : "element");
-        throw new CodegenError(
-          bindingType,
-          `for-of binding type ${typeIdent(declared)} does not match ${what} type ${typeIdent(bindSpec.type)}`,
-        );
+    if (bindSpec.kind === "single") {
+      if (bindingType !== undefined) {
+        const bindingTypeNode = bindingType;
+        const bindingTypeAnchor: { pos: number } = { pos: bindingTypeNode.pos };
+        const declared = this.typeFromAnnotation(bindingTypeNode, bindingTypeAnchor, g_currentModule!);
+        if (!typeEq(declared, bindSpec.type)) {
+          const what =
+            bindSpec.field === "value" ? "value" : (isMapType(containerType) ? "key" : "element");
+          throw new CodegenError(
+            bindingTypeAnchor,
+            `for-of binding type ${typeIdent(declared)} does not match ${what} type ${typeIdent(bindSpec.type)}`,
+          );
+        }
       }
     }
 
@@ -6541,58 +6563,47 @@ class Emitter {
     const innerPad = "  ".repeat(indent + 2);
 
     this.scope.push();
-    try {
-      const bindingAnchor: { pos: number } = { pos: stmt.pos };
-      if (bindSpec.kind === "single") {
-        this.scope.declareBinding(bindSpec.name, bindSpec.type, isConst, bindingAnchor);
-      } else {
-        this.scope.declareBinding(bindSpec.firstName, bindSpec.firstType, isConst, bindingAnchor);
-        this.scope.declareBinding(bindSpec.secondName, bindSpec.secondType, isConst, bindingAnchor);
-      }
-      this.scope.push();
-      this.pushLoopCtx("loop");
-      try {
-        const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
-          ? stmt.body.stmts
-          : [stmt.body];
-        const stmtLines: string[] = [];
-        for (const s of stmtList) {
-          stmtLines.push(this.emitStatement(s, indent + 2));
-          this.applyCarryNarrowing(s);
-        }
-
-        const lines: string[] = [];
-        lines.push(`${pad}{`);
-        lines.push(`${pad}  ${htCType} ${htTmp} = ${recvStr};`);
-        lines.push(
-          `${pad}  for (size_t ${idxTmp} = 0; ${idxTmp} < ${htTmp}->cap; ${idxTmp}++) {`,
-        );
-        lines.push(
-          `${innerPad}if (${htTmp}->slots[${idxTmp}].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;`,
-        );
-        if (bindSpec.kind === "single") {
-          lines.push(
-            `${innerPad}${cTypeName(bindSpec.type)} ${bindSpec.name} = ${htTmp}->slots[${idxTmp}].${bindSpec.field};`,
-          );
-        } else {
-          lines.push(
-            `${innerPad}${cTypeName(bindSpec.firstType)} ${bindSpec.firstName} = ${htTmp}->slots[${idxTmp}].${bindSpec.firstField};`,
-          );
-          lines.push(
-            `${innerPad}${cTypeName(bindSpec.secondType)} ${bindSpec.secondName} = ${htTmp}->slots[${idxTmp}].${bindSpec.secondField};`,
-          );
-        }
-        if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
-        lines.push(`${pad}  }`);
-        lines.push(`${pad}}`);
-        return lines.join("\n");
-      } finally {
-        this.popLoopCtx();
-        this.scope.pop();
-      }
-    } finally {
-      this.scope.pop();
+    const bindingAnchor: { pos: number } = { pos: stmt.pos };
+    if (bindSpec.kind === "single") {
+      this.scope.declareBinding(bindSpec.name, bindSpec.type, isConst, bindingAnchor);
+    } else {
+      this.scope.declareBinding(bindSpec.firstName, bindSpec.firstType, isConst, bindingAnchor);
+      this.scope.declareBinding(bindSpec.secondName, bindSpec.secondType, isConst, bindingAnchor);
     }
+    this.scope.push();
+    this.pushLoopCtx("loop");
+
+    const stmtLines = this.emitForOfBodyLines(stmt.body, indent + 2);
+
+    const lines: string[] = [];
+    lines.push(`${pad}{`);
+    lines.push(`${pad}  ${htCType} ${htTmp} = ${recvStr};`);
+    lines.push(
+      `${pad}  for (size_t ${idxTmp} = 0; ${idxTmp} < ${htTmp}->cap; ${idxTmp}++) {`,
+    );
+    lines.push(
+      `${innerPad}if (${htTmp}->slots[${idxTmp}].state != TOPAZ_HASH_SLOT_OCCUPIED) continue;`,
+    );
+    if (bindSpec.kind === "single") {
+      lines.push(
+        `${innerPad}${cTypeName(bindSpec.type)} ${bindSpec.name} = ${htTmp}->slots[${idxTmp}].${bindSpec.field};`,
+      );
+    } else {
+      lines.push(
+        `${innerPad}${cTypeName(bindSpec.firstType)} ${bindSpec.firstName} = ${htTmp}->slots[${idxTmp}].${bindSpec.firstField};`,
+      );
+      lines.push(
+        `${innerPad}${cTypeName(bindSpec.secondType)} ${bindSpec.secondName} = ${htTmp}->slots[${idxTmp}].${bindSpec.secondField};`,
+      );
+    }
+    if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+    lines.push(`${pad}  }`);
+    lines.push(`${pad}}`);
+
+    this.popLoopCtx();
+    this.scope.pop();
+    this.scope.pop();
+    return lines.join("\n");
   }
 
   // Phase 1.5-3.5g-iterator: drive an arbitrary Iterator<T> via its `next`
@@ -6611,11 +6622,13 @@ class Emitter {
     const pad = "  ".repeat(indent);
     const bindType = iterType.elem;
 
-    if (bindingType) {
-      const declared = this.typeFromAnnotation(bindingType, bindingType, g_currentModule!);
+    if (bindingType !== undefined) {
+      const bindingTypeNode = bindingType;
+      const bindingTypeAnchor: { pos: number } = { pos: bindingTypeNode.pos };
+      const declared = this.typeFromAnnotation(bindingTypeNode, bindingTypeAnchor, g_currentModule!);
       if (!typeEq(declared, bindType)) {
         throw new CodegenError(
-          bindingType,
+          bindingTypeAnchor,
           `for-of binding type ${typeIdent(declared)} does not match iterator element type ${typeIdent(bindType)}`,
         );
       }
@@ -6631,42 +6644,31 @@ class Emitter {
     const innerPad = "  ".repeat(indent + 2);
 
     this.scope.push();
-    try {
-      const bindingAnchor: { pos: number } = { pos: stmt.pos };
-      this.scope.declareBinding(bindName, bindType, isConst, bindingAnchor);
-      this.scope.push();
-      this.pushLoopCtx("loop");
-      try {
-        const stmtList: Stmt[] = stmt.body.kind === "block_stmt"
-          ? stmt.body.stmts
-          : [stmt.body];
-        const stmtLines: string[] = [];
-        for (const s of stmtList) {
-          stmtLines.push(this.emitStatement(s, indent + 2));
-          this.applyCarryNarrowing(s);
-        }
+    const bindingAnchor: { pos: number } = { pos: stmt.pos };
+    this.scope.declareBinding(bindName, bindType, isConst, bindingAnchor);
+    this.scope.push();
+    this.pushLoopCtx("loop");
 
-        const lines: string[] = [];
-        lines.push(`${pad}{`);
-        lines.push(`${pad}  ${iterCType} ${iterTmp} = ${recvStr};`);
-        lines.push(`${pad}  for (;;) {`);
-        lines.push(`${innerPad}bool ${doneTmp} = false;`);
-        lines.push(
-          `${innerPad}${bindCType} ${valTmp} = ${iterTmp}.next(${iterTmp}.state, &${doneTmp});`,
-        );
-        lines.push(`${innerPad}if (${doneTmp}) break;`);
-        lines.push(`${innerPad}${bindCType} ${bindName} = ${valTmp};`);
-        if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
-        lines.push(`${pad}  }`);
-        lines.push(`${pad}}`);
-        return lines.join("\n");
-      } finally {
-        this.popLoopCtx();
-        this.scope.pop();
-      }
-    } finally {
-      this.scope.pop();
-    }
+    const stmtLines = this.emitForOfBodyLines(stmt.body, indent + 2);
+
+    const lines: string[] = [];
+    lines.push(`${pad}{`);
+    lines.push(`${pad}  ${iterCType} ${iterTmp} = ${recvStr};`);
+    lines.push(`${pad}  for (;;) {`);
+    lines.push(`${innerPad}bool ${doneTmp} = false;`);
+    lines.push(
+      `${innerPad}${bindCType} ${valTmp} = ${iterTmp}.next(${iterTmp}.state, &${doneTmp});`,
+    );
+    lines.push(`${innerPad}if (${doneTmp}) break;`);
+    lines.push(`${innerPad}${bindCType} ${bindName} = ${valTmp};`);
+    if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+    lines.push(`${pad}  }`);
+    lines.push(`${pad}}`);
+
+    this.popLoopCtx();
+    this.scope.pop();
+    this.scope.pop();
+    return lines.join("\n");
   }
 
   private emitSwitchStatement(stmt: SwitchStmt, indent: number): string {
