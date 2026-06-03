@@ -253,6 +253,8 @@ run_fail_case coalesce_non_optional_fail examples/coalesce_non_optional_fail.ts 
 run_fail_case optional_chain_non_optional_fail examples/optional_chain_non_optional_fail.ts "optional chain \`?.\` requires a \`T | undefined\` receiver"
 run_fail_case optional_call_fail examples/optional_call_fail.ts "optional call \`f?.()\` is unsupported"
 run_fail_case arrow_unannotated_fail examples/arrow_unannotated_fail.ts "arrow function parameter requires a type annotation"
+run_case arrow_infer_return $'42\nxtopaz\nvoid-body\n7\n9'
+run_fail_case arrow_block_infer_return_fail examples/arrow_block_infer_return_fail.ts "arrow function requires an explicit return type annotation"
 run_case arrow_nested_fn_type $'30\n12\n7'
 run_case array_of_fn $'6\n50\n2\n-95\n13\n16\n60\n3\n101\n102\n103\n19\n49\n0\nn=7\nn*2=14'
 run_fail_case map_of_fn_fail examples/map_of_fn_fail.ts "no Map monomorph for key=topaz_string, value=topaz_fn_"

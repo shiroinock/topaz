@@ -3957,16 +3957,146 @@ class Emitter {
       params.push({ name: p.name, type: pt, isOptional: false });
     }
     let returnType: TopazType = T_VOID;
+    let inferredExprBodyType: TopazType | undefined = undefined;
     const arrowReturnType = arrow.returnType;
     if (arrowReturnType !== undefined) {
       const returnAnchor: { pos: number } = { pos: arrowReturnType.pos };
       returnType = this.typeFromAnnotation(arrowReturnType, returnAnchor, g_currentModule!);
     } else if (expectedFn !== undefined) {
       returnType = expectedFn.returnType;
+    } else if (arrow.body.kind === "arrow_expr_body") {
+      const inferred = this.inferArrowExpressionBodyType(arrow, params);
+      inferredExprBodyType = inferred;
+      returnType = inferred;
     } else {
       throw new CodegenError({ pos: arrow.pos }, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
+    if (returnType.kind === "void" && arrow.body.kind === "arrow_expr_body") {
+      let bodyType: TopazType = T_VOID;
+      if (inferredExprBodyType !== undefined) {
+        bodyType = inferredExprBodyType;
+      } else {
+        bodyType = this.inferArrowExpressionBodyType(arrow, params);
+      }
+      if (bodyType.kind !== "void") {
+        throw new CodegenError({ pos: arrow.pos }, "void-returning arrows require block bodies");
+      }
+    }
     return { kind: "fn", params, returnType };
+  }
+
+  private inferArrowExpressionBodyType(
+    arrow: ArrowExpr,
+    params: Array<ParamInfo>,
+  ): TopazType {
+    const body = arrow.body;
+    switch (body.kind) {
+      case "arrow_expr_body":
+        return this.inferArrowBodyExpressionTypeInScope(body.expr, arrow, params);
+      case "arrow_block_body":
+        throwInternalCodegenError("inferArrowExpressionBodyType: not an expression body");
+        return T_VOID;
+    }
+  }
+
+  private inferArrowBodyExpressionTypeInScope(
+    expr: Expr,
+    arrow: ArrowExpr,
+    params: Array<ParamInfo>,
+  ): TopazType {
+    const arrowAnchor: { pos: number } = { pos: arrow.pos };
+    this.scope.push();
+    for (const p of params) {
+      this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrowAnchor);
+    }
+    const inferred = this.inferArrowBodyExpressionType(expr);
+    this.scope.pop();
+    return inferred;
+  }
+
+  private inferArrowBodyExpressionType(expr: Expr): TopazType {
+    if (expr.kind === "call_expr") {
+      const voidCall = this.tryInferVoidCallExpression(expr);
+      if (voidCall !== undefined) return voidCall;
+    }
+    return this.inferType(expr);
+  }
+
+  private tryInferVoidCallExpression(expr: CallExpr): TopazType | undefined {
+    if (expr.optional) return undefined;
+    const callee = expr.callee;
+    if (callee.kind === "prop_access") {
+      return this.tryInferVoidPropCallExpression(expr, callee);
+    }
+    if (callee.kind === "ident") {
+      if (callee.name === "writeFileSync") {
+        this.checkNodeFsWriteFileSyncArgs(expr);
+        return T_VOID;
+      }
+      if (callee.name === "mkdirSync") {
+        this.checkNodeFsMkdirSyncArgs(expr);
+        return T_VOID;
+      }
+      if (callee.name === "execFileSync") {
+        this.checkNodeChildProcessExecFileSyncArgs(expr);
+        return T_VOID;
+      }
+    }
+    return undefined;
+  }
+
+  private tryInferVoidPropCallExpression(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+  ): TopazType | undefined {
+    const receiver = callee.receiver;
+    if (
+      receiver.kind === "ident" &&
+      receiver.name === "console" &&
+      (callee.name === "log" || callee.name === "error")
+    ) {
+      this.checkConsoleCallArgs(expr, callee.name);
+      return T_VOID;
+    }
+    if (receiver.kind === "prop_access") {
+      const receiverBase = receiver.receiver;
+      if (
+        receiverBase.kind === "ident" &&
+        receiverBase.name === "process" &&
+        (receiver.name === "stdout" || receiver.name === "stderr") &&
+        callee.name === "write"
+      ) {
+        this.checkProcessStreamWriteArgs(expr, receiver.name);
+        return T_VOID;
+      }
+    }
+    if (callee.name !== "push" && callee.name !== "set" && callee.name !== "add") {
+      return undefined;
+    }
+    const baseType = this.inferType(callee.receiver);
+    if (isArrayType(baseType) && callee.name === "push") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, "Array.push expects exactly one argument");
+      }
+      this.expectType(expr.args[0], arrayElem(baseType)!);
+      return T_VOID;
+    }
+    if (isMapType(baseType) && callee.name === "set") {
+      if (expr.args.length !== 2) {
+        throw new CodegenError({ pos: expr.pos }, "Map.set expects exactly two arguments");
+      }
+      this.expectType(expr.args[0], mapKey(baseType)!);
+      this.expectType(expr.args[1], mapValue(baseType)!);
+      return T_VOID;
+    }
+    if (isSetType(baseType) && callee.name === "add") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, "Set.add expects exactly one argument");
+      }
+      this.expectType(expr.args[0], setElem(baseType)!);
+      return T_VOID;
+    }
+    return undefined;
   }
 
   // Phase 1.5-3.5f: infer the fn type of a callback expression given the
@@ -4022,17 +4152,7 @@ class Emitter {
         const returnAnchor: { pos: number } = { pos: cbReturnType.pos };
         returnType = this.typeFromAnnotation(cbReturnType, returnAnchor, g_currentModule!);
       } else if (cbBody.kind === "arrow_expr_body") {
-        // Expression body: push the params into a fresh scope so inferType
-        // can resolve identifier references to them, then pop. We don't
-        // install a closure barrier here — type inference is read-only and
-        // peeking into outer locals doesn't affect the eventual capture
-        // analysis done by emitArrowFunction.
-        this.scope.push();
-        for (const p of params) {
-          this.scope.declareBinding(p.name, p.type, /* isConst */ false, cbAnchor);
-        }
-        returnType = this.inferType(cbBody.expr);
-        this.scope.pop();
+        returnType = this.inferArrowExpressionBodyType(cb, params);
       } else {
         throw new CodegenError(
           { pos: cb.pos },
@@ -4206,27 +4326,41 @@ class Emitter {
       params.push({ name: p.name, type: pt, isOptional: false });
     }
 
-    // Return type: annotation required (we don't infer from body yet) unless
-    // an expected fn type supplies it.
+    // Return type: annotation/context wins. Without either, expression-bodied
+    // arrows can infer from the expression under the typed param scope; block
+    // bodies still need an explicit/contextual return type.
     let returnType: TopazType = T_VOID;
+    let inferredExprBodyType: TopazType | undefined = undefined;
     const arrowReturnType = arrow.returnType;
     if (arrowReturnType !== undefined) {
       const returnAnchor: { pos: number } = { pos: arrowReturnType.pos };
       returnType = this.typeFromAnnotation(arrowReturnType, returnAnchor, g_currentModule!);
     } else if (expectedFn !== undefined) {
       returnType = expectedFn.returnType;
+    } else if (arrow.body.kind === "arrow_expr_body") {
+      const inferred = this.inferArrowExpressionBodyType(arrow, params);
+      inferredExprBodyType = inferred;
+      returnType = inferred;
     } else {
       throw new CodegenError({ pos: arrow.pos }, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
-    if (returnType.kind === "void" && arrow.body.kind !== "arrow_block_body") {
-      throw new CodegenError({ pos: arrow.pos }, "void-returning arrows require block bodies");
+    if (returnType.kind === "void" && arrow.body.kind === "arrow_expr_body") {
+      let bodyType: TopazType = T_VOID;
+      if (inferredExprBodyType !== undefined) {
+        bodyType = inferredExprBodyType;
+      } else {
+        bodyType = this.inferArrowExpressionBodyType(arrow, params);
+      }
+      if (bodyType.kind !== "void") {
+        throw new CodegenError({ pos: arrow.pos }, "void-returning arrows require block bodies");
+      }
     }
 
     const arrowType: TopazType = { kind: "fn", params, returnType };
     this.recordFnMonomorph(arrowType);
 
-    // Body: rewrite expression-bodied arrows (`(x) => x + 1`) into a single
-    // `return` statement so the same emit path works for both forms.
+    // Body: rewrite expression-bodied arrows into a single return, except for
+    // void expressions which must stay statement-shaped.
     const id = this.arrowCounter++;
     const fnName = `__topaz_arrow_${id}`;
     const envName = `__topaz_env_${id}`;
@@ -4332,6 +4466,11 @@ class Emitter {
     if (body.kind === "arrow_block_body") {
       const blk: BlockStmt = { kind: "block_stmt", stmts: body.stmts, pos: arrow.pos, end: arrow.end };
       return this.emitBlock(blk, 0);
+    }
+
+    if (returnType.kind === "void") {
+      const exprStr = this.emitExpression(body.expr);
+      return `{\n  ${exprStr};\n  return;\n}`;
     }
 
     // Expression body: wrap in `{ return <expr>; }`. emitWithExpected applies
@@ -7216,6 +7355,29 @@ class Emitter {
     }
   }
 
+  private checkConsoleCallArgs(expr: CallExpr, method: string): void {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `console.${method} expects exactly one argument`);
+    }
+    const arg = expr.args[0];
+    const t = this.inferType(arg);
+    if (t.kind === "undefined" || t.kind === "union") {
+      throw new CodegenError(
+        arg,
+        `console.${method} on ${typeIdent(t)} is unsupported (narrow it with \`if (x !== undefined)\` first)`,
+      );
+    }
+    if (t.kind === "unknown") {
+      throw new CodegenError(
+        arg,
+        `console.${method} on \`unknown\` is unsupported (narrow it with \`if (x instanceof ClassName)\` first)`,
+      );
+    }
+    if (isReferenceType(t) || isInterfaceType(t)) {
+      throw new CodegenError(arg, `console.${method} on ${typeIdent(t)} is unsupported`);
+    }
+  }
+
   private emitCall(expr: CallExpr): string {
     const callee = expr.callee;
 
@@ -7252,26 +7414,9 @@ class Emitter {
       (callee.name === "log" || callee.name === "error")
     ) {
       const method = callee.name;
-      if (expr.args.length !== 1) {
-        throw new CodegenError(expr, `console.${method} expects exactly one argument`);
-      }
+      this.checkConsoleCallArgs(expr, method);
       const arg = expr.args[0]!;
       const t = this.inferType(arg);
-      if (t.kind === "undefined" || t.kind === "union") {
-        throw new CodegenError(
-          arg,
-          `console.${method} on ${typeIdent(t)} is unsupported (narrow it with \`if (x !== undefined)\` first)`,
-        );
-      }
-      if (t.kind === "unknown") {
-        throw new CodegenError(
-          arg,
-          `console.${method} on \`unknown\` is unsupported (narrow it with \`if (x instanceof ClassName)\` first)`,
-        );
-      }
-      if (isReferenceType(t) || isInterfaceType(t)) {
-        throw new CodegenError(arg, `console.${method} on ${typeIdent(t)} is unsupported`);
-      }
       const family = method === "log" ? "log" : "error";
       const fn =
         t.kind === "boolean" ? `topaz_console_${family}_boolean`
@@ -8145,15 +8290,20 @@ class Emitter {
   // Phase 1.5-6 prep #26: process.{stdout,stderr}.write(s). Exactly one string
   // argument; no trailing newline (unlike console.*). Returns void (Node
   // returns a backpressure boolean — dropped here).
-  private emitProcessStreamWrite(expr: CallExpr, stream: string): string {
+  private checkProcessStreamWriteArgs(expr: CallExpr, stream: string): void {
     if (expr.args.length !== 1) {
-      throw new CodegenError(expr, `process.${stream}.write expects exactly one argument: (s: string)`);
+      throw new CodegenError({ pos: expr.pos }, `process.${stream}.write expects exactly one argument: (s: string)`);
     }
-    const arg = expr.args[0]!;
+    const arg = expr.args[0];
     const t = this.inferType(arg);
     if (t.kind !== "string") {
       throw new CodegenError(arg, `process.${stream}.write argument must be string, got ${typeIdent(t)}`);
     }
+  }
+
+  private emitProcessStreamWrite(expr: CallExpr, stream: string): string {
+    this.checkProcessStreamWriteArgs(expr, stream);
+    const arg = expr.args[0]!;
     const fn = stream === "stdout" ? "topaz_stdout_write" : "topaz_stderr_write";
     return `${fn}(${this.emitWithExpected(arg, T_STRING)})`;
   }
