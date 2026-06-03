@@ -4284,45 +4284,42 @@ class Emitter {
     // it. Outer frames remain hidden behind the barrier.
     this.scope.pushBarrier();
     this.scope.push();
-    try {
-      for (const p of params) {
-        this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrow);
-      }
-      let bodyText: string;
-      if (arrow.body.kind === "arrow_block_body") {
-        const blk: BlockStmt = { kind: "block_stmt", stmts: arrow.body.stmts, pos: arrow.pos, end: arrow.end };
-        bodyText = this.emitBlock(blk, 0);
-      } else {
-        // Expression body: wrap in `{ return <expr>; }`. emitWithExpected
-        // applies the return-type coercion (class -> iface, scalar -> opt
-        // wrap, etc.) the same way an explicit `return` statement would.
-        const exprStr = this.emitWithExpected(arrow.body.expr, returnType);
-        bodyText = `{\n  return ${exprStr};\n}`;
-      }
-
-      // C function signature: env is `void *` so the same callable shape
-      // works for both capturing and non-capturing arrows.
-      const paramDecls = params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
-      const fnSig = `static ${cReturnTypeName(returnType)} ${fnName}(void *__topaz_env${paramDecls.length > 0 ? ", " + paramDecls : ""})`;
-
-      // Splice the env typedef (if any) + the arrow's forward declaration
-      // into the fwd slot; the full body goes into the def slot. This lets a
-      // function that returns an arrow reference `__topaz_arrow_<N>` and
-      // `__topaz_env_<N>` by name in its body even though the actual
-      // definition lands later in the C file.
-      const fwdLines: string[] = [];
-      if (envTypedef) fwdLines.push(envTypedef);
-      fwdLines.push(`${fnSig};`);
-      this.arrowFwdLines.push(fwdLines.join("\n"));
-      this.arrowDefLines.push(`${fnSig} ${bodyText}`);
-    } finally {
-      this.scope.pop();
-      this.scope.popBarrier();
-      this.captureContext = prevCaptureContext;
-      this.currentReturnType = prevRet;
-      this.liveTryFrames = prevLive;
-      this.restoreLoopCtx(prevLoopCtx);
+    for (const p of params) {
+      this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrow);
     }
+    let bodyText: string;
+    if (arrow.body.kind === "arrow_block_body") {
+      const blk: BlockStmt = { kind: "block_stmt", stmts: arrow.body.stmts, pos: arrow.pos, end: arrow.end };
+      bodyText = this.emitBlock(blk, 0);
+    } else {
+      // Expression body: wrap in `{ return <expr>; }`. emitWithExpected
+      // applies the return-type coercion (class -> iface, scalar -> opt
+      // wrap, etc.) the same way an explicit `return` statement would.
+      const exprStr = this.emitWithExpected(arrow.body.expr, returnType);
+      bodyText = `{\n  return ${exprStr};\n}`;
+    }
+
+    // C function signature: env is `void *` so the same callable shape
+    // works for both capturing and non-capturing arrows.
+    const paramDecls = params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
+    const fnSig = `static ${cReturnTypeName(returnType)} ${fnName}(void *__topaz_env${paramDecls.length > 0 ? ", " + paramDecls : ""})`;
+
+    // Splice the env typedef (if any) + the arrow's forward declaration
+    // into the fwd slot; the full body goes into the def slot. This lets a
+    // function that returns an arrow reference `__topaz_arrow_<N>` and
+    // `__topaz_env_<N>` by name in its body even though the actual
+    // definition lands later in the C file.
+    const fwdLines: string[] = [];
+    if (envTypedef) fwdLines.push(envTypedef);
+    fwdLines.push(`${fnSig};`);
+    this.arrowFwdLines.push(fwdLines.join("\n"));
+    this.arrowDefLines.push(`${fnSig} ${bodyText}`);
+    this.scope.pop();
+    this.scope.popBarrier();
+    this.captureContext = prevCaptureContext;
+    this.currentReturnType = prevRet;
+    this.liveTryFrames = prevLive;
+    this.restoreLoopCtx(prevLoopCtx);
 
     // Build the call-site compound literal. Allocate the env on the arena
     // and copy each captured value in. Non-capturing arrows just take a NULL
