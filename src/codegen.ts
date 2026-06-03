@@ -8486,51 +8486,53 @@ class Emitter {
     const base = this.emitExpression(callee.receiver);
     if (method === "charCodeAt") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "String.charCodeAt expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "String.charCodeAt expects exactly one argument");
       }
-      const argType = this.inferType(expr.args[0]!);
+      const indexArg = expr.args[0];
+      const argType = this.inferType(indexArg);
       if (argType.kind !== "number") {
         throw new CodegenError(
-          expr.args[0]!,
+          { pos: indexArg.pos },
           `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
         );
       }
-      const idx = this.emitWithExpected(expr.args[0]!, T_NUMBER);
+      const idx = this.emitWithExpected(indexArg, T_NUMBER);
       return `topaz_string_char_code_at(${base}, ${idx})`;
     }
     if (method === "slice") {
       if (expr.args.length > 2) {
-        throw new CodegenError(expr, "String.slice expects at most two arguments");
+        throw new CodegenError({ pos: expr.pos }, "String.slice expects at most two arguments");
       }
       for (const arg of expr.args) {
         const at = this.inferType(arg);
         if (at.kind !== "number") {
           throw new CodegenError(
-            arg,
+            { pos: arg.pos },
             `String.slice argument must be number, got ${typeIdent(at)}`,
           );
         }
       }
-      const startExpr = expr.args.length >= 1
-        ? `(double)(${this.emitWithExpected(expr.args[0]!, T_NUMBER)})`
-        : "(double)NAN";
-      const endExpr = expr.args.length >= 2
-        ? `(double)(${this.emitWithExpected(expr.args[1]!, T_NUMBER)})`
-        : "(double)NAN";
+      let startExpr = "(double)NAN";
+      if (expr.args.length >= 1) {
+        const startArg = expr.args[0];
+        startExpr = `(double)(${this.emitWithExpected(startArg, T_NUMBER)})`;
+      }
+      let endExpr = "(double)NAN";
+      if (expr.args.length >= 2) {
+        const endArg = expr.args[1];
+        endExpr = `(double)(${this.emitWithExpected(endArg, T_NUMBER)})`;
+      }
       return `topaz_string_slice(${base}, ${startExpr}, ${endExpr})`;
     }
     if (method === "repeat") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "String.repeat expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "String.repeat expects exactly one argument");
       }
       const countArg = expr.args[0];
-      if (countArg === undefined) {
-        throw new CodegenError(expr, "String.repeat expects exactly one argument");
-      }
       const countType = this.inferType(countArg);
       if (countType.kind !== "number") {
         throw new CodegenError(
-          countArg,
+          { pos: countArg.pos },
           `String.repeat argument must be number, got ${typeIdent(countType)}`,
         );
       }
@@ -8539,25 +8541,26 @@ class Emitter {
     }
     if (method === "trimStart") {
       if (expr.args.length !== 0) {
-        throw new CodegenError(expr, "String.trimStart expects no arguments");
+        throw new CodegenError({ pos: expr.pos }, "String.trimStart expects no arguments");
       }
       return `topaz_string_trim_start(${base})`;
     }
     if (method === "startsWith" || method === "endsWith") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, `String.${method} expects exactly one argument`);
+        throw new CodegenError({ pos: expr.pos }, `String.${method} expects exactly one argument`);
       }
-      const argType = this.inferType(expr.args[0]!);
+      const searchArg = expr.args[0];
+      const argType = this.inferType(searchArg);
       if (argType.kind !== "string") {
         throw new CodegenError(
-          expr.args[0]!,
+          { pos: searchArg.pos },
           `String.${method} argument must be string, got ${typeIdent(argType)}`,
         );
       }
-      const search = this.emitWithExpected(expr.args[0]!, T_STRING);
+      const search = this.emitWithExpected(searchArg, T_STRING);
       return `topaz_string_${method === "startsWith" ? "starts_with" : "ends_with"}(${base}, ${search})`;
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on topaz_string`);
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_string`);
   }
 
   // Phase 1.5-6 prep #12: only `String.fromCharCode(n)` is supported; we
@@ -8570,21 +8573,22 @@ class Emitter {
     const method = callee.name;
     if (method !== "fromCharCode") {
       throw new CodegenError(
-        callee,
+        { pos: callee.pos },
         `unsupported static method 'String.${method}' (only 'String.fromCharCode' is supported)`,
       );
     }
     if (expr.args.length !== 1) {
-      throw new CodegenError(expr, "String.fromCharCode expects exactly one argument");
+      throw new CodegenError({ pos: expr.pos }, "String.fromCharCode expects exactly one argument");
     }
-    const argType = this.inferType(expr.args[0]!);
+    const codeArg = expr.args[0];
+    const argType = this.inferType(codeArg);
     if (argType.kind !== "number") {
       throw new CodegenError(
-        expr.args[0]!,
+        { pos: codeArg.pos },
         `String.fromCharCode argument must be number, got ${typeIdent(argType)}`,
       );
     }
-    const code = this.emitWithExpected(expr.args[0]!, T_NUMBER);
+    const code = this.emitWithExpected(codeArg, T_NUMBER);
     return `topaz_string_from_char_code(${code})`;
   }
 
@@ -8595,17 +8599,18 @@ class Emitter {
     const method = callee.name;
     if (method !== "fromCharCode") {
       throw new CodegenError(
-        callee,
+        { pos: callee.pos },
         `unsupported static method 'String.${method}' (only 'String.fromCharCode' is supported)`,
       );
     }
     if (expr.args.length !== 1) {
-      throw new CodegenError(expr, "String.fromCharCode expects exactly one argument");
+      throw new CodegenError({ pos: expr.pos }, "String.fromCharCode expects exactly one argument");
     }
-    const argType = this.inferType(expr.args[0]!);
+    const codeArg = expr.args[0];
+    const argType = this.inferType(codeArg);
     if (argType.kind !== "number") {
       throw new CodegenError(
-        expr.args[0]!,
+        { pos: codeArg.pos },
         `String.fromCharCode argument must be number, got ${typeIdent(argType)}`,
       );
     }
@@ -9114,12 +9119,13 @@ class Emitter {
     const method = callee.name;
     if (method === "charCodeAt") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "String.charCodeAt expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "String.charCodeAt expects exactly one argument");
       }
-      const argType = this.inferType(expr.args[0]!);
+      const indexArg = expr.args[0];
+      const argType = this.inferType(indexArg);
       if (argType.kind !== "number") {
         throw new CodegenError(
-          expr.args[0]!,
+          { pos: indexArg.pos },
           `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
         );
       }
@@ -9127,13 +9133,13 @@ class Emitter {
     }
     if (method === "slice") {
       if (expr.args.length > 2) {
-        throw new CodegenError(expr, "String.slice expects at most two arguments");
+        throw new CodegenError({ pos: expr.pos }, "String.slice expects at most two arguments");
       }
       for (const arg of expr.args) {
         const at = this.inferType(arg);
         if (at.kind !== "number") {
           throw new CodegenError(
-            arg,
+            { pos: arg.pos },
             `String.slice argument must be number, got ${typeIdent(at)}`,
           );
         }
@@ -9142,16 +9148,13 @@ class Emitter {
     }
     if (method === "repeat") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, "String.repeat expects exactly one argument");
+        throw new CodegenError({ pos: expr.pos }, "String.repeat expects exactly one argument");
       }
       const countArg = expr.args[0];
-      if (countArg === undefined) {
-        throw new CodegenError(expr, "String.repeat expects exactly one argument");
-      }
       const countType = this.inferType(countArg);
       if (countType.kind !== "number") {
         throw new CodegenError(
-          countArg,
+          { pos: countArg.pos },
           `String.repeat argument must be number, got ${typeIdent(countType)}`,
         );
       }
@@ -9159,24 +9162,25 @@ class Emitter {
     }
     if (method === "trimStart") {
       if (expr.args.length !== 0) {
-        throw new CodegenError(expr, "String.trimStart expects no arguments");
+        throw new CodegenError({ pos: expr.pos }, "String.trimStart expects no arguments");
       }
       return T_STRING;
     }
     if (method === "startsWith" || method === "endsWith") {
       if (expr.args.length !== 1) {
-        throw new CodegenError(expr, `String.${method} expects exactly one argument`);
+        throw new CodegenError({ pos: expr.pos }, `String.${method} expects exactly one argument`);
       }
-      const argType = this.inferType(expr.args[0]!);
+      const searchArg = expr.args[0];
+      const argType = this.inferType(searchArg);
       if (argType.kind !== "string") {
         throw new CodegenError(
-          expr.args[0]!,
+          { pos: searchArg.pos },
           `String.${method} argument must be string, got ${typeIdent(argType)}`,
         );
       }
       return T_BOOLEAN;
     }
-    throw new CodegenError(callee, `unsupported method '.${method}' on topaz_string`);
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_string`);
   }
 
   private emitMapMethodCall(
