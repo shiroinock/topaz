@@ -9504,10 +9504,11 @@ class Emitter {
   private resolveOptionalIndexType(
     expr: ElemAccessExpr,
   ): { baseType: TopazType; inner: TopazType; elem: TopazType } {
+    const exprAnchor: { pos: number } = { pos: expr.pos };
     const { baseType, inner } = this.resolveOptionalReceiver(expr, expr.receiver);
     if (!isArrayType(inner)) {
       throw new CodegenError(
-        expr,
+        exprAnchor,
         `optional index access \`?.[i]\` is only supported on Array receivers (got ${typeIdent(baseType)})`,
       );
     }
@@ -9546,6 +9547,7 @@ class Emitter {
   }
 
   private emitOptionalPropertyAccess(expr: PropAccessExpr): string {
+    const exprAnchor: { pos: number } = { pos: expr.pos };
     const { baseType, inner, fieldType } = this.resolveOptionalFieldType(expr);
     const baseStr = this.emitExpression(expr.receiver);
     const fname = expr.name;
@@ -9554,7 +9556,7 @@ class Emitter {
       inner,
       baseStr,
       accessType: fieldType,
-      anchor: expr,
+      anchor: exprAnchor,
       emitPresent: (tmp) => {
         if (isClassType(inner)) {
           return `(${tmp})->${fname}`;
@@ -9566,6 +9568,7 @@ class Emitter {
   }
 
   private emitOptionalElementAccess(expr: ElemAccessExpr): string {
+    const exprAnchor: { pos: number } = { pos: expr.pos };
     const { baseType, inner, elem } = this.resolveOptionalIndexType(expr);
     const baseStr = this.emitExpression(expr.receiver);
     const idxStr = this.emitExpression(expr.index);
@@ -9575,7 +9578,7 @@ class Emitter {
       inner,
       baseStr,
       accessType: elem,
-      anchor: expr,
+      anchor: exprAnchor,
       emitPresent: (tmp) => `topaz_array_${name}_at(${tmp}, ${idxStr})`,
     });
   }
@@ -9584,10 +9587,11 @@ class Emitter {
     expr: CallExpr,
     callee: PropAccessExpr,
   ): string {
+    const exprAnchor: { pos: number } = { pos: expr.pos };
     const { baseType, inner, sig } = this.resolveOptionalMethodSig(callee);
     if (expr.args.length !== sig.params.length) {
       throw new CodegenError(
-        expr,
+        exprAnchor,
         `${typeIdent(inner)}.${callee.name} expects ${sig.params.length} argument(s), got ${expr.args.length}`,
       );
     }
@@ -9599,7 +9603,7 @@ class Emitter {
       inner,
       baseStr,
       accessType: sig.returnType,
-      anchor: expr,
+      anchor: exprAnchor,
       emitPresent: (tmp) => {
         if (isClassType(inner)) {
           const cname = classNameOf(inner)!;
