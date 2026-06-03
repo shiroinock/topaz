@@ -7144,15 +7144,20 @@ class Emitter {
       this.inferType(expr); // type-check + const-check
       // Element-access assignment lowers to topaz_array_X_set; compound
       // assignment on a[i] is unsupported because we'd evaluate the index twice.
-      if (expr.target.kind === "elem_access") {
+      const assignTarget = expr.target;
+      if (assignTarget.kind === "elem_access") {
+        const target = assignTarget;
         if (op !== "=") {
-          throw new CodegenError(expr, "compound assignment on array element is unsupported; use a[i] = ...");
+          throw new CodegenError(assignAnchor, "compound assignment on array element is unsupported; use a[i] = ...");
         }
-        const baseType = this.inferType(expr.target.receiver);
+        const baseType = this.inferType(target.receiver);
         const name = arrayShortName(baseType);
-        const elem = arrayElem(baseType)!;
-        const base = this.emitExpression(expr.target.receiver);
-        const idx = this.emitExpression(expr.target.index);
+        const elem = arrayElem(baseType);
+        if (elem === undefined) {
+          throw new CodegenError(assignAnchor, "internal error: validated array assignment target missing element type");
+        }
+        const base = this.emitExpression(target.receiver);
+        const idx = this.emitExpression(target.index);
         // Use emitWithExpected so class -> interface coercion fires when the
         // array is Array<Interface> and the RHS is a class instance.
         const val = this.emitWithExpected(expr.value, elem);
@@ -7161,22 +7166,32 @@ class Emitter {
       // Interface property assignment goes through the vtable's setter; no
       // C lvalue exists for the underlying field. Compound forms would need
       // to evaluate the base twice, so reject them.
-      if (expr.target.kind === "prop_access") {
-        const baseT = this.inferType(expr.target.receiver);
+      if (assignTarget.kind === "prop_access") {
+        const target = assignTarget;
+        const baseT = this.inferType(target.receiver);
         if (isInterfaceType(baseT)) {
           if (op !== "=") {
             throw new CodegenError(
-              expr,
+              assignAnchor,
               "compound assignment on interface field is unsupported; use iface.field = ...",
             );
           }
-          const iname = interfaceNameOf(baseT)!;
-          const iface = this.interfaces.get(iname)!;
-          const fname = expr.target.name;
-          const ftype = iface.fields.get(fname)!;
+          const iname = interfaceNameOf(baseT);
+          if (iname === undefined) {
+            throw new CodegenError(assignAnchor, "internal error: validated interface assignment target missing interface name");
+          }
+          const iface = this.interfaces.get(iname);
+          if (iface === undefined) {
+            throw new CodegenError(assignAnchor, `internal error: interface '${iname}' not registered`);
+          }
+          const fname = target.name;
+          const ftype = iface.fields.get(fname);
+          if (ftype === undefined) {
+            throw new CodegenError(assignAnchor, `internal error: validated interface assignment target missing field '${fname}'`);
+          }
           const id = this.tmpCounter++;
           const tmp = `__topaz_ib_${id}`;
-          const baseStr = this.emitExpression(expr.target.receiver);
+          const baseStr = this.emitExpression(target.receiver);
           const rhsStr = this.emitWithExpected(expr.value, ftype);
           // The vtable setter returns void, so this expression's value is
           // void. Chained assignment (`x = (iface.field = v)`) is therefore
