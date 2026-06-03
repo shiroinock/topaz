@@ -3701,7 +3701,7 @@ class Emitter {
         if (node.typeArgs.length !== 1) {
           throw this.typeErr(nodeAnchor, "Array<T> requires exactly one type argument");
         }
-        const elem = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        const elem = this.typeFromAnnotation(node.typeArgs[0], nodeAnchor, sf);
         this.assertNotVoid(elem, nodeAnchor, "Array element");
         const arr = arrayOf(elem);
         if (arr === undefined) {
@@ -3714,9 +3714,9 @@ class Emitter {
         if (node.typeArgs.length !== 2) {
           throw this.typeErr(nodeAnchor, "Map<K, V> requires exactly two type arguments");
         }
-        const k = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        const k = this.typeFromAnnotation(node.typeArgs[0], nodeAnchor, sf);
         this.assertNotVoid(k, nodeAnchor, "Map key");
-        const v = this.typeFromAnnotation(node.typeArgs[1]!, nodeAnchor, sf);
+        const v = this.typeFromAnnotation(node.typeArgs[1], nodeAnchor, sf);
         this.assertNotVoid(v, nodeAnchor, "Map value");
         const m = mapOf(k, v);
         if (m === undefined) {
@@ -3729,7 +3729,7 @@ class Emitter {
         if (node.typeArgs.length !== 1) {
           throw this.typeErr(nodeAnchor, "Set<T> requires exactly one type argument");
         }
-        const elem = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        const elem = this.typeFromAnnotation(node.typeArgs[0], nodeAnchor, sf);
         this.assertNotVoid(elem, nodeAnchor, "Set element");
         const s = setOf(elem);
         if (s === undefined) {
@@ -3746,7 +3746,7 @@ class Emitter {
         if (node.typeArgs.length !== 1) {
           throw this.typeErr(nodeAnchor, "Iterator<T> requires exactly one type argument");
         }
-        const elem = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        const elem = this.typeFromAnnotation(node.typeArgs[0], nodeAnchor, sf);
         this.assertNotVoid(elem, nodeAnchor, "Iterator element");
         if (
           elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string"
