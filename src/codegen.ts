@@ -5409,8 +5409,9 @@ class Emitter {
       const elseN = this.extractNarrowing(stmt.cond, false);
       const thenStr = this.emitStatementAsBlock(stmt.thenBranch, indent, thenN);
       let out = `${pad}if (${cond}) ${thenStr.trimStart()}`;
-      if (stmt.elseBranch) {
-        const elseStr = this.emitStatementAsBlock(stmt.elseBranch, indent, elseN);
+      const elseBranchMaybe = stmt.elseBranch;
+      if (elseBranchMaybe !== undefined) {
+        const elseStr = this.emitStatementAsBlock(elseBranchMaybe, indent, elseN);
         out += ` else ${elseStr.trimStart()}`;
       }
       return out;
