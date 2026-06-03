@@ -7905,7 +7905,7 @@ class Emitter {
     }
   }
 
-  private checkConsoleCallArgs(expr: CallExpr, method: string): void {
+  private checkConsoleCallArgs(expr: CallExpr, method: string): Expr {
     if (expr.args.length !== 1) {
       throw new CodegenError({ pos: expr.pos }, `console.${method} expects exactly one argument`);
     }
@@ -7926,6 +7926,7 @@ class Emitter {
     if (isReferenceType(t) || isInterfaceType(t)) {
       throw new CodegenError({ pos: arg.pos }, `console.${method} on ${typeIdent(t)} is unsupported`);
     }
+    return arg;
   }
 
   private emitCall(expr: CallExpr): string {
@@ -7966,8 +7967,7 @@ class Emitter {
           (prop.name === "log" || prop.name === "error")
         ) {
           const method = prop.name;
-          this.checkConsoleCallArgs(expr, method);
-          const arg = expr.args[0]!;
+          const arg = this.checkConsoleCallArgs(expr, method);
           const t = this.inferType(arg);
           const family = method === "log" ? "log" : "error";
           const fn =
