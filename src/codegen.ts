@@ -3170,10 +3170,12 @@ class Emitter {
           );
         }
         for (let i = 0; i < want.params.length; i++) {
-          if (!typeEq(got.params[i]!.type, want.params[i]!.type)) {
+          const gotParam = got.params[i];
+          const wantParam = want.params[i];
+          if (!typeEq(gotParam.type, wantParam.type)) {
             throw new CodegenError(
               anchor,
-              `class '${cls.name}.${mname}' parameter ${i + 1} has type ${typeIdent(got.params[i]!.type)}, but interface '${iface.name}' requires ${typeIdent(want.params[i]!.type)}`,
+              `class '${cls.name}.${mname}' parameter ${i + 1} has type ${typeIdent(gotParam.type)}, but interface '${iface.name}' requires ${typeIdent(wantParam.type)}`,
             );
           }
         }
