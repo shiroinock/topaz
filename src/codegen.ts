@@ -4802,8 +4802,10 @@ class Emitter {
         // type parameters (when a generic body calls another generic), so
         // typeFromAnnotation must run with the outer typeParamScope still
         // active. We don't swap it here.
-        const t = this.typeFromAnnotation(expr.typeArgs[i]!, callAnchor, g_currentModule!);
-        subs.set(generic.typeParams[i]!, t);
+        const typeArg = expr.typeArgs[i];
+        const typeParam = generic.typeParams[i];
+        const t = this.typeFromAnnotation(typeArg, callAnchor, g_currentModule!);
+        subs.set(typeParam, t);
       }
     } else {
       // Best-effort inference: walk each parameter type node against the
@@ -4819,8 +4821,9 @@ class Emitter {
         );
       }
       for (let i = 0; i < generic.decl.params.length; i++) {
-        const param = generic.decl.params[i]!;
-        const argType = this.inferType(expr.args[i]!);
+        const param = generic.decl.params[i];
+        const arg = expr.args[i];
+        const argType = this.inferType(arg);
         this.unifyTypeParam(param.type, argType, generic.typeParams, subs, callAnchor);
       }
       for (const tp of generic.typeParams) {
@@ -4833,7 +4836,14 @@ class Emitter {
       }
     }
 
-    const typeArgs = generic.typeParams.map((tp) => subs.get(tp)!);
+    const typeArgs: Array<TopazType> = [];
+    for (const tp of generic.typeParams) {
+      const t = subs.get(tp);
+      if (t === undefined) {
+        throwInternalCodegenError("resolveGenericCall: missing type argument substitution");
+      }
+      typeArgs.push(t);
+    }
     const mangled = mangleMonomorph(generic.name, typeArgs);
 
     const existing = this.genericMonomorphs.get(mangled);
