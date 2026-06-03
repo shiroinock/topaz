@@ -3934,33 +3934,42 @@ class Emitter {
   // initializer is being typed before the matching declareVar runs the
   // emit path).
   private inferArrowType(arrow: ArrowExpr, expectedType: TopazType | undefined): TopazType {
-    const expectedFn = expectedType && expectedType.kind === "fn" ? expectedType : undefined;
-    if (expectedFn && expectedFn.params.length !== arrow.params.length) {
+    let expectedFn: FnType | undefined = undefined;
+    if (expectedType !== undefined) {
+      if (expectedType.kind === "fn") {
+        expectedFn = expectedType;
+      }
+    }
+    if (expectedFn !== undefined && expectedFn.params.length !== arrow.params.length) {
       throw new CodegenError(
-        arrow,
+        { pos: arrow.pos },
         `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
     const params: ParamInfo[] = [];
     for (let i = 0; i < arrow.params.length; i++) {
-      const p = arrow.params[i]!;
-      let pt: TopazType;
-      if (p.type) {
-        pt = this.typeFromAnnotation(p.type, p, g_currentModule!);
-      } else if (expectedFn) {
-        pt = expectedFn.params[i]!.type;
+      const p = arrow.params[i];
+      const paramAnchor: { pos: number } = { pos: p.pos };
+      const paramType = p.type;
+      let pt: TopazType = T_VOID;
+      if (paramType !== undefined) {
+        pt = this.typeFromAnnotation(paramType, paramAnchor, g_currentModule!);
+      } else if (expectedFn !== undefined) {
+        pt = expectedFn.params[i].type;
       } else {
-        throw new CodegenError(p, "arrow function parameter requires a type annotation (no contextual type available)");
+        throw new CodegenError(paramAnchor, "arrow function parameter requires a type annotation (no contextual type available)");
       }
       params.push({ name: p.name, type: pt, isOptional: false });
     }
-    let returnType: TopazType;
-    if (arrow.returnType) {
-      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentModule!);
-    } else if (expectedFn) {
+    let returnType: TopazType = T_VOID;
+    const arrowReturnType = arrow.returnType;
+    if (arrowReturnType !== undefined) {
+      const returnAnchor: { pos: number } = { pos: arrowReturnType.pos };
+      returnType = this.typeFromAnnotation(arrowReturnType, returnAnchor, g_currentModule!);
+    } else if (expectedFn !== undefined) {
       returnType = expectedFn.returnType;
     } else {
-      throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
+      throw new CodegenError({ pos: arrow.pos }, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
     return { kind: "fn", params, returnType };
   }
@@ -3981,54 +3990,57 @@ class Emitter {
     paramTypes: Array<TopazType>,
     label: string,
   ): FnType {
+    const cbAnchor: { pos: number } = { pos: cb.pos };
     if (cb.kind === "arrow_expr") {
+      const cbBody = cb.body;
       if (cb.params.length !== paramTypes.length) {
         throw new CodegenError(
-          cb,
+          cbAnchor,
           `${label} callback arity ${cb.params.length} does not match expected ${paramTypes.length}`,
         );
       }
       const params: ParamInfo[] = [];
       const seenNames = new Set<string>();
       for (let i = 0; i < cb.params.length; i++) {
-        const p = cb.params[i]!;
-        const pt = paramTypes[i]!;
-        if (p.type) {
-          const annot = this.typeFromAnnotation(p.type, p, g_currentModule!);
+        const p = cb.params[i];
+        const paramAnchor: { pos: number } = { pos: p.pos };
+        const pt = paramTypes[i];
+        const paramType = p.type;
+        if (paramType !== undefined) {
+          const annot = this.typeFromAnnotation(paramType, paramAnchor, g_currentModule!);
           if (!typeEq(annot, pt)) {
             throw new CodegenError(
-              p,
+              paramAnchor,
               `${label} callback parameter type ${typeIdent(annot)} does not match expected ${typeIdent(pt)}`,
             );
           }
         }
         if (seenNames.has(p.name)) {
-          throw new CodegenError(p, `duplicate parameter name '${p.name}'`);
+          throw new CodegenError(paramAnchor, `duplicate parameter name '${p.name}'`);
         }
         seenNames.add(p.name);
         params.push({ name: p.name, type: pt, isOptional: false });
       }
-      let returnType: TopazType;
-      if (cb.returnType) {
-        returnType = this.typeFromAnnotation(cb.returnType, cb, g_currentModule!);
-      } else if (cb.body.kind === "arrow_expr_body") {
+      let returnType: TopazType = T_VOID;
+      const cbReturnType = cb.returnType;
+      if (cbReturnType !== undefined) {
+        const returnAnchor: { pos: number } = { pos: cbReturnType.pos };
+        returnType = this.typeFromAnnotation(cbReturnType, returnAnchor, g_currentModule!);
+      } else if (cbBody.kind === "arrow_expr_body") {
         // Expression body: push the params into a fresh scope so inferType
         // can resolve identifier references to them, then pop. We don't
         // install a closure barrier here — type inference is read-only and
         // peeking into outer locals doesn't affect the eventual capture
         // analysis done by emitArrowFunction.
         this.scope.push();
-        try {
-          for (const p of params) {
-            this.scope.declareBinding(p.name, p.type, /* isConst */ false, cb);
-          }
-          returnType = this.inferType(cb.body.expr);
-        } finally {
-          this.scope.pop();
+        for (const p of params) {
+          this.scope.declareBinding(p.name, p.type, /* isConst */ false, cbAnchor);
         }
+        returnType = this.inferType(cbBody.expr);
+        this.scope.pop();
       } else {
         throw new CodegenError(
-          cb,
+          { pos: cb.pos },
           `block-bodied arrow callback requires an explicit return type annotation`,
         );
       }
@@ -4036,19 +4048,21 @@ class Emitter {
     }
     const t = this.inferType(cb);
     if (t.kind !== "fn") {
-      throw new CodegenError(cb, `${label} callback must be a function value, got ${typeIdent(t)}`);
+      throw new CodegenError(cbAnchor, `${label} callback must be a function value, got ${typeIdent(t)}`);
     }
     if (t.params.length !== paramTypes.length) {
       throw new CodegenError(
-        cb,
+        { pos: cb.pos },
         `${label} callback arity ${t.params.length} does not match expected ${paramTypes.length}`,
       );
     }
     for (let i = 0; i < paramTypes.length; i++) {
-      if (!typeEq(t.params[i]!.type, paramTypes[i]!)) {
+      const gotParam = t.params[i];
+      const expectedParam = paramTypes[i];
+      if (!typeEq(gotParam.type, expectedParam)) {
         throw new CodegenError(
-          cb,
-          `${label} callback parameter ${i} type ${typeIdent(t.params[i]!.type)} does not match expected ${typeIdent(paramTypes[i]!)}`,
+          { pos: cb.pos },
+          `${label} callback parameter ${i} type ${typeIdent(gotParam.type)} does not match expected ${typeIdent(expectedParam)}`,
         );
       }
     }
@@ -4157,31 +4171,38 @@ class Emitter {
     // types: annotation is mandatory unless the expected fn type can
     // contextually supply them (default / optional / rest / destructuring
     // params are rejected in convert). Names must be unique.
-    const expectedFn = expectedType && expectedType.kind === "fn" ? expectedType : undefined;
-    if (expectedFn && expectedFn.params.length !== arrow.params.length) {
+    let expectedFn: FnType | undefined = undefined;
+    if (expectedType !== undefined) {
+      if (expectedType.kind === "fn") {
+        expectedFn = expectedType;
+      }
+    }
+    if (expectedFn !== undefined && expectedFn.params.length !== arrow.params.length) {
       throw new CodegenError(
-        arrow,
+        { pos: arrow.pos },
         `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
     const params: ParamInfo[] = [];
     const seenNames = new Set<string>();
     for (let i = 0; i < arrow.params.length; i++) {
-      const p = arrow.params[i]!;
-      let pt: TopazType;
-      if (p.type) {
-        pt = this.typeFromAnnotation(p.type, p, g_currentModule!);
-      } else if (expectedFn) {
-        pt = expectedFn.params[i]!.type;
+      const p = arrow.params[i];
+      const paramAnchor: { pos: number } = { pos: p.pos };
+      const paramType = p.type;
+      let pt: TopazType = T_VOID;
+      if (paramType !== undefined) {
+        pt = this.typeFromAnnotation(paramType, paramAnchor, g_currentModule!);
+      } else if (expectedFn !== undefined) {
+        pt = expectedFn.params[i].type;
       } else {
-        throw new CodegenError(p, "arrow function parameter requires a type annotation (no contextual type available)");
+        throw new CodegenError(paramAnchor, "arrow function parameter requires a type annotation (no contextual type available)");
       }
-      this.assertNotVoid(pt, p, "arrow parameter");
+      this.assertNotVoid(pt, paramAnchor, "arrow parameter");
       if (pt.kind === "fn") {
-        throw new CodegenError(p, "nested fn types in arrow parameters are unsupported (Phase 1.5-3.5e)");
+        throw new CodegenError(paramAnchor, "nested fn types in arrow parameters are unsupported (Phase 1.5-3.5e)");
       }
       if (seenNames.has(p.name)) {
-        throw new CodegenError(p, `duplicate parameter name '${p.name}'`);
+        throw new CodegenError(paramAnchor, `duplicate parameter name '${p.name}'`);
       }
       seenNames.add(p.name);
       params.push({ name: p.name, type: pt, isOptional: false });
@@ -4189,19 +4210,21 @@ class Emitter {
 
     // Return type: annotation required (we don't infer from body yet) unless
     // an expected fn type supplies it.
-    let returnType: TopazType;
-    if (arrow.returnType) {
-      returnType = this.typeFromAnnotation(arrow.returnType, arrow, g_currentModule!);
-    } else if (expectedFn) {
+    let returnType: TopazType = T_VOID;
+    const arrowReturnType = arrow.returnType;
+    if (arrowReturnType !== undefined) {
+      const returnAnchor: { pos: number } = { pos: arrowReturnType.pos };
+      returnType = this.typeFromAnnotation(arrowReturnType, returnAnchor, g_currentModule!);
+    } else if (expectedFn !== undefined) {
       returnType = expectedFn.returnType;
     } else {
-      throw new CodegenError(arrow, "arrow function requires an explicit return type annotation (no contextual type available)");
+      throw new CodegenError({ pos: arrow.pos }, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
     if (returnType.kind === "fn") {
-      throw new CodegenError(arrow, "nested fn types in arrow return position are unsupported (Phase 1.5-3.5e)");
+      throw new CodegenError({ pos: arrow.pos }, "nested fn types in arrow return position are unsupported (Phase 1.5-3.5e)");
     }
     if (returnType.kind === "void" && arrow.body.kind !== "arrow_block_body") {
-      throw new CodegenError(arrow, "void-returning arrows require block bodies");
+      throw new CodegenError({ pos: arrow.pos }, "void-returning arrows require block bodies");
     }
 
     const arrowType: TopazType = { kind: "fn", params, returnType };
