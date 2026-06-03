@@ -3879,21 +3879,20 @@ class Emitter {
     this.currentReturnType = sig.returnType;
     this.liveTryFrames = 0;
     this.scope.push();
-    try {
-      // Phase 1.5-6 prep-optional-param: declare each param using the lifted
-      // type from `sig.params` (where `?`-marked params already carry
-      // `T | undefined`), not the raw annotation — otherwise narrowing would
-      // disagree with the actual C parameter type.
-      for (const p of sig.params) {
-        this.scope.declareBinding(p.name, p.type, /* isConst */ false, fn);
-      }
-      const body = this.emitBlockBoundary(fn.body, sf);
-      return `${this.formatSignature(sig)} ${body}`;
-    } finally {
-      this.scope.pop();
-      this.currentReturnType = prevRet;
-      this.liveTryFrames = prevLive;
+    const fnAnchor: { pos: number } = { pos: fn.pos };
+    // Phase 1.5-6 prep-optional-param: declare each param using the lifted
+    // type from `sig.params` (where `?`-marked params already carry
+    // `T | undefined`), not the raw annotation — otherwise narrowing would
+    // disagree with the actual C parameter type.
+    for (const p of sig.params) {
+      this.scope.declareBinding(p.name, p.type, /* isConst */ false, fnAnchor);
     }
+    const body = this.emitBlockBoundary(fn.body, sf);
+    const rendered = `${this.formatSignature(sig)} ${body}`;
+    this.scope.pop();
+    this.currentReturnType = prevRet;
+    this.liveTryFrames = prevLive;
+    return rendered;
   }
 
   // Phase 1.4c-2: format a monomorph's C signature from its resolved
@@ -3916,18 +3915,17 @@ class Emitter {
     this.currentReturnType = mono.sig.returnType;
     this.liveTryFrames = 0;
     this.scope.push();
-    try {
-      for (const p of mono.sig.params) {
-        this.scope.declareBinding(p.name, p.type, /* isConst */ false, mono.decl);
-      }
-      const body = this.emitBlockBoundary(mono.decl.body, mono.sf);
-      return `${this.formatMonomorphSignature(mono.mangled, mono.sig)} ${body}`;
-    } finally {
-      this.scope.pop();
-      this.currentReturnType = prevRet;
-      this.liveTryFrames = prevLive;
-      this.typeParamScope = prevScope;
+    const monoAnchor: { pos: number } = { pos: mono.decl.pos };
+    for (const p of mono.sig.params) {
+      this.scope.declareBinding(p.name, p.type, /* isConst */ false, monoAnchor);
     }
+    const body = this.emitBlockBoundary(mono.decl.body, mono.sf);
+    const rendered = `${this.formatMonomorphSignature(mono.mangled, mono.sig)} ${body}`;
+    this.scope.pop();
+    this.currentReturnType = prevRet;
+    this.liveTryFrames = prevLive;
+    this.typeParamScope = prevScope;
+    return rendered;
   }
 
   // Phase 1.5-3.5e: derive the fn type of an arrow expression without
