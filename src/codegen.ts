@@ -5348,14 +5348,17 @@ class Emitter {
     const pad = "  ".repeat(indent);
 
     if (stmt.kind === "return_stmt") {
-      if (!this.currentReturnType) {
+      const currentReturnTypeMaybe = this.currentReturnType;
+      if (currentReturnTypeMaybe === undefined) {
         throw new CodegenError(stmt, "`return` outside of a function or method");
       }
-      if (!stmt.value) {
-        if (this.currentReturnType.kind !== "void") {
+      const currentReturnType: TopazType = currentReturnTypeMaybe;
+      const returnValueMaybe = stmt.value;
+      if (returnValueMaybe === undefined) {
+        if (currentReturnType.kind !== "void") {
           throw new CodegenError(
             stmt,
-            `\`return;\` is only allowed in a void-returning function (current return type is ${typeIdent(this.currentReturnType)})`,
+            `\`return;\` is only allowed in a void-returning function (current return type is ${typeIdent(currentReturnType)})`,
           );
         }
         if (this.liveTryFrames > 0) {
@@ -5363,20 +5366,21 @@ class Emitter {
         }
         return `${pad}return;`;
       }
-      if (this.currentReturnType.kind === "void") {
+      if (currentReturnType.kind === "void") {
         throw new CodegenError(
           stmt,
           "`return <expr>;` is not allowed in a void-returning function (use a bare `return;` or remove it)",
         );
       }
-      const retExpr = this.emitWithExpected(stmt.value, this.currentReturnType);
+      const returnValue = returnValueMaybe;
+      const retExpr = this.emitWithExpected(returnValue, currentReturnType);
       if (this.liveTryFrames > 0) {
         // Phase 1.5-X: evaluate the value into a temp while the frame is still
         // live (so a throw inside the expression is still caught here), then
         // pop the frame(s) and return. Popping first would route a throw in the
         // expression to the wrong handler.
         const rv = `__topaz_ret_${this.tmpCounter++}`;
-        const ct = cTypeName(this.currentReturnType);
+        const ct = cTypeName(currentReturnType);
         return `${pad}{ ${ct} ${rv} = ${retExpr}; ${this.popFrames()}return ${rv}; }`;
       }
       return `${pad}return ${retExpr};`;
