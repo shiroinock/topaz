@@ -2848,8 +2848,8 @@ class Emitter {
     const tag = setShortName(t);
     const elem = setElem(t)!;
     const cElem = this.cElemTypeForContainer(elem);
-    let hashFn: string;
-    let eqFn: string;
+    let hashFn: string = "";
+    let eqFn: string = "";
     if (isClassType(elem)) {
       const cname = classNameOf(elem)!;
       hashFn = `topaz_hash_class_${cname}`;
