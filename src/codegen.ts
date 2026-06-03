@@ -3594,258 +3594,261 @@ class Emitter {
   ): TopazType {
     const savedSf = this.currentTypeModule;
     this.currentTypeModule = sf;
-    try {
-      if (!node) throw this.typeErr(anchor, "type annotation required");
-      if (node.kind === "type_void") return T_VOID;
-      if (node.kind === "type_unknown") return T_UNKNOWN;
-      // Phase 1.5-3e: string literal type (`kind: "circle"`) for discriminators.
-      if (node.kind === "type_str_lit") {
-        const v = node.value;
-        for (let i = 0; i < v.length; i++) {
-          const code = v.charCodeAt(i);
-          if (code > 0x7e) {
-            throw this.typeErr(node, "string literal type must be ASCII (1.5-3e)");
-          }
+    const out = this.typeFromAnnotationCore(node, anchor, sf);
+    this.currentTypeModule = savedSf;
+    return out;
+  }
+
+  private typeFromAnnotationCore(
+    node: TypeNode | undefined,
+    anchor: { pos: number },
+    sf: SourceModule,
+  ): TopazType {
+    if (node === undefined) throw this.typeErr(anchor, "type annotation required");
+    if (node.kind === "type_void") return T_VOID;
+    if (node.kind === "type_unknown") return T_UNKNOWN;
+    // Phase 1.5-3e: string literal type (`kind: "circle"`) for discriminators.
+    if (node.kind === "type_str_lit") {
+      const v = node.value;
+      for (let i = 0; i < v.length; i++) {
+        const code = v.charCodeAt(i);
+        if (code > 0x7e) {
+          throw this.typeErr(node, "string literal type must be ASCII (1.5-3e)");
         }
-        return { kind: "string_literal", value: v };
       }
-      // Phase 1.5-3b: `T | undefined` only. cTypeName enforces the shape; we
-      // accept any union here so error messages can say "scalar | undefined is
-      // deferred to 1.5-3c" instead of "unsupported type".
-      // Phase 1.5-3e: class union with a shared `kind: "literal"` discriminator
-      // collapses into a `dunion` (tagged fat pointer) at this site.
-      if (node.kind === "type_union") {
-        const variants = node.variants.map((t) => {
-          const vt = this.typeFromAnnotation(t, t, sf);
-          this.assertNotVoid(vt, t, "union variant");
-          return vt;
-        });
-        const dunion = this.tryMakeDiscriminatedUnion(variants, node);
-        if (dunion) return dunion;
-        return makeUnion(variants);
+      return { kind: "string_literal", value: v };
+    }
+    // Phase 1.5-3b: `T | undefined` only. cTypeName enforces the shape; we
+    // accept any union here so error messages can say "scalar | undefined is
+    // deferred to 1.5-3c" instead of "unsupported type".
+    // Phase 1.5-3e: class union with a shared `kind: "literal"` discriminator
+    // collapses into a `dunion` (tagged fat pointer) at this site.
+    if (node.kind === "type_union") {
+      const variants = node.variants.map((t) => {
+        const vt = this.typeFromAnnotation(t, t, sf);
+        this.assertNotVoid(vt, t, "union variant");
+        return vt;
+      });
+      const dunion = this.tryMakeDiscriminatedUnion(variants, node);
+      if (dunion !== undefined) return dunion;
+      return makeUnion(variants);
+    }
+    if (node.kind === "type_array") {
+      const elem = this.typeFromAnnotation(node.elem, node, sf);
+      this.assertNotVoid(elem, node, "Array element");
+      const arr = arrayOf(elem);
+      if (arr === undefined) {
+        throw this.typeErr(node, `no Array monomorph for element type ${typeIdent(elem)}`);
       }
-      if (node.kind === "type_array") {
-        const elem = this.typeFromAnnotation(node.elem, node, sf);
+      this.recordArrayMonomorph(arr);
+      return arr;
+    }
+    if (node.kind === "type_ref") {
+      const refName = node.name;
+      // Phase 1.5-6e-1: `number` / `string` / `boolean` / `undefined` are
+      // keyword types in tsc but lower to bare `type_ref` after conversion.
+      // Resolve them first so they retain keyword priority over type params /
+      // aliases / class names (matching the pre-migration keyword branches at
+      // the top of this function).
+      if (refName === "number") return T_NUMBER;
+      if (refName === "boolean") return T_BOOLEAN;
+      if (refName === "string") return T_STRING;
+      if (refName === "undefined") return T_UNDEFINED;
+      if (refName === "never") return T_VOID;
+      // Phase 1.4c-2: when emitting under an active type-parameter scope,
+      // bare type references like `T` resolve through the substitution. Must
+      // come before the class/interface lookup so that a class declared with
+      // the same name as a type parameter doesn't shadow the binding.
+      if (this.typeParamScope !== undefined && this.typeParamScope.has(refName)) {
+        if (node.typeArgs.length > 0) {
+          throw this.typeErr(node, `type parameter '${refName}' cannot have type arguments`);
+        }
+        return this.typeParamScope.get(refName)!;
+      }
+      // Phase 1.5-6 prep: type alias substitution. Lookup sits between
+      // typeParamScope (so a `T` param shadows a same-named alias inside a
+      // generic body) and the built-ins (`Array` / `Map` / `Set` / `Iterator`
+      // collision is rejected at declaration time, so the ordering here is
+      // only relevant for error message clarity). Resolution is memoized;
+      // `resolving` guards against cycles like `type A = B; type B = A;`.
+      {
+        const alias = this.typeAliases.get(refName);
+        if (alias !== undefined) {
+          if (node.typeArgs.length > 0) {
+            throw this.typeErr(node, `type alias '${refName}' takes no type arguments (Phase 1.5-6 prep)`);
+          }
+          if (alias.resolved !== undefined) return alias.resolved;
+          if (alias.resolving) {
+            throw this.typeErr(node, `circular type alias '${refName}'`);
+          }
+          alias.resolving = true;
+          alias.resolved = this.typeFromAnnotation(alias.body, alias.body, alias.sf);
+          alias.resolving = false;
+          return alias.resolved;
+        }
+      }
+      if (refName === "Array") {
+        if (node.typeArgs.length !== 1) {
+          throw this.typeErr(node, "Array<T> requires exactly one type argument");
+        }
+        const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
         this.assertNotVoid(elem, node, "Array element");
         const arr = arrayOf(elem);
-        if (!arr) {
+        if (arr === undefined) {
           throw this.typeErr(node, `no Array monomorph for element type ${typeIdent(elem)}`);
         }
         this.recordArrayMonomorph(arr);
         return arr;
       }
-      if (node.kind === "type_ref") {
-        const refName = node.name;
-        // Phase 1.5-6e-1: `number` / `string` / `boolean` / `undefined` are
-        // keyword types in tsc but lower to bare `type_ref` after conversion.
-        // Resolve them first so they retain keyword priority over type params /
-        // aliases / class names (matching the pre-migration keyword branches at
-        // the top of this function).
-        if (refName === "number") return T_NUMBER;
-        if (refName === "boolean") return T_BOOLEAN;
-        if (refName === "string") return T_STRING;
-        if (refName === "undefined") return T_UNDEFINED;
-        if (refName === "never") return T_VOID;
-        // Phase 1.4c-2: when emitting under an active type-parameter scope,
-        // bare type references like `T` resolve through the substitution. Must
-        // come before the class/interface lookup so that a class declared with
-        // the same name as a type parameter doesn't shadow the binding.
-        if (this.typeParamScope && this.typeParamScope.has(refName)) {
-          if (node.typeArgs.length > 0) {
-            throw this.typeErr(node, `type parameter '${refName}' cannot have type arguments`);
-          }
-          return this.typeParamScope.get(refName)!;
+      if (refName === "Map") {
+        if (node.typeArgs.length !== 2) {
+          throw this.typeErr(node, "Map<K, V> requires exactly two type arguments");
         }
-        // Phase 1.5-6 prep: type alias substitution. Lookup sits between
-        // typeParamScope (so a `T` param shadows a same-named alias inside a
-        // generic body) and the built-ins (`Array` / `Map` / `Set` / `Iterator`
-        // collision is rejected at declaration time, so the ordering here is
-        // only relevant for error message clarity). Resolution is memoized;
-        // `resolving` guards against cycles like `type A = B; type B = A;`.
-        {
-          const alias = this.typeAliases.get(refName);
-          if (alias) {
-            if (node.typeArgs.length > 0) {
-              throw this.typeErr(node, `type alias '${refName}' takes no type arguments (Phase 1.5-6 prep)`);
-            }
-            if (alias.resolved) return alias.resolved;
-            if (alias.resolving) {
-              throw this.typeErr(node, `circular type alias '${refName}'`);
-            }
-            alias.resolving = true;
-            try {
-              alias.resolved = this.typeFromAnnotation(alias.body, alias.body, alias.sf);
-            } finally {
-              alias.resolving = false;
-            }
-            return alias.resolved;
-          }
+        const k = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
+        this.assertNotVoid(k, node, "Map key");
+        const v = this.typeFromAnnotation(node.typeArgs[1]!, node, sf);
+        this.assertNotVoid(v, node, "Map value");
+        const m = mapOf(k, v);
+        if (m === undefined) {
+          throw this.typeErr(node, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         }
-        if (refName === "Array") {
-          if (node.typeArgs.length !== 1) {
-            throw this.typeErr(node, "Array<T> requires exactly one type argument");
-          }
-          const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-          this.assertNotVoid(elem, node, "Array element");
-          const arr = arrayOf(elem);
-          if (!arr) {
-            throw this.typeErr(node, `no Array monomorph for element type ${typeIdent(elem)}`);
-          }
-          this.recordArrayMonomorph(arr);
-          return arr;
-        }
-        if (refName === "Map") {
-          if (node.typeArgs.length !== 2) {
-            throw this.typeErr(node, "Map<K, V> requires exactly two type arguments");
-          }
-          const k = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-          this.assertNotVoid(k, node, "Map key");
-          const v = this.typeFromAnnotation(node.typeArgs[1]!, node, sf);
-          this.assertNotVoid(v, node, "Map value");
-          const m = mapOf(k, v);
-          if (!m) {
-            throw this.typeErr(node, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
-          }
-          this.recordMapMonomorph(m);
-          return m;
-        }
-        if (refName === "Set") {
-          if (node.typeArgs.length !== 1) {
-            throw this.typeErr(node, "Set<T> requires exactly one type argument");
-          }
-          const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-          this.assertNotVoid(elem, node, "Set element");
-          const s = setOf(elem);
-          if (!s) {
-            throw this.typeErr(node, `no Set monomorph for element type ${typeIdent(elem)}`);
-          }
-          this.recordSetMonomorph(s);
-          return s;
-        }
-        // Phase 1.5-3.5g-iterator: Iterator<T> as first-class type. Elem must be
-        // scalar / class / interface (same shape constraint as Map / Set values).
-        // The typedef alone doesn't pull in a _next function — that's recorded
-        // at construction sites (Map.values / Map.keys / Set.values / Set.keys).
-        if (refName === "Iterator") {
-          if (node.typeArgs.length !== 1) {
-            throw this.typeErr(node, "Iterator<T> requires exactly one type argument");
-          }
-          const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-          this.assertNotVoid(elem, node, "Iterator element");
-          if (
-            elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string"
-            && !isClassType(elem) && !isInterfaceType(elem)
-          ) {
-            throw this.typeErr(
-              node,
-              `Iterator<T>: element type ${typeIdent(elem)} is unsupported (must be scalar / class / interface)`,
-            );
-          }
-          // Reserve typedef so a bare `Iterator<T>` annotation (e.g. function
-          // return type) emits the struct even if no .values() / .keys() call
-          // appears in this TU.
-          this.iterTypedefMonomorphs.set(typeKey(elem), elem);
-          return { kind: "iter", elem };
-        }
-        if (this.genericClasses.has(refName)) {
-          return this.instantiateGenericClass(refName, node.typeArgs, node, sf);
-        }
-        if (this.classes.has(refName)) {
-          if (node.typeArgs.length > 0) {
-            throw this.typeErr(node, `class '${refName}' takes no type arguments`);
-          }
-          return classOf(refName);
-        }
-        if (this.interfaces.has(refName)) {
-          if (node.typeArgs.length > 0) {
-            throw this.typeErr(node, `interface '${refName}' takes no type arguments (Phase 1.4c)`);
-          }
-          return interfaceOf(refName);
-        }
-        // Unknown type-reference name (e.g. `null`, an undeclared type) falls
-        // through to the unsupported-type throw below.
+        this.recordMapMonomorph(m);
+        return m;
       }
-      // Phase 1.5-3.5e: `(p: T) => R` function type. Param annotations are
-      // mandatory (no contextual inference yet); no rest/optional/default; no
-      // fn-in-fn signatures (the typedef slot is filled before any other fn
-      // monomorph could be referenced, but nested fn types raise mangling
-      // ambiguities not worth solving for the MVP). The param-shape rejections
-      // (non-identifier name, optional/rest, missing annotation) live in
-      // `convertType` now, so they never reach this branch.
-      if (node.kind === "type_fn") {
-        const params: ParamInfo[] = [];
-        const seenNames = new Set<string>();
-        for (const p of node.params) {
-          const pt = this.typeFromAnnotation(p.type, p, sf);
-          this.assertNotVoid(pt, p, "fn-type parameter");
-          if (pt.kind === "fn") {
-            throw this.typeErr(p, "nested fn types in fn parameters are unsupported (Phase 1.5-3.5e)");
-          }
-          if (seenNames.has(p.name)) {
-            throw this.typeErr(p, `duplicate parameter name '${p.name}'`);
-          }
-          seenNames.add(p.name);
-          params.push({ name: p.name, type: pt, isOptional: false });
+      if (refName === "Set") {
+        if (node.typeArgs.length !== 1) {
+          throw this.typeErr(node, "Set<T> requires exactly one type argument");
         }
-        const ret = this.typeFromAnnotation(node.returnType, node.returnType, sf);
-        if (ret.kind === "fn") {
-          throw this.typeErr(node, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
+        const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
+        this.assertNotVoid(elem, node, "Set element");
+        const s = setOf(elem);
+        if (s === undefined) {
+          throw this.typeErr(node, `no Set monomorph for element type ${typeIdent(elem)}`);
         }
-        const ft: TopazType = { kind: "fn", params, returnType: ret };
-        this.recordFnMonomorph(ft);
-        return ft;
+        this.recordSetMonomorph(s);
+        return s;
       }
-      // Phase 1.5-6 prep: object literal type `{ a: T; b: U }`. Lowered to an
-      // anonymous class. Members must all be plain property signatures with a
-      // simple identifier name and a type annotation; readonly modifier is
-      // accepted as a no-op (mirroring class / interface field treatment in
-      // prep #1). The name / modifier / missing-type rejections live in
-      // `convertType`; method signatures, optional `f?: T`, empty `{}`, and
-      // duplicate properties are rejected here. Field order is alphabetical
-      // (see recordAnonClass) so two TypeLiterals with the same shape collapse
-      // to the same C struct.
-      if (node.kind === "type_literal") {
-        // Phase 1.5-6 prep #14: pre-allocated anon classes from recursive
-        // aliases short-circuit the dedupe path here. Field-fill has already
-        // populated this anon (or will, if we're currently inside its own fill
-        // pass). Either way the class type is the stable forward reference.
-        const preAllocated = this.findPreAllocatedAnon(node, sf);
-        if (preAllocated !== undefined) {
-          return classOf(preAllocated.anonName);
+      // Phase 1.5-3.5g-iterator: Iterator<T> as first-class type. Elem must be
+      // scalar / class / interface (same shape constraint as Map / Set values).
+      // The typedef alone doesn't pull in a _next function — that's recorded
+      // at construction sites (Map.values / Map.keys / Set.values / Set.keys).
+      if (refName === "Iterator") {
+        if (node.typeArgs.length !== 1) {
+          throw this.typeErr(node, "Iterator<T> requires exactly one type argument");
         }
-        if (node.members.length === 0) {
-          throw this.typeErr(node, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
+        const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
+        this.assertNotVoid(elem, node, "Iterator element");
+        if (
+          elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string"
+          && !isClassType(elem) && !isInterfaceType(elem)
+        ) {
+          throw this.typeErr(
+            node,
+            `Iterator<T>: element type ${typeIdent(elem)} is unsupported (must be scalar / class / interface)`,
+          );
         }
-        const fields = new Map<string, TopazType>();
-        // Phase 1.5-6 prep-optional-param: collect optional field names so the
-        // anon-class ctor and `recordAnonClass` can mark which positions accept
-        // an auto-filled `undefined` at the object-literal expression site.
-        const optionalFields = new Set<string>();
-        for (const m of node.members) {
-          if (m.kind !== "type_lit_field") {
-            throw this.typeErr(m, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
-          }
-          const fname = m.name;
-          if (fields.has(fname)) {
-            throw this.typeErr(m, `duplicate property '${fname}' in object literal type`);
-          }
-          const annot = this.typeFromAnnotation(m.type, m, sf);
-          this.assertNotVoid(annot, m, "object literal type property");
-          // Phase 1.5-6 prep-optional-param: `f?: T` is the syntactic sugar for
-          // `f: T | undefined`. Lift here so structural dedupe (canonical key
-          // includes typeIdent) collapses `{ f?: T }` and `{ f: T | undefined }`
-          // to the same anon class.
-          const fty = m.isOptional ? makeUnion([annot, T_UNDEFINED]) : annot;
-          if (m.isOptional) optionalFields.add(fname);
-          fields.set(fname, fty);
-        }
-        const anonName = this.recordAnonClass(fields, optionalFields, node);
-        return classOf(anonName);
+        // Reserve typedef so a bare `Iterator<T>` annotation (e.g. function
+        // return type) emits the struct even if no .values() / .keys() call
+        // appears in this TU.
+        this.iterTypedefMonomorphs.set(typeKey(elem), elem);
+        return { kind: "iter", elem };
       }
-      throw this.typeErr(node, `unsupported type (${node.kind})`);
-    } finally {
-      this.currentTypeModule = savedSf;
+      if (this.genericClasses.has(refName)) {
+        return this.instantiateGenericClass(refName, node.typeArgs, node, sf);
+      }
+      if (this.classes.has(refName)) {
+        if (node.typeArgs.length > 0) {
+          throw this.typeErr(node, `class '${refName}' takes no type arguments`);
+        }
+        return classOf(refName);
+      }
+      if (this.interfaces.has(refName)) {
+        if (node.typeArgs.length > 0) {
+          throw this.typeErr(node, `interface '${refName}' takes no type arguments (Phase 1.4c)`);
+        }
+        return interfaceOf(refName);
+      }
+      // Unknown type-reference name (e.g. `null`, an undeclared type) falls
+      // through to the unsupported-type throw below.
     }
+    // Phase 1.5-3.5e: `(p: T) => R` function type. Param annotations are
+    // mandatory (no contextual inference yet); no rest/optional/default; no
+    // fn-in-fn signatures (the typedef slot is filled before any other fn
+    // monomorph could be referenced, but nested fn types raise mangling
+    // ambiguities not worth solving for the MVP). The param-shape rejections
+    // (non-identifier name, optional/rest, missing annotation) live in
+    // `convertType` now, so they never reach this branch.
+    if (node.kind === "type_fn") {
+      const params: ParamInfo[] = [];
+      const seenNames = new Set<string>();
+      for (const p of node.params) {
+        const pt = this.typeFromAnnotation(p.type, p, sf);
+        this.assertNotVoid(pt, p, "fn-type parameter");
+        if (pt.kind === "fn") {
+          throw this.typeErr(p, "nested fn types in fn parameters are unsupported (Phase 1.5-3.5e)");
+        }
+        if (seenNames.has(p.name)) {
+          throw this.typeErr(p, `duplicate parameter name '${p.name}'`);
+        }
+        seenNames.add(p.name);
+        params.push({ name: p.name, type: pt, isOptional: false });
+      }
+      const ret = this.typeFromAnnotation(node.returnType, node.returnType, sf);
+      if (ret.kind === "fn") {
+        throw this.typeErr(node, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
+      }
+      const ft: TopazType = { kind: "fn", params, returnType: ret };
+      this.recordFnMonomorph(ft);
+      return ft;
+    }
+    // Phase 1.5-6 prep: object literal type `{ a: T; b: U }`. Lowered to an
+    // anonymous class. Members must all be plain property signatures with a
+    // simple identifier name and a type annotation; readonly modifier is
+    // accepted as a no-op (mirroring class / interface field treatment in
+    // prep #1). The name / modifier / missing-type rejections live in
+    // `convertType`; method signatures, optional `f?: T`, empty `{}`, and
+    // duplicate properties are rejected here. Field order is alphabetical
+    // (see recordAnonClass) so two TypeLiterals with the same shape collapse
+    // to the same C struct.
+    if (node.kind === "type_literal") {
+      // Phase 1.5-6 prep #14: pre-allocated anon classes from recursive
+      // aliases short-circuit the dedupe path here. Field-fill has already
+      // populated this anon (or will, if we're currently inside its own fill
+      // pass). Either way the class type is the stable forward reference.
+      const preAllocated = this.findPreAllocatedAnon(node, sf);
+      if (preAllocated !== undefined) {
+        return classOf(preAllocated.anonName);
+      }
+      if (node.members.length === 0) {
+        throw this.typeErr(node, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
+      }
+      const fields = new Map<string, TopazType>();
+      // Phase 1.5-6 prep-optional-param: collect optional field names so the
+      // anon-class ctor and `recordAnonClass` can mark which positions accept
+      // an auto-filled `undefined` at the object-literal expression site.
+      const optionalFields = new Set<string>();
+      for (const m of node.members) {
+        if (m.kind !== "type_lit_field") {
+          throw this.typeErr(m, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
+        }
+        const fname = m.name;
+        if (fields.has(fname)) {
+          throw this.typeErr(m, `duplicate property '${fname}' in object literal type`);
+        }
+        const annot = this.typeFromAnnotation(m.type, m, sf);
+        this.assertNotVoid(annot, m, "object literal type property");
+        // Phase 1.5-6 prep-optional-param: `f?: T` is the syntactic sugar for
+        // `f: T | undefined`. Lift here so structural dedupe (canonical key
+        // includes typeIdent) collapses `{ f?: T }` and `{ f: T | undefined }`
+        // to the same anon class.
+        const fty = m.isOptional ? makeUnion([annot, T_UNDEFINED]) : annot;
+        if (m.isOptional) optionalFields.add(fname);
+        fields.set(fname, fty);
+      }
+      const anonName = this.recordAnonClass(fields, optionalFields, node);
+      return classOf(anonName);
+    }
+    throw this.typeErr(node, `unsupported type (${node.kind})`);
   }
 
   private formatSignature(sig: TopLevelFunctionSig): string {
