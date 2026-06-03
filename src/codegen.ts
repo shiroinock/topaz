@@ -7128,13 +7128,14 @@ class Emitter {
     }
     if (expr.kind === "assign_expr") {
       const op = expr.op;
+      const assignAnchor: { pos: number } = { pos: expr.pos };
       // Phase 1.5-6 prep #11: object literal RHS has no standalone type, so
       // the generic inferType(expr) pre-check below would recurse into the
       // literal and throw. Route plain assignment with an object-literal RHS
       // through emitWithExpected with the LHS type up-front, which fires the
       // anon-class / dunion contextual narrowing.
       if (op === "=" && expr.value.kind === "object_lit") {
-        this.checkAssignTarget(expr.target, expr);
+        this.checkAssignTarget(expr.target, assignAnchor);
         const lt = this.inferType(expr.target);
         const lhsStr = this.emitExpression(expr.target);
         const rhsStr = this.emitWithExpected(expr.value, lt);
@@ -9743,7 +9744,7 @@ class Emitter {
           return T_BOOLEAN;
         case "++":
         case "--":
-          this.checkAssignTarget(expr.operand, expr);
+          this.checkAssignTarget(expr.operand, { pos: expr.pos });
           this.expectType(expr.operand, T_NUMBER);
           return T_NUMBER;
         default:
@@ -9751,7 +9752,7 @@ class Emitter {
       }
     }
     if (expr.kind === "postfix_op") {
-      this.checkAssignTarget(expr.operand, expr);
+      this.checkAssignTarget(expr.operand, { pos: expr.pos });
       this.expectType(expr.operand, T_NUMBER);
       return T_NUMBER;
     }
@@ -9789,7 +9790,8 @@ class Emitter {
     }
     if (expr.kind === "assign_expr") {
       const op = expr.op;
-      this.checkAssignTarget(expr.target, expr);
+      const assignAnchor: { pos: number } = { pos: expr.pos };
+      this.checkAssignTarget(expr.target, assignAnchor);
       if (op === "=") {
         const lt = this.inferType(expr.target);
         this.expectType(expr.value, lt);
