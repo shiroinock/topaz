@@ -5813,7 +5813,8 @@ class Emitter {
     if (typeMaybe !== undefined) {
       // Only scalar annotations (number / boolean) can match a scalar literal
       // init, so `typeFromAnnotation` is side-effect-free here.
-      const annotated = this.typeFromAnnotation(typeMaybe, stmt, sf);
+      const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
+      const annotated = this.typeFromAnnotation(typeMaybe, typeAnchor, sf);
       if (!typeEq(annotated, lit.type)) return false;
     }
     return true;
@@ -5844,7 +5845,8 @@ class Emitter {
     let varType: TopazType = lit.type;
     const typeMaybe = d.type;
     if (typeMaybe !== undefined) {
-      varType = this.typeFromAnnotation(typeMaybe, d, sf);
+      const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
+      varType = this.typeFromAnnotation(typeMaybe, typeAnchor, sf);
     }
     this.scope.declareBinding(d.name, varType, /* isConst */ true, d);
     return `static const ${cTypeName(varType)} ${d.name} = ${lit.cExpr};`;
@@ -5854,8 +5856,10 @@ class Emitter {
     if (!this.canModuleGlobalVar(stmt)) return undefined;
     if (stmt.kind !== "var_decl") return undefined;
     const d = stmt;
-    if (d.type === undefined) return undefined;
-    const varType = this.typeFromAnnotation(d.type, d, sf);
+    const typeMaybe = d.type;
+    if (typeMaybe === undefined) return undefined;
+    const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
+    const varType = this.typeFromAnnotation(typeMaybe, typeAnchor, sf);
     this.assertNotVoid(varType, d, "module global type");
     this.scope.declareBinding(d.name, varType, d.declKind === "const", d);
     this.moduleGlobalTypes.set(d.name, varType);
