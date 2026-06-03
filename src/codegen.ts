@@ -5848,7 +5848,8 @@ class Emitter {
       const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
       varType = this.typeFromAnnotation(typeMaybe, typeAnchor, sf);
     }
-    this.scope.declareBinding(d.name, varType, /* isConst */ true, d);
+    const bindingAnchor: { pos: number } = { pos: d.pos };
+    this.scope.declareBinding(d.name, varType, /* isConst */ true, bindingAnchor);
     return `static const ${cTypeName(varType)} ${d.name} = ${lit.cExpr};`;
   }
 
@@ -5861,7 +5862,8 @@ class Emitter {
     const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
     const varType = this.typeFromAnnotation(typeMaybe, typeAnchor, sf);
     this.assertNotVoid(varType, d, "module global type");
-    this.scope.declareBinding(d.name, varType, d.declKind === "const", d);
+    const bindingAnchor: { pos: number } = { pos: d.pos };
+    this.scope.declareBinding(d.name, varType, d.declKind === "const", bindingAnchor);
     this.moduleGlobalTypes.set(d.name, varType);
     return `static ${cTypeName(varType)} ${d.name};`;
   }
@@ -6022,7 +6024,8 @@ class Emitter {
         ? `${tmp}->${fname}`
         : `${tmp}.vt->get_${fname}(${tmp}.data)`;
       lines.push(`${pad}${cTypeName(fty)} ${fname} = ${accessor};`);
-      this.scope.declareBinding(fname, fty, isConst, b);
+      const bindingAnchor: { pos: number } = { pos: b.pos };
+      this.scope.declareBinding(fname, fty, isConst, bindingAnchor);
     }
     return lines.join("\n");
   }
@@ -6069,7 +6072,8 @@ class Emitter {
       if (isConst && varType.kind === "dunion" && initBareTypeable) {
         const initType = this.inferType(init);
         if (isClassType(initType) && varType.variants.includes(classNameOf(initType)!)) {
-          this.scope.declareBinding(name, varType, isConst, decl);
+          const bindingAnchor: { pos: number } = { pos: decl.pos };
+          this.scope.declareBinding(name, varType, isConst, bindingAnchor);
           this.scope.narrow(name, initType);
           return { type: varType, cName: name, initStr: ` = ${initExpr}` };
         }
@@ -6096,7 +6100,8 @@ class Emitter {
         initExpr = this.emitExpression(init);
       }
     }
-    this.scope.declareBinding(name, varType, isConst, decl);
+    const bindingAnchor: { pos: number } = { pos: decl.pos };
+    this.scope.declareBinding(name, varType, isConst, bindingAnchor);
     return { type: varType, cName: name, initStr: ` = ${initExpr}` };
   }
 
@@ -6344,7 +6349,8 @@ class Emitter {
     // the body itself so any narrowing inside the loop pops cleanly.
     this.scope.push();
     try {
-      this.scope.declareBinding(bindName, elemType, isConst, stmt);
+      const bindingAnchor: { pos: number } = { pos: stmt.pos };
+      this.scope.declareBinding(bindName, elemType, isConst, bindingAnchor);
       this.scope.push();
       this.pushLoopCtx("loop");
       try {
@@ -6426,11 +6432,12 @@ class Emitter {
 
     this.scope.push();
     try {
+      const bindingAnchor: { pos: number } = { pos: stmt.pos };
       if (bindSpec.kind === "single") {
-        this.scope.declareBinding(bindSpec.name, bindSpec.type, isConst, stmt);
+        this.scope.declareBinding(bindSpec.name, bindSpec.type, isConst, bindingAnchor);
       } else {
-        this.scope.declareBinding(bindSpec.firstName, bindSpec.firstType, isConst, stmt);
-        this.scope.declareBinding(bindSpec.secondName, bindSpec.secondType, isConst, stmt);
+        this.scope.declareBinding(bindSpec.firstName, bindSpec.firstType, isConst, bindingAnchor);
+        this.scope.declareBinding(bindSpec.secondName, bindSpec.secondType, isConst, bindingAnchor);
       }
       this.scope.push();
       this.pushLoopCtx("loop");
@@ -6515,7 +6522,8 @@ class Emitter {
 
     this.scope.push();
     try {
-      this.scope.declareBinding(bindName, bindType, isConst, stmt);
+      const bindingAnchor: { pos: number } = { pos: stmt.pos };
+      this.scope.declareBinding(bindName, bindType, isConst, bindingAnchor);
       this.scope.push();
       this.pushLoopCtx("loop");
       try {
