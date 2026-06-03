@@ -3034,7 +3034,8 @@ class Emitter {
         this.collectMethod(info, m, sf);
       }
     }
-    if (info.fields.size > 0 && !info.ctor) {
+    const hasCtor = info.ctor !== undefined;
+    if (info.fields.size > 0 && !hasCtor) {
       // Phase 1.5-6 prep: if every field carries an initializer, synthesize a
       // zero-arg constructor that consists entirely of the initializer
       // assignments. Otherwise keep the historical error — at least one field
@@ -3052,7 +3053,7 @@ class Emitter {
       } else {
         const missing = info.fieldOrder.filter((f) => !info.fieldInits.has(f));
         throw new CodegenError(
-          cls,
+          clsAnchor,
           `class '${info.name}' has fields but no constructor; add an explicit constructor or a field initializer for: ${missing.join(", ")}`,
         );
       }
