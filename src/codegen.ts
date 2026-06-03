@@ -7624,7 +7624,7 @@ class Emitter {
         return `topaz_class_${className}_new()`;
       }
       const params = ctor.params;
-      const argStr = this.emitCallArgs(args, params, `${cls.name}()`, expr).join(", ");
+      const argStr = this.emitCallArgs(args, params, `${cls.name}()`, newAnchor).join(", ");
       return `topaz_class_${className}_new(${argStr})`;
     }
     throw new CodegenError(newAnchor, `\`new ${name}\` is unsupported`);
