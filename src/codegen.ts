@@ -3196,22 +3196,23 @@ class Emitter {
   // optional `?`, and `!` rejection live in convert; `type` is always present.
   // `sf` positions the field's type-annotation diagnostics.
   private collectField(info: ClassInfo, m: ClassFieldMember, sf: SourceModule): void {
+    const fieldAnchor: { pos: number } = { pos: m.pos };
     const fname = m.name;
     if (info.fields.has(fname)) {
-      throw new CodegenError(m, `redeclaration of field '${fname}'`);
+      throw new CodegenError(fieldAnchor, `redeclaration of field '${fname}'`);
     }
     if (info.methods.has(fname)) {
-      throw new CodegenError(m, `field '${fname}' conflicts with a method of the same name`);
+      throw new CodegenError(fieldAnchor, `field '${fname}' conflicts with a method of the same name`);
     }
     // Phase 1.5-6 prep: field initializer (`x: T = init;`) を保存。型は注釈
     // 必須(初期化子からの推論は意図的に行わない、`let` / `const` と違って class
     // field は全プログラムから参照されるため型を syntactically 確定させたい)。
     // initializer 自体は emit 時に `emitWithExpected(init, t)` で型整合 + 必要な
     // coercion(class → iface / string-literal widening 等)を走らせる。
-    const t = this.typeFromAnnotation(m.type, m, sf);
-    this.assertNotVoid(t, m, "class field type");
+    const t = this.typeFromAnnotation(m.type, fieldAnchor, sf);
+    this.assertNotVoid(t, fieldAnchor, "class field type");
     if (t.kind === "fn") {
-      throw new CodegenError(m, "fn-typed class fields are unsupported (Phase 1.5-3.5e); store the closure in a local instead");
+      throw new CodegenError(fieldAnchor, "fn-typed class fields are unsupported (Phase 1.5-3.5e); store the closure in a local instead");
     }
     info.fields.set(fname, t);
     info.fieldOrder.push(fname);
