@@ -6135,16 +6135,17 @@ class Emitter {
       this.scope.declareBinding(name, varType, isConst, declAnchor);
       return { type: varType, cName: name, initStr: ` = ${initExpr}` };
     } else {
-      const initIsBareNew =
-        init.kind === "new_expr" &&
-        init.callee.kind === "ident" &&
-        (init.callee.name === "Map" || init.callee.name === "Set") &&
-        init.typeArgs.length === 0;
-      if (initIsBareNew) {
-        throw new CodegenError(
-          init,
-          "cannot infer constructor type arguments; write `new Map<K, V>()` / `new Set<T>()` or annotate the binding",
-        );
+      if (init.kind === "new_expr") {
+        const callee = init.callee;
+        if (callee.kind === "ident") {
+          if ((callee.name === "Map" || callee.name === "Set") && init.typeArgs.length === 0) {
+            const initAnchor: { pos: number } = { pos: init.pos };
+            throw new CodegenError(
+              initAnchor,
+              "cannot infer constructor type arguments; write `new Map<K, V>()` / `new Set<T>()` or annotate the binding",
+            );
+          }
+        }
       }
       const varType = this.inferType(init);
       this.assertNotVoid(varType, declAnchor, "variable initializer (void-returning call cannot be stored)");
