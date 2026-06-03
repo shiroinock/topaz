@@ -5973,34 +5973,47 @@ class Emitter {
     // Receiver must be a class (anonymous / named / generic monomorph) or an
     // interface. Anything else cannot expose named fields uniformly. Helpful
     // hints are surfaced for the closest near-misses (T | undefined, dunion).
-    let fields: Map<string, TopazType>;
-    let methods: Set<string>;
-    let receiverKind: "class" | "iface";
-    let receiverName: string;
+    let receiverInfo: {
+      fields: Map<string, TopazType>;
+      methods: Set<string>;
+      receiverKind: string;
+      receiverName: string;
+    } = {
+      fields: new Map<string, TopazType>(),
+      methods: new Set<string>(),
+      receiverKind: "class",
+      receiverName: "",
+    };
     if (isClassType(recvType)) {
       const cls = this.classes.get(classNameOf(recvType)!);
       if (!cls) {
         throw new CodegenError(declAnchor, `internal: class '${classNameOf(recvType)!}' not registered`);
       }
-      fields = cls.fields;
-      methods = new Set<string>();
+      const methods = new Set<string>();
       for (const methodName of cls.methods.keys()) {
         methods.add(methodName);
       }
-      receiverKind = "class";
-      receiverName = cls.name;
+      receiverInfo = {
+        fields: cls.fields,
+        methods,
+        receiverKind: "class",
+        receiverName: cls.name,
+      };
     } else if (isInterfaceType(recvType)) {
       const iface = this.interfaces.get(interfaceNameOf(recvType)!);
       if (!iface) {
         throw new CodegenError(declAnchor, `internal: interface '${interfaceNameOf(recvType)!}' not registered`);
       }
-      fields = iface.fields;
-      methods = new Set<string>();
+      const methods = new Set<string>();
       for (const methodName of iface.methods.keys()) {
         methods.add(methodName);
       }
-      receiverKind = "iface";
-      receiverName = iface.name;
+      receiverInfo = {
+        fields: iface.fields,
+        methods,
+        receiverKind: "iface",
+        receiverName: iface.name,
+      };
     } else if (recvType.kind === "union") {
       throw new CodegenError(
         initAnchor,
@@ -6021,16 +6034,16 @@ class Emitter {
     for (const b of decl.bindings) {
       const fname = b.name;
       const fieldAnchor: { pos: number } = { pos: b.pos };
-      if (!fields.has(fname)) {
-        if (methods.has(fname)) {
+      if (!receiverInfo.fields.has(fname)) {
+        if (receiverInfo.methods.has(fname)) {
           throw new CodegenError(
             fieldAnchor,
-            `'${fname}' is a method of '${receiverName}', not a field - methods cannot be destructured (method-as-value is unsupported)`,
+            `'${fname}' is a method of '${receiverInfo.receiverName}', not a field - methods cannot be destructured (method-as-value is unsupported)`,
           );
         }
         throw new CodegenError(
           fieldAnchor,
-          `${receiverKind} '${receiverName}' has no field '${fname}'`,
+          `${receiverInfo.receiverKind} '${receiverInfo.receiverName}' has no field '${fname}'`,
         );
       }
     }
@@ -6046,8 +6059,8 @@ class Emitter {
     lines.push(`${pad}${cTypeName(recvType)} ${tmp} = ${initExpr};`);
     for (const b of decl.bindings) {
       const fname = b.name;
-      const fty = fields.get(fname)!;
-      const accessor = receiverKind === "class"
+      const fty = receiverInfo.fields.get(fname)!;
+      const accessor = receiverInfo.receiverKind === "class"
         ? `${tmp}->${fname}`
         : `${tmp}.vt->get_${fname}(${tmp}.data)`;
       lines.push(`${pad}${cTypeName(fty)} ${fname} = ${accessor};`);
