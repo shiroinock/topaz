@@ -9521,25 +9521,25 @@ class Emitter {
   // `topaz_opt_wrap_<scalar>` wrapper for free; reference / iface return
   // types share their C representation with `T | undefined` so the coercion
   // is a no-op there.
-  private lowerOptionalChain(args: {
-    baseType: TopazType;
-    inner: TopazType;
-    baseStr: string;
-    accessType: TopazType;
-    emitPresent: (tmp: string) => string;
-    anchor: { pos: number };
-  }): string {
+  private lowerOptionalChain(
+    baseType: TopazType,
+    inner: TopazType,
+    baseStr: string,
+    accessType: TopazType,
+    anchor: { pos: number },
+    emitPresent: (tmp: string) => string,
+  ): string {
     const id = this.tmpCounter++;
     const tmp = `__topaz_oc_${id}`;
-    const ct = cTypeName(args.baseType);
-    const isAbsent = isInterfaceType(args.inner)
+    const ct = cTypeName(baseType);
+    const isAbsent = isInterfaceType(inner)
       ? `${tmp}.data == NULL`
       : `${tmp} == NULL`; // class / array / map / set: pointer-sentinel
-    const resultType = makeUnion([args.accessType, T_UNDEFINED]);
-    const absentStr = this.emitUndefinedLiteral(resultType, args.anchor);
-    const presentRaw = args.emitPresent(tmp);
-    const presentStr = this.applyCoercion(presentRaw, args.accessType, resultType, args.anchor);
-    return `({ ${ct} ${tmp} = ${args.baseStr}; (${isAbsent}) ? ${absentStr} : ${presentStr}; })`;
+    const resultType = makeUnion([accessType, T_UNDEFINED]);
+    const absentStr = this.emitUndefinedLiteral(resultType, anchor);
+    const presentRaw = emitPresent(tmp);
+    const presentStr = this.applyCoercion(presentRaw, accessType, resultType, anchor);
+    return `({ ${ct} ${tmp} = ${baseStr}; (${isAbsent}) ? ${absentStr} : ${presentStr}; })`;
   }
 
   private emitOptionalPropertyAccess(expr: PropAccessExpr): string {
@@ -9547,20 +9547,20 @@ class Emitter {
     const { baseType, inner, fieldType } = this.resolveOptionalFieldType(expr);
     const baseStr = this.emitExpression(expr.receiver);
     const fname = expr.name;
-    return this.lowerOptionalChain({
+    return this.lowerOptionalChain(
       baseType,
       inner,
       baseStr,
-      accessType: fieldType,
-      anchor: exprAnchor,
-      emitPresent: (tmp) => {
+      fieldType,
+      exprAnchor,
+      (tmp) => {
         if (isClassType(inner)) {
           return `(${tmp})->${fname}`;
         }
         // interface: read through vtable getter
         return `(${tmp}).vt->get_${fname}((${tmp}).data)`;
       },
-    });
+    );
   }
 
   private emitOptionalElementAccess(expr: ElemAccessExpr): string {
@@ -9569,14 +9569,14 @@ class Emitter {
     const baseStr = this.emitExpression(expr.receiver);
     const idxStr = this.emitExpression(expr.index);
     const name = arrayShortName(inner);
-    return this.lowerOptionalChain({
+    return this.lowerOptionalChain(
       baseType,
       inner,
       baseStr,
-      accessType: elem,
-      anchor: exprAnchor,
-      emitPresent: (tmp) => `topaz_array_${name}_at(${tmp}, ${idxStr})`,
-    });
+      elem,
+      exprAnchor,
+      (tmp) => `topaz_array_${name}_at(${tmp}, ${idxStr})`,
+    );
   }
 
   private emitOptionalMethodCall(
@@ -9594,13 +9594,13 @@ class Emitter {
     const baseStr = this.emitExpression(callee.receiver);
     const argStrs = expr.args.map((a, i) => this.emitWithExpected(a, sig.params[i]!.type));
     const mname = callee.name;
-    return this.lowerOptionalChain({
+    return this.lowerOptionalChain(
       baseType,
       inner,
       baseStr,
-      accessType: sig.returnType,
-      anchor: exprAnchor,
-      emitPresent: (tmp) => {
+      sig.returnType,
+      exprAnchor,
+      (tmp) => {
         if (isClassType(inner)) {
           const cname = classNameOf(inner)!;
           const parts = [tmp, ...argStrs].join(", ");
@@ -9610,7 +9610,7 @@ class Emitter {
         const parts = [`(${tmp}).data`, ...argStrs].join(", ");
         return `(${tmp}).vt->${mname}(${parts})`;
       },
-    });
+    );
   }
 
   private inferType(expr: Expr): TopazType {
