@@ -3456,7 +3456,7 @@ class Emitter {
       for (const mname of info.methodOrder) {
         const sig = info.methods.get(mname)!;
         const tail = sig.params.map((p) => `${cTypeName(p.type)} ${p.name}`).join(", ");
-        const params = tail ? `void *self, ${tail}` : "void *self";
+        const params = tail.length > 0 ? `void *self, ${tail}` : "void *self";
         lines.push(`  ${cReturnTypeName(sig.returnType)} (*${mname})(${params});`);
       }
     }
