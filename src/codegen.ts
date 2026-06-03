@@ -9632,7 +9632,12 @@ class Emitter {
       );
     }
     const baseStr = this.emitExpression(callee.receiver);
-    const argStrs = expr.args.map((a, i) => this.emitWithExpected(a, sig.params[i]!.type));
+    const argStrs: string[] = [];
+    for (let i = 0; i < expr.args.length; i++) {
+      const arg = expr.args[i];
+      const param = sig.params[i];
+      argStrs.push(this.emitWithExpected(arg, param.type));
+    }
     const mname = callee.name;
     return this.lowerOptionalChain(
       baseType,
