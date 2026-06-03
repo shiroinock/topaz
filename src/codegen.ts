@@ -7063,8 +7063,9 @@ class Emitter {
     if (expr.kind === "elem_access") {
       const baseType = this.inferType(expr.receiver);
       const elem = arrayElem(baseType);
-      if (!elem) {
-        throw new CodegenError(expr, `index access is only supported on Array (got ${typeIdent(baseType)})`);
+      if (elem === undefined) {
+        const exprAnchor: { pos: number } = { pos: expr.pos };
+        throw new CodegenError(exprAnchor, `index access is only supported on Array (got ${typeIdent(baseType)})`);
       }
       this.expectType(expr.index, T_NUMBER);
       const name = arrayShortName(baseType);
@@ -9654,8 +9655,9 @@ class Emitter {
     if (expr.kind === "elem_access") {
       const baseType = this.inferType(expr.receiver);
       const elem = arrayElem(baseType);
-      if (!elem) {
-        throw new CodegenError(expr, `index access is only supported on Array (got ${typeIdent(baseType)})`);
+      if (elem === undefined) {
+        const exprAnchor: { pos: number } = { pos: expr.pos };
+        throw new CodegenError(exprAnchor, `index access is only supported on Array (got ${typeIdent(baseType)})`);
       }
       this.expectType(expr.index, T_NUMBER);
       return elem;
