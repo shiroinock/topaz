@@ -6996,6 +6996,7 @@ class Emitter {
       }
     }
     if (expr.kind === "prop_access") {
+      const exprAnchor: { pos: number } = { pos: expr.pos };
       const baseType = this.inferType(expr.receiver);
       // Phase 1.5-3e: `dunion.kind` reads the discriminator string from the
       // fat struct. inferType already enforced that only the discriminator
@@ -7025,12 +7026,12 @@ class Emitter {
         }
         if (cls.methods.has(expr.name)) {
           throw new CodegenError(
-            expr,
+            exprAnchor,
             `method '${expr.name}' cannot be used as a value (call it instead)`,
           );
         }
         throw new CodegenError(
-          expr,
+          exprAnchor,
           `class '${cls.name}' has no member '${expr.name}'`,
         );
       }
@@ -7045,17 +7046,17 @@ class Emitter {
         }
         if (iface.methods.has(fname)) {
           throw new CodegenError(
-            expr,
+            exprAnchor,
             `method '${fname}' cannot be used as a value (call it instead)`,
           );
         }
         throw new CodegenError(
-          expr,
+          exprAnchor,
           `interface '${iface.name}' has no member '${fname}'`,
         );
       }
       throw new CodegenError(
-        expr,
+        exprAnchor,
         `unsupported property access '.${expr.name}' on ${typeIdent(baseType)}`,
       );
     }
@@ -9557,6 +9558,7 @@ class Emitter {
       }
     }
     if (expr.kind === "prop_access") {
+      const exprAnchor: { pos: number } = { pos: expr.pos };
       const baseType = this.inferType(expr.receiver);
       if (baseType.kind === "union") {
         throw new CodegenError(
@@ -9616,12 +9618,12 @@ class Emitter {
         }
         if (cls.methods.has(expr.name)) {
           throw new CodegenError(
-            expr,
+            exprAnchor,
             `method '${expr.name}' cannot be used as a value (call it instead)`,
           );
         }
         throw new CodegenError(
-          expr,
+          exprAnchor,
           `class '${cls.name}' has no member '${expr.name}'`,
         );
       }
@@ -9631,17 +9633,17 @@ class Emitter {
         if (f) return f;
         if (iface.methods.has(expr.name)) {
           throw new CodegenError(
-            expr,
+            exprAnchor,
             `method '${expr.name}' cannot be used as a value (call it instead)`,
           );
         }
         throw new CodegenError(
-          expr,
+          exprAnchor,
           `interface '${iface.name}' has no member '${expr.name}'`,
         );
       }
       throw new CodegenError(
-        expr,
+        exprAnchor,
         `unsupported property access '.${expr.name}' on ${typeIdent(baseType)}`,
       );
     }
