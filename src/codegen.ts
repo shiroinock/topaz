@@ -4330,7 +4330,7 @@ class Emitter {
         // popped, so a plain emitExpression reads from the correct frame.
         // Use a fresh tmp-free expression: re-emit the identifier the same way
         // the outer scope sees it.
-        const captureExpr = this.emitCapturedIdentifier(name, tMaybe, arrow);
+        const captureExpr = this.emitCapturedIdentifier(name, tMaybe, arrowAnchor);
         envExprParts.push(`.${name} = ${captureExpr}`);
       }
     }
