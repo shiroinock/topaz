@@ -4288,17 +4288,7 @@ class Emitter {
     for (const p of params) {
       this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrowAnchor);
     }
-    let bodyText: string;
-    if (arrow.body.kind === "arrow_block_body") {
-      const blk: BlockStmt = { kind: "block_stmt", stmts: arrow.body.stmts, pos: arrow.pos, end: arrow.end };
-      bodyText = this.emitBlock(blk, 0);
-    } else {
-      // Expression body: wrap in `{ return <expr>; }`. emitWithExpected
-      // applies the return-type coercion (class -> iface, scalar -> opt
-      // wrap, etc.) the same way an explicit `return` statement would.
-      const exprStr = this.emitWithExpected(arrow.body.expr, returnType);
-      bodyText = `{\n  return ${exprStr};\n}`;
-    }
+    const bodyText: string = this.emitArrowBodyText(arrow, returnType);
 
     // C function signature: env is `void *` so the same callable shape
     // works for both capturing and non-capturing arrows.
@@ -4346,6 +4336,18 @@ class Emitter {
     }
     const envInit = `({ ${envName} *__e = topaz_arena_alloc(sizeof(${envName})); *__e = (${envName}){ ${envExprParts.join(", ")} }; __e; })`;
     return `((${fnTypeName}){ .fn = (${retCType}(*)(void *${params.map((p) => ", " + cTypeName(p.type)).join("")}))${fnName}, .env = ${envInit} })`;
+  }
+
+  private emitArrowBodyText(arrow: ArrowExpr, returnType: TopazType): string {
+    if (arrow.body.kind === "arrow_block_body") {
+      const blk: BlockStmt = { kind: "block_stmt", stmts: arrow.body.stmts, pos: arrow.pos, end: arrow.end };
+      return this.emitBlock(blk, 0);
+    }
+
+    // Expression body: wrap in `{ return <expr>; }`. emitWithExpected applies
+    // the return-type coercion the same way an explicit return statement would.
+    const exprStr = this.emitWithExpected(arrow.body.expr, returnType);
+    return `{\n  return ${exprStr};\n}`;
   }
 
   // Phase 1.5-3.5e: emit an identifier as the outer scope sees it (for
