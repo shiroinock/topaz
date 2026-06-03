@@ -3605,6 +3605,7 @@ class Emitter {
     sf: SourceModule,
   ): TopazType {
     if (node === undefined) throw this.typeErr(anchor, "type annotation required");
+    const nodeAnchor: { pos: number } = { pos: node.pos };
     if (node.kind === "type_void") return T_VOID;
     if (node.kind === "type_unknown") return T_UNKNOWN;
     // Phase 1.5-3e: string literal type (`kind: "circle"`) for discriminators.
@@ -3613,7 +3614,7 @@ class Emitter {
       for (let i = 0; i < v.length; i++) {
         const code = v.charCodeAt(i);
         if (code > 0x7e) {
-          throw this.typeErr(node, "string literal type must be ASCII (1.5-3e)");
+          throw this.typeErr(nodeAnchor, "string literal type must be ASCII (1.5-3e)");
         }
       }
       return { kind: "string_literal", value: v };
@@ -3625,20 +3626,21 @@ class Emitter {
     // collapses into a `dunion` (tagged fat pointer) at this site.
     if (node.kind === "type_union") {
       const variants = node.variants.map((t) => {
-        const vt = this.typeFromAnnotation(t, t, sf);
-        this.assertNotVoid(vt, t, "union variant");
+        const variantAnchor: { pos: number } = { pos: t.pos };
+        const vt = this.typeFromAnnotation(t, variantAnchor, sf);
+        this.assertNotVoid(vt, variantAnchor, "union variant");
         return vt;
       });
-      const dunion = this.tryMakeDiscriminatedUnion(variants, node);
+      const dunion = this.tryMakeDiscriminatedUnion(variants, nodeAnchor);
       if (dunion !== undefined) return dunion;
       return makeUnion(variants);
     }
     if (node.kind === "type_array") {
-      const elem = this.typeFromAnnotation(node.elem, node, sf);
-      this.assertNotVoid(elem, node, "Array element");
+      const elem = this.typeFromAnnotation(node.elem, nodeAnchor, sf);
+      this.assertNotVoid(elem, nodeAnchor, "Array element");
       const arr = arrayOf(elem);
       if (arr === undefined) {
-        throw this.typeErr(node, `no Array monomorph for element type ${typeIdent(elem)}`);
+        throw this.typeErr(nodeAnchor, `no Array monomorph for element type ${typeIdent(elem)}`);
       }
       this.recordArrayMonomorph(arr);
       return arr;
@@ -3661,7 +3663,7 @@ class Emitter {
       // the same name as a type parameter doesn't shadow the binding.
       if (this.typeParamScope !== undefined && this.typeParamScope.has(refName)) {
         if (node.typeArgs.length > 0) {
-          throw this.typeErr(node, `type parameter '${refName}' cannot have type arguments`);
+          throw this.typeErr(nodeAnchor, `type parameter '${refName}' cannot have type arguments`);
         }
         return this.typeParamScope.get(refName)!;
       }
@@ -3675,55 +3677,56 @@ class Emitter {
         const alias = this.typeAliases.get(refName);
         if (alias !== undefined) {
           if (node.typeArgs.length > 0) {
-            throw this.typeErr(node, `type alias '${refName}' takes no type arguments (Phase 1.5-6 prep)`);
+            throw this.typeErr(nodeAnchor, `type alias '${refName}' takes no type arguments (Phase 1.5-6 prep)`);
           }
           if (alias.resolved !== undefined) return alias.resolved;
           if (alias.resolving) {
-            throw this.typeErr(node, `circular type alias '${refName}'`);
+            throw this.typeErr(nodeAnchor, `circular type alias '${refName}'`);
           }
           alias.resolving = true;
-          alias.resolved = this.typeFromAnnotation(alias.body, alias.body, alias.sf);
+          const aliasAnchor: { pos: number } = { pos: alias.body.pos };
+          alias.resolved = this.typeFromAnnotation(alias.body, aliasAnchor, alias.sf);
           alias.resolving = false;
           return alias.resolved;
         }
       }
       if (refName === "Array") {
         if (node.typeArgs.length !== 1) {
-          throw this.typeErr(node, "Array<T> requires exactly one type argument");
+          throw this.typeErr(nodeAnchor, "Array<T> requires exactly one type argument");
         }
-        const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-        this.assertNotVoid(elem, node, "Array element");
+        const elem = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        this.assertNotVoid(elem, nodeAnchor, "Array element");
         const arr = arrayOf(elem);
         if (arr === undefined) {
-          throw this.typeErr(node, `no Array monomorph for element type ${typeIdent(elem)}`);
+          throw this.typeErr(nodeAnchor, `no Array monomorph for element type ${typeIdent(elem)}`);
         }
         this.recordArrayMonomorph(arr);
         return arr;
       }
       if (refName === "Map") {
         if (node.typeArgs.length !== 2) {
-          throw this.typeErr(node, "Map<K, V> requires exactly two type arguments");
+          throw this.typeErr(nodeAnchor, "Map<K, V> requires exactly two type arguments");
         }
-        const k = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-        this.assertNotVoid(k, node, "Map key");
-        const v = this.typeFromAnnotation(node.typeArgs[1]!, node, sf);
-        this.assertNotVoid(v, node, "Map value");
+        const k = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        this.assertNotVoid(k, nodeAnchor, "Map key");
+        const v = this.typeFromAnnotation(node.typeArgs[1]!, nodeAnchor, sf);
+        this.assertNotVoid(v, nodeAnchor, "Map value");
         const m = mapOf(k, v);
         if (m === undefined) {
-          throw this.typeErr(node, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
+          throw this.typeErr(nodeAnchor, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         }
         this.recordMapMonomorph(m);
         return m;
       }
       if (refName === "Set") {
         if (node.typeArgs.length !== 1) {
-          throw this.typeErr(node, "Set<T> requires exactly one type argument");
+          throw this.typeErr(nodeAnchor, "Set<T> requires exactly one type argument");
         }
-        const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-        this.assertNotVoid(elem, node, "Set element");
+        const elem = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        this.assertNotVoid(elem, nodeAnchor, "Set element");
         const s = setOf(elem);
         if (s === undefined) {
-          throw this.typeErr(node, `no Set monomorph for element type ${typeIdent(elem)}`);
+          throw this.typeErr(nodeAnchor, `no Set monomorph for element type ${typeIdent(elem)}`);
         }
         this.recordSetMonomorph(s);
         return s;
@@ -3734,16 +3737,16 @@ class Emitter {
       // at construction sites (Map.values / Map.keys / Set.values / Set.keys).
       if (refName === "Iterator") {
         if (node.typeArgs.length !== 1) {
-          throw this.typeErr(node, "Iterator<T> requires exactly one type argument");
+          throw this.typeErr(nodeAnchor, "Iterator<T> requires exactly one type argument");
         }
-        const elem = this.typeFromAnnotation(node.typeArgs[0]!, node, sf);
-        this.assertNotVoid(elem, node, "Iterator element");
+        const elem = this.typeFromAnnotation(node.typeArgs[0]!, nodeAnchor, sf);
+        this.assertNotVoid(elem, nodeAnchor, "Iterator element");
         if (
           elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string"
           && !isClassType(elem) && !isInterfaceType(elem)
         ) {
           throw this.typeErr(
-            node,
+            nodeAnchor,
             `Iterator<T>: element type ${typeIdent(elem)} is unsupported (must be scalar / class / interface)`,
           );
         }
@@ -3754,17 +3757,17 @@ class Emitter {
         return { kind: "iter", elem };
       }
       if (this.genericClasses.has(refName)) {
-        return this.instantiateGenericClass(refName, node.typeArgs, node, sf);
+        return this.instantiateGenericClass(refName, node.typeArgs, nodeAnchor, sf);
       }
       if (this.classes.has(refName)) {
         if (node.typeArgs.length > 0) {
-          throw this.typeErr(node, `class '${refName}' takes no type arguments`);
+          throw this.typeErr(nodeAnchor, `class '${refName}' takes no type arguments`);
         }
         return classOf(refName);
       }
       if (this.interfaces.has(refName)) {
         if (node.typeArgs.length > 0) {
-          throw this.typeErr(node, `interface '${refName}' takes no type arguments (Phase 1.4c)`);
+          throw this.typeErr(nodeAnchor, `interface '${refName}' takes no type arguments (Phase 1.4c)`);
         }
         return interfaceOf(refName);
       }
@@ -3782,20 +3785,22 @@ class Emitter {
       const params: ParamInfo[] = [];
       const seenNames = new Set<string>();
       for (const p of node.params) {
-        const pt = this.typeFromAnnotation(p.type, p, sf);
-        this.assertNotVoid(pt, p, "fn-type parameter");
+        const paramAnchor: { pos: number } = { pos: p.pos };
+        const pt = this.typeFromAnnotation(p.type, paramAnchor, sf);
+        this.assertNotVoid(pt, paramAnchor, "fn-type parameter");
         if (pt.kind === "fn") {
-          throw this.typeErr(p, "nested fn types in fn parameters are unsupported (Phase 1.5-3.5e)");
+          throw this.typeErr(paramAnchor, "nested fn types in fn parameters are unsupported (Phase 1.5-3.5e)");
         }
         if (seenNames.has(p.name)) {
-          throw this.typeErr(p, `duplicate parameter name '${p.name}'`);
+          throw this.typeErr(paramAnchor, `duplicate parameter name '${p.name}'`);
         }
         seenNames.add(p.name);
         params.push({ name: p.name, type: pt, isOptional: false });
       }
-      const ret = this.typeFromAnnotation(node.returnType, node.returnType, sf);
+      const returnAnchor: { pos: number } = { pos: node.returnType.pos };
+      const ret = this.typeFromAnnotation(node.returnType, returnAnchor, sf);
       if (ret.kind === "fn") {
-        throw this.typeErr(node, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
+        throw this.typeErr(nodeAnchor, "nested fn types in fn return position are unsupported (Phase 1.5-3.5e)");
       }
       const ft: TopazType = { kind: "fn", params, returnType: ret };
       this.recordFnMonomorph(ft);
@@ -3820,7 +3825,7 @@ class Emitter {
         return classOf(preAllocated.anonName);
       }
       if (node.members.length === 0) {
-        throw this.typeErr(node, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
+        throw this.typeErr(nodeAnchor, "empty object literal type `{}` is unsupported (Phase 1.5-6 prep)");
       }
       const fields = new Map<string, TopazType>();
       // Phase 1.5-6 prep-optional-param: collect optional field names so the
@@ -3828,15 +3833,16 @@ class Emitter {
       // an auto-filled `undefined` at the object-literal expression site.
       const optionalFields = new Set<string>();
       for (const m of node.members) {
+        const memberAnchor: { pos: number } = { pos: m.pos };
         if (m.kind !== "type_lit_field") {
-          throw this.typeErr(m, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
+          throw this.typeErr(memberAnchor, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
         }
         const fname = m.name;
         if (fields.has(fname)) {
-          throw this.typeErr(m, `duplicate property '${fname}' in object literal type`);
+          throw this.typeErr(memberAnchor, `duplicate property '${fname}' in object literal type`);
         }
-        const annot = this.typeFromAnnotation(m.type, m, sf);
-        this.assertNotVoid(annot, m, "object literal type property");
+        const annot = this.typeFromAnnotation(m.type, memberAnchor, sf);
+        this.assertNotVoid(annot, memberAnchor, "object literal type property");
         // Phase 1.5-6 prep-optional-param: `f?: T` is the syntactic sugar for
         // `f: T | undefined`. Lift here so structural dedupe (canonical key
         // includes typeIdent) collapses `{ f?: T }` and `{ f: T | undefined }`
@@ -3848,7 +3854,7 @@ class Emitter {
       const anonName = this.recordAnonClass(fields, optionalFields, node);
       return classOf(anonName);
     }
-    throw this.typeErr(node, `unsupported type (${node.kind})`);
+    throw this.typeErr(nodeAnchor, `unsupported type (${node.kind})`);
   }
 
   private formatSignature(sig: TopLevelFunctionSig): string {
