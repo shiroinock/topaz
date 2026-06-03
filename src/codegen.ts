@@ -9662,10 +9662,14 @@ class Emitter {
     if (expr.kind === "num_lit") return T_NUMBER;
     if (expr.kind === "bool_lit") return T_BOOLEAN;
     if (expr.kind === "this_expr") {
-      if (!this.currentClass) {
-        throw new CodegenError(expr, "`this` is only valid inside class methods or constructors");
+      const currentClass = this.currentClass;
+      if (currentClass === undefined) {
+        throw new CodegenError(
+          { pos: expr.pos },
+          "`this` is only valid inside class methods or constructors",
+        );
       }
-      return classOf(this.currentClass);
+      return classOf(currentClass);
     }
     if (expr.kind === "str_lit") {
       return T_STRING;
