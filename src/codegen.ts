@@ -7815,7 +7815,7 @@ class Emitter {
       // inferType's TemplateLit branch already vets each span; this arm is
       // defensive in case stringify gets reused later.
       throw new CodegenError(
-        sub,
+        { pos: sub.pos },
         `template literal substitution must be number / boolean / string, got ${typeIdent(t)}`,
       );
     };
@@ -9554,7 +9554,7 @@ class Emitter {
         const t = this.inferType(sub.expr);
         if (t.kind !== "number" && t.kind !== "boolean" && t.kind !== "string") {
           throw new CodegenError(
-            sub.expr,
+            { pos: sub.expr.pos },
             `template literal substitution must be number / boolean / string, got ${typeIdent(t)}`,
           );
         }
