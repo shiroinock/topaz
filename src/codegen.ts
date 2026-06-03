@@ -6680,36 +6680,48 @@ class Emitter {
     // identifier. When matched, each case body sees `<id>` narrowed to the
     // class whose discriminator literal equals the case label. Reuses the
     // ordinary scope.narrow path so identifier emit casts via `.data`.
-    let dunionTarget: { name: string; dunion: DunionType } | undefined;
+    let dunionTarget: { name: string; dunion: DunionType } | undefined = undefined;
     const disc = stmt.discriminant;
-    if (disc.kind === "prop_access" && !disc.optional && disc.receiver.kind === "ident") {
-      const idName = disc.receiver.name;
-      const b = this.scope.lookup(idName);
-      if (b && b.type.kind === "dunion" && disc.name === b.type.discriminator) {
-        dunionTarget = { name: idName, dunion: b.type };
+    if (disc.kind === "prop_access") {
+      if (disc.optional === false) {
+        const receiver = disc.receiver;
+        if (receiver.kind === "ident") {
+          const idName = receiver.name;
+          const b = this.scope.lookup(idName);
+          if (b !== undefined) {
+            const bindingType = b.type;
+            if (bindingType.kind === "dunion" && disc.name === bindingType.discriminator) {
+              dunionTarget = { name: idName, dunion: bindingType };
+            }
+          }
+        }
       }
     }
 
-    let defaultClause: SwitchCase | undefined;
-    for (let i = 0; i < clauses.length; i++) {
-      const c = clauses[i]!;
+    let defaultClause: SwitchCase | undefined = undefined;
+    let clauseIndex = 0;
+    for (const c of clauses) {
       if (c.test === undefined) {
-        if (i !== clauses.length - 1) {
-          throw new CodegenError(c, "`default` must be the last clause of `switch`");
+        if (clauseIndex !== clauses.length - 1) {
+          const defaultAnchor: { pos: number } = { pos: c.pos };
+          throw new CodegenError(defaultAnchor, "`default` must be the last clause of `switch`");
         }
         defaultClause = c;
       }
+      clauseIndex = clauseIndex + 1;
     }
 
     const groups: SwitchGroup[] = [];
     let pending: Expr[] = [];
     for (const c of clauses) {
-      if (c.test !== undefined) {
-        this.expectType(c.test, discType);
-        pending.push(c.test);
+      const testExpr = c.test;
+      if (testExpr !== undefined) {
+        this.expectType(testExpr, discType);
+        pending.push(testExpr);
         if (c.stmts.length > 0) {
           groups.push({ conds: pending, body: c.stmts });
-          pending = [];
+          const nextPending: Expr[] = [];
+          pending = nextPending;
         }
       }
     }
@@ -6723,11 +6735,20 @@ class Emitter {
       s.kind === "throw_stmt" ||
       s.kind === "continue_stmt";
     for (const g of groups) {
-      if (g.body.length > 0 && !isTerminator(g.body[g.body.length - 1]!)) {
-        throw new CodegenError(
-          g.body[g.body.length - 1]!,
-          "case body must end with `break` or `return` (implicit fall-through is unsupported)",
-        );
+      if (g.body.length > 0) {
+        const lastIndex = g.body.length - 1;
+        const lastStmt: Stmt | undefined = g.body[lastIndex];
+        if (lastStmt !== undefined) {
+          if (isTerminator(lastStmt) === false) {
+            const lastAnchor: { pos: number } = { pos: lastStmt.pos };
+            throw new CodegenError(
+              lastAnchor,
+              "case body must end with `break` or `return` (implicit fall-through is unsupported)",
+            );
+          }
+        } else {
+          throwInternalCodegenError("emitSwitchStatement: missing last case statement");
+        }
       }
     }
 
@@ -6736,14 +6757,16 @@ class Emitter {
     // under tryMakeDiscriminatedUnion's uniqueness check) or none falls back
     // to no narrowing. Multi-label fall-through groups only narrow if every
     // label points at the same class.
-    const groupNarrowClass: Array<string | undefined> = [];
-    if (dunionTarget) {
+    const groupHasNarrowClass: boolean[] = [];
+    const groupNarrowClassNames: string[] = [];
+    if (dunionTarget !== undefined) {
       const literalToClass = new Map<string, string>();
       for (const cname of dunionTarget.dunion.variants) {
         literalToClass.set(this.dunionLiteralFor(dunionTarget.dunion, cname), cname);
       }
       for (const g of groups) {
-        let acc: string | undefined;
+        let acc = "";
+        let hasAcc = false;
         let agree = true;
         for (const c of g.conds) {
           const litText = stringLitText(c);
@@ -6752,11 +6775,17 @@ class Emitter {
             break;
           }
           const cls = literalToClass.get(litText);
-          if (!cls) { agree = false; break; }
-          if (acc === undefined) acc = cls;
+          if (cls === undefined) { agree = false; break; }
+          if (hasAcc === false) { acc = cls; hasAcc = true; }
           else if (acc !== cls) { agree = false; break; }
         }
-        groupNarrowClass.push(agree ? acc : undefined);
+        if (agree === true && hasAcc === true) {
+          groupHasNarrowClass.push(true);
+          groupNarrowClassNames.push(acc);
+        } else {
+          groupHasNarrowClass.push(false);
+          groupNarrowClassNames.push("");
+        }
       }
     }
 
@@ -6775,52 +6804,51 @@ class Emitter {
     // a "switch" context around the case-body emission so checkContinueAllowed
     // sees it on top.
     this.pushLoopCtx("switch");
-    try {
-      const cmp = (rhs: string): string =>
-        discType.kind === "string"
-          ? `topaz_string_eq(${tmp}, ${rhs})`
-          : `${tmp} == ${rhs}`;
-      let first = true;
-      for (let gi = 0; gi < groups.length; gi++) {
-        const g = groups[gi]!;
-        const conds = g.conds.map((c) => cmp(this.emitExpression(c))).join(" || ");
-        const head = first ? "if" : "else if";
-        if (g.body.length === 0) {
-          out.push(`${pad}    ${head} (${conds}) { break; }`);
-        } else {
-          out.push(`${pad}    ${head} (${conds}) {`);
-          this.scope.push();
-          try {
-            const narrowCls = groupNarrowClass[gi];
-            if (dunionTarget && narrowCls) {
-              this.scope.narrow(dunionTarget.name, classOf(narrowCls));
-            }
-            for (const s of g.body) {
-              out.push(this.emitStatement(s, indent + 3));
-            }
-          } finally {
-            this.scope.pop();
+    const cmp = (rhs: string): string =>
+      discType.kind === "string"
+        ? `topaz_string_eq(${tmp}, ${rhs})`
+        : `${tmp} == ${rhs}`;
+    let first = true;
+    let groupIndex = 0;
+    for (const g of groups) {
+      const conds = g.conds.map((c) => cmp(this.emitExpression(c))).join(" || ");
+      const head = first ? "if" : "else if";
+      if (g.body.length === 0) {
+        out.push(`${pad}    ${head} (${conds}) { break; }`);
+      } else {
+        out.push(`${pad}    ${head} (${conds}) {`);
+        this.scope.push();
+        if (dunionTarget !== undefined) {
+          const hasNarrowCls = groupHasNarrowClass[groupIndex];
+          if (hasNarrowCls === true) {
+            const narrowCls = groupNarrowClassNames[groupIndex];
+            this.scope.narrow(dunionTarget.name, classOf(narrowCls));
           }
-          out.push(`${pad}    }`);
         }
-        first = false;
-      }
-      if (defaultClause) {
-        const head = first ? "if (1)" : "else";
-        if (defaultClause.stmts.length === 0) {
-          out.push(`${pad}    ${head} { break; }`);
-        } else {
-          out.push(`${pad}    ${head} {`);
-          for (const s of defaultClause.stmts) {
-            out.push(this.emitStatement(s, indent + 3));
-          }
-          out.push(`${pad}    }`);
+        for (const s of g.body) {
+          out.push(this.emitStatement(s, indent + 3));
         }
+        this.scope.pop();
+        out.push(`${pad}    }`);
       }
-    } finally {
-      this.popLoopCtx();
-      this.scope.pop();
+      first = false;
+      groupIndex = groupIndex + 1;
     }
+    if (defaultClause !== undefined) {
+      const defaultCase = defaultClause;
+      const head = first ? "if (1)" : "else";
+      if (defaultCase.stmts.length === 0) {
+        out.push(`${pad}    ${head} { break; }`);
+      } else {
+        out.push(`${pad}    ${head} {`);
+        for (const s of defaultCase.stmts) {
+          out.push(this.emitStatement(s, indent + 3));
+        }
+        out.push(`${pad}    }`);
+      }
+    }
+    this.popLoopCtx();
+    this.scope.pop();
 
     out.push(`${pad}  } while (0);`);
     out.push(`${pad}}`);
