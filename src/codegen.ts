@@ -6981,18 +6981,19 @@ class Emitter {
     // inferType(expr.receiver) would trip on "unknown identifier". Other
     // `process.<member>` value reads are rejected (exit / stdout / stderr are
     // call-only).
-    if (
-      expr.kind === "prop_access" &&
-      expr.receiver.kind === "ident" &&
-      expr.receiver.name === "process"
-    ) {
-      if (expr.name === "argv") {
-        return `topaz_process_argv()`;
+    if (expr.kind === "prop_access") {
+      const receiver = expr.receiver;
+      if (receiver.kind === "ident") {
+        if (receiver.name === "process") {
+          if (expr.name === "argv") {
+            return `topaz_process_argv()`;
+          }
+          throw new CodegenError(
+            { pos: expr.pos },
+            `unsupported \`process.${expr.name}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
+          );
+        }
       }
-      throw new CodegenError(
-        expr,
-        `unsupported \`process.${expr.name}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
-      );
     }
     if (expr.kind === "prop_access") {
       const baseType = this.inferType(expr.receiver);
@@ -9541,18 +9542,19 @@ class Emitter {
     }
     // Phase 1.5-6 prep #26: `process.argv` types as Array<string>. Short-circuit
     // before inferType(expr.receiver) would trip on the synthetic `process`.
-    if (
-      expr.kind === "prop_access" &&
-      expr.receiver.kind === "ident" &&
-      expr.receiver.name === "process"
-    ) {
-      if (expr.name === "argv") {
-        return arrayOf(T_STRING)!;
+    if (expr.kind === "prop_access") {
+      const receiver = expr.receiver;
+      if (receiver.kind === "ident") {
+        if (receiver.name === "process") {
+          if (expr.name === "argv") {
+            return arrayOf(T_STRING)!;
+          }
+          throw new CodegenError(
+            { pos: expr.pos },
+            `unsupported \`process.${expr.name}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
+          );
+        }
       }
-      throw new CodegenError(
-        expr,
-        `unsupported \`process.${expr.name}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
-      );
     }
     if (expr.kind === "prop_access") {
       const baseType = this.inferType(expr.receiver);
