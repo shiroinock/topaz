@@ -8027,7 +8027,7 @@ class Emitter {
       if (isInterfaceType(baseType)) {
         return this.emitInterfaceMethodCall(expr, prop, baseType);
       }
-      throw new CodegenError(prop, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
+      throw new CodegenError({ pos: prop.pos }, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
     }
 
     if (callee.kind === "ident") {
@@ -10124,7 +10124,7 @@ class Emitter {
             this.recordArrayJoinMonomorph(baseType);
             return T_STRING;
           }
-          throw new CodegenError(prop, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
+          throw new CodegenError({ pos: prop.pos }, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
         }
         if (isMapType(baseType)) {
           const v = mapValue(baseType)!;
@@ -10142,11 +10142,11 @@ class Emitter {
           if (m === "keys") return { kind: "iter", elem: mapKey(baseType)! };
           if (m === "entries") {
             throw new CodegenError(
-              callee,
+              { pos: prop.pos },
               "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
             );
           }
-          throw new CodegenError(prop, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+          throw new CodegenError({ pos: prop.pos }, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isSetType(baseType)) {
           const m = prop.name;
@@ -10159,11 +10159,11 @@ class Emitter {
           }
           if (m === "entries") {
             throw new CodegenError(
-              callee,
+              { pos: prop.pos },
               "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
             );
           }
-          throw new CodegenError(prop, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+          throw new CodegenError({ pos: prop.pos }, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (baseType.kind === "string") {
           return this.inferStringMethodReturn(expr, prop);
@@ -10172,7 +10172,7 @@ class Emitter {
           const cls = this.classes.get(classNameOf(baseType)!)!;
           const method = cls.methods.get(prop.name);
           if (!method) {
-            throw new CodegenError(prop, `class '${cls.name}' has no method '${prop.name}'`);
+            throw new CodegenError({ pos: prop.pos }, `class '${cls.name}' has no method '${prop.name}'`);
           }
           return method.returnType;
         }
@@ -10180,11 +10180,11 @@ class Emitter {
           const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
           const sig = iface.methods.get(prop.name);
           if (!sig) {
-            throw new CodegenError(prop, `interface '${iface.name}' has no method '${prop.name}'`);
+            throw new CodegenError({ pos: prop.pos }, `interface '${iface.name}' has no method '${prop.name}'`);
           }
           return sig.returnType;
         }
-        throw new CodegenError(prop, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
+        throw new CodegenError({ pos: prop.pos }, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
       }
       if (callee.kind === "ident") {
         // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
