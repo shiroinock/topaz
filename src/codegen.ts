@@ -3662,11 +3662,15 @@ class Emitter {
       // bare type references like `T` resolve through the substitution. Must
       // come before the class/interface lookup so that a class declared with
       // the same name as a type parameter doesn't shadow the binding.
-      if (this.typeParamScope !== undefined && this.typeParamScope.has(refName)) {
-        if (node.typeArgs.length > 0) {
-          throw this.typeErr(nodeAnchor, `type parameter '${refName}' cannot have type arguments`);
+      const typeParamScope = this.typeParamScope;
+      if (typeParamScope !== undefined) {
+        const scoped = typeParamScope.get(refName);
+        if (scoped !== undefined) {
+          if (node.typeArgs.length > 0) {
+            throw this.typeErr(nodeAnchor, `type parameter '${refName}' cannot have type arguments`);
+          }
+          return scoped;
         }
-        return this.typeParamScope.get(refName)!;
       }
       // Phase 1.5-6 prep: type alias substitution. Lookup sits between
       // typeParamScope (so a `T` param shadows a same-named alias inside a
