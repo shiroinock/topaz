@@ -2826,7 +2826,7 @@ class Emitter {
     // SameValueZero-aware topaz_key_eq_* wrappers from runtime.h.
     const eqFn = kShort === "string" ? "topaz_string_eq" : `topaz_key_eq_${kShort}`;
     const cVal = this.cElemTypeForContainer(v);
-    let optAbsent: string;
+    let optAbsent: string = "";
     if (isClassType(v)) {
       optAbsent = "NULL";
     } else if (isInterfaceType(v)) {
