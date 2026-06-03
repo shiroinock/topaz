@@ -2873,11 +2873,13 @@ class Emitter {
   // discriminator. The `data` field holds the underlying class instance
   // pointer; case-narrowing casts it back via `(topaz_class_<C> *)d.data`.
   private emitDunionTypedef(t: TopazType): string {
-    if (t.kind !== "dunion") {
-      throwInternalCodegenError(`emitDunionTypedef: not a dunion (${typeIdent(t)})`);
+    switch (t.kind) {
+      case "dunion":
+        return `typedef struct { topaz_string ${t.discriminator}; void *data; } ${typeIdent(t)};`;
+      default:
+        throwInternalCodegenError(`emitDunionTypedef: not a dunion (${typeIdent(t)})`);
+        return "";
     }
-    const name = typeIdent(t);
-    return `typedef struct { topaz_string ${t.discriminator}; void *data; } ${name};`;
   }
 
   // Per-(class|interface) hash and key-equality wrappers used by
