@@ -3216,8 +3216,9 @@ class Emitter {
     }
     info.fields.set(fname, t);
     info.fieldOrder.push(fname);
-    if (m.initializer) {
-      info.fieldInits.set(fname, m.initializer);
+    const initializer = m.initializer;
+    if (initializer !== undefined) {
+      info.fieldInits.set(fname, initializer);
     }
   }
 
