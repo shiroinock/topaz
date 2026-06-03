@@ -9715,7 +9715,7 @@ class Emitter {
     // emitExpression fallthrough.
     if (expr.kind === "object_lit") {
       throw new CodegenError(
-        expr,
+        { pos: expr.pos },
         "object literal expression requires a contextually typed anonymous-class target (annotate the binding / return type)",
       );
     }
@@ -9736,7 +9736,7 @@ class Emitter {
         this.recordFnMonomorph(fnType);
         return fnType;
       }
-      throw new CodegenError(expr, `unknown identifier '${expr.name}'`);
+      throw new CodegenError({ pos: expr.pos }, `unknown identifier '${expr.name}'`);
     }
     if (expr.kind === "prop_access" && expr.optional) {
       const { fieldType } = this.resolveOptionalFieldType(expr);
@@ -9763,7 +9763,7 @@ class Emitter {
       const baseType = this.inferType(expr.receiver);
       if (baseType.kind === "union") {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `cannot access '.${expr.name}' on union type ${typeIdent(baseType)} - narrow it first with \`if (x !== undefined)\``,
         );
       }
@@ -9772,7 +9772,7 @@ class Emitter {
       // gets a clear hint instead of a generic "unsupported property" trip.
       if (baseType.kind === "unknown") {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `cannot access '.${expr.name}' on \`unknown\` - narrow it first with \`if (x instanceof ClassName)\``,
         );
       }
@@ -9789,7 +9789,7 @@ class Emitter {
         const common = this.dunionCommonFieldType(baseType, expr.name);
         if (common) return common;
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `cannot access '.${expr.name}' on discriminated union ${typeIdent(baseType)} - narrow it first with \`switch (x.${baseType.discriminator})\``,
         );
       }
@@ -9898,7 +9898,7 @@ class Emitter {
       const stripped = withoutUndefined(inner);
       if (!stripped || typeEq(stripped, inner)) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `non-null assertion (\`!\`) requires a \`T | undefined\` operand; got ${typeIdent(inner)}`,
         );
       }
@@ -9909,7 +9909,7 @@ class Emitter {
         && !isInterfaceType(stripped) && stripped.kind !== "dunion"
       ) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `non-null assertion on ${typeIdent(inner)} is unsupported`,
         );
       }
@@ -10027,7 +10027,7 @@ class Emitter {
           const rt = this.inferType(expr.rhs);
           if (!typesOverlap(lt, rt)) {
             throw new CodegenError(
-              expr,
+              { pos: expr.pos },
               `type mismatch: cannot compare ${typeIdent(lt)} === ${typeIdent(rt)} (no common variant)`,
             );
           }
@@ -10057,7 +10057,7 @@ class Emitter {
         case "==":
         case "!=":
           throw new CodegenError(
-            expr,
+            { pos: expr.pos },
             "loose equality (== / !=) is unsupported; use === / !==",
           );
         case "??": {
@@ -10090,7 +10090,7 @@ class Emitter {
           if (this.isAssignableTo(rt, inner)) return inner;
           if (this.isAssignableTo(rt, lt)) return lt;
           throw new CodegenError(
-            expr.rhs,
+            { pos: expr.rhs.pos },
             `\`??\` right operand has type ${typeIdent(rt)}; expected ${typeIdent(inner)} or ${typeIdent(lt)}`,
           );
         }
@@ -10123,7 +10123,7 @@ class Emitter {
             receiver.name === "console" &&
             (prop.name === "log" || prop.name === "error")
           ) {
-            throw new CodegenError(expr, `console.${prop.name} returns void and cannot be used as a value`);
+            throw new CodegenError({ pos: expr.pos }, `console.${prop.name} returns void and cannot be used as a value`);
           }
           // Phase 1.5-6 prep #26: process.exit returns `never`, process.*.write
           // returns void — neither is usable as a value.
@@ -10464,7 +10464,7 @@ class Emitter {
     if (target.kind === "ident") {
       const bMaybe = this.scope.lookup(target.name);
       if (bMaybe === undefined) {
-        throw new CodegenError(target, `unknown identifier '${target.name}'`);
+        throw new CodegenError({ pos: target.pos }, `unknown identifier '${target.name}'`);
       }
       const b = bMaybe;
       if (b.isConst) {
@@ -10477,7 +10477,7 @@ class Emitter {
       // assignment mutates through the pointer and is always allowed.
       const baseType = this.inferType(target.receiver);
       if (!isArrayType(baseType)) {
-        throw new CodegenError(target, `index assignment is only supported on Array (got ${typeIdent(baseType)})`);
+        throw new CodegenError({ pos: target.pos }, `index assignment is only supported on Array (got ${typeIdent(baseType)})`);
       }
       return;
     }
@@ -10486,16 +10486,16 @@ class Emitter {
       // `base` once in C. We still restrict the base to side-effect-free forms
       // so that a future lowering swap doesn't surprise anyone.
       if (!this.isSafeLvalueBase(target.receiver)) {
-        throw new CodegenError(target, "property assignment requires a simple base (identifier, `this`, or chained property access)");
+        throw new CodegenError({ pos: target.pos }, "property assignment requires a simple base (identifier, `this`, or chained property access)");
       }
       const baseType = this.inferType(target.receiver);
       if (isInterfaceType(baseType)) {
         const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
         if (!iface.fields.has(target.name)) {
           if (iface.methods.has(target.name)) {
-            throw new CodegenError(target, `cannot assign to method '${target.name}'`);
+            throw new CodegenError({ pos: target.pos }, `cannot assign to method '${target.name}'`);
           }
-          throw new CodegenError(target, `interface '${iface.name}' has no field '${target.name}'`);
+          throw new CodegenError({ pos: target.pos }, `interface '${iface.name}' has no field '${target.name}'`);
         }
         return;
       }
@@ -10503,17 +10503,17 @@ class Emitter {
       // dunion, but a write would have to pick a variant (the field sits at a
       // variant-specific offset), so narrowing is required first.
       if (baseType.kind === "dunion") {
-        throw new CodegenError(target, `cannot assign to '.${target.name}' on discriminated union ${typeIdent(baseType)} - narrow it first with \`switch (x.${baseType.discriminator})\``);
+        throw new CodegenError({ pos: target.pos }, `cannot assign to '.${target.name}' on discriminated union ${typeIdent(baseType)} - narrow it first with \`switch (x.${baseType.discriminator})\``);
       }
       if (!isClassType(baseType)) {
-        throw new CodegenError(target, `property assignment is only supported on class instances or interface values (got ${typeIdent(baseType)})`);
+        throw new CodegenError({ pos: target.pos }, `property assignment is only supported on class instances or interface values (got ${typeIdent(baseType)})`);
       }
       const cls = this.classes.get(classNameOf(baseType)!)!;
       if (!cls.fields.has(target.name)) {
         if (cls.methods.has(target.name)) {
-          throw new CodegenError(target, `cannot assign to method '${target.name}'`);
+          throw new CodegenError({ pos: target.pos }, `cannot assign to method '${target.name}'`);
         }
-        throw new CodegenError(target, `class '${cls.name}' has no field '${target.name}'`);
+        throw new CodegenError({ pos: target.pos }, `class '${cls.name}' has no field '${target.name}'`);
       }
       return;
     }
@@ -10547,12 +10547,12 @@ class Emitter {
     if (expr.kind === "arrow_expr" && expected.kind === "fn") {
       const actual = this.inferArrowType(expr, expected);
       if (typeEq(actual, expected)) return;
-      throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+      throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
     }
     const actual = this.inferType(expr);
     if (typeEq(actual, expected)) return;
     if (this.isAssignableTo(actual, expected)) return;
-    throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+    throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
   }
 
   // Phase 1.4b: class implementing an interface is the only implicit
@@ -10721,14 +10721,14 @@ class Emitter {
         }
         if (!kindProp) {
           throw new CodegenError(
-            expr,
+            { pos: expr.pos },
             `object literal for ${typeIdent(expected)} must include discriminator property '${disc}: "..."'`,
           );
         }
         const kindValue = stringLitText(kindProp.value);
         if (kindValue === undefined) {
           throw new CodegenError(
-            kindProp,
+            { pos: kindProp.pos },
             `discriminator '${disc}' must be a plain string literal to select a ${typeIdent(expected)} variant`,
           );
         }
@@ -10745,13 +10745,13 @@ class Emitter {
         }
         if (!matchedVariant) {
           throw new CodegenError(
-            kindProp,
+            { pos: kindProp.pos },
             `no variant of ${typeIdent(expected)} has ${disc}="${kindValue}"`,
           );
         }
         if (!this.isAnonClassName(matchedVariant)) {
           throw new CodegenError(
-            expr,
+            { pos: expr.pos },
             `cannot use object literal for ${typeIdent(expected)} variant '${matchedVariant}' - concrete class variant requires \`new ${matchedVariant}(...)\``,
           );
         }
@@ -10761,7 +10761,7 @@ class Emitter {
       }
       if (!isClassType(expected) || !this.isAnonClassName(classNameOf(expected)!)) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `object literal expression requires a contextually typed anonymous-class target, got ${typeIdent(expected)}`,
         );
       }
@@ -10787,16 +10787,16 @@ class Emitter {
           // prop_spread — method shorthand / getter / setter are rejected in
           // convert; spread reaches here.
           throw new CodegenError(
-            prop,
+            { pos: prop.pos },
             "object literal only supports `name: value` and `name` shorthand properties (no method shorthand, getter / setter, spread)",
           );
         }
         if (seen.has(fname)) {
-          throw new CodegenError(prop, `duplicate property '${fname}' in object literal`);
+          throw new CodegenError({ pos: prop.pos }, `duplicate property '${fname}' in object literal`);
         }
         seen.add(fname);
         if (!info.fields.has(fname)) {
-          throw new CodegenError(prop, `property '${fname}' does not exist on type ${typeIdent(expected)}`);
+          throw new CodegenError({ pos: prop.pos }, `property '${fname}' does not exist on type ${typeIdent(expected)}`);
         }
         valuesByField.set(fname, valueExpr);
       }
@@ -10808,7 +10808,7 @@ class Emitter {
       );
       if (missingRequired.length > 0) {
         throw new CodegenError(
-          expr,
+          { pos: expr.pos },
           `object literal is missing required property: ${missingRequired.join(", ")} (for type ${typeIdent(expected)})`,
         );
       }
@@ -10840,7 +10840,7 @@ class Emitter {
     // call cannot be assigned, passed, returned, or coerced. Surface this at
     // the use site rather than letting cTypeName(void) blow up later.
     if (actual.kind === "void") {
-      throw new CodegenError(expr, `cannot use a \`void\` value (call expression returns void)`);
+      throw new CodegenError({ pos: expr.pos }, `cannot use a \`void\` value (call expression returns void)`);
     }
     const raw = this.emitExpression(expr);
     return this.applyCoercion(raw, actual, expected, expr);
