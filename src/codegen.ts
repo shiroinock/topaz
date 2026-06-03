@@ -7589,18 +7589,19 @@ class Emitter {
       }
       return this.emitSetIterableConstructor(expr, setType);
     }
+    const newAnchor: { pos: number } = { pos: expr.pos };
     if (this.interfaces.has(name)) {
-      throw new CodegenError(expr, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
+      throw new CodegenError(newAnchor, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
     }
     // Phase 1.4c-3: `new Box<number>()` mangles to the substituted class
     // name and dispatches through the same path as concrete classes.
     let className = name;
     if (this.genericClasses.has(name)) {
-      const t = this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentModule!);
+      const t = this.instantiateGenericClass(name, expr.typeArgs, newAnchor, g_currentModule!);
       className = classNameOf(t)!;
     } else if (expr.typeArgs.length > 0) {
       if (this.classes.has(name)) {
-        throw new CodegenError(expr, `class '${name}' takes no type arguments`);
+        throw new CodegenError(newAnchor, `class '${name}' takes no type arguments`);
       }
     }
     if (this.classes.has(className)) {
@@ -7611,13 +7612,13 @@ class Emitter {
       // surrounding emitWithExpected); here we only need to confirm the new
       // expression isn't being asked to produce a different concrete type.
       if (expected !== undefined && !typeEq(expected, t) && !this.isAssignableTo(t, expected)) {
-        throw new CodegenError(expr, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
+        throw new CodegenError(newAnchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(t)}`);
       }
       if (!cls.ctor) {
         // Reachable only when a class has no fields (we require a ctor when
         // fields exist), so this is a structurally empty class.
         if (args.length !== 0) {
-          throw new CodegenError(expr, `${cls.name}() takes no arguments`);
+          throw new CodegenError(newAnchor, `${cls.name}() takes no arguments`);
         }
         return `topaz_class_${className}_new()`;
       }
@@ -7625,7 +7626,7 @@ class Emitter {
       const argStr = this.emitCallArgs(args, params, `${cls.name}()`, expr).join(", ");
       return `topaz_class_${className}_new(${argStr})`;
     }
-    throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
+    throw new CodegenError(newAnchor, `\`new ${name}\` is unsupported`);
   }
 
   private resolveMapConstructorType(
@@ -10288,19 +10289,20 @@ class Emitter {
       if (name === "Set") {
         return this.resolveSetConstructorType(expr, undefined);
       }
+      const newAnchor: { pos: number } = { pos: expr.pos };
       if (this.genericClasses.has(name)) {
-        return this.instantiateGenericClass(name, expr.typeArgs, expr, g_currentModule!);
+        return this.instantiateGenericClass(name, expr.typeArgs, newAnchor, g_currentModule!);
       }
       if (this.classes.has(name)) {
         if (expr.typeArgs.length > 0) {
-          throw new CodegenError(expr, `class '${name}' takes no type arguments`);
+          throw new CodegenError(newAnchor, `class '${name}' takes no type arguments`);
         }
         return classOf(name);
       }
       if (this.interfaces.has(name)) {
-        throw new CodegenError(expr, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
+        throw new CodegenError(newAnchor, `cannot \`new\` an interface '${name}'; instantiate an implementing class instead`);
       }
-      throw new CodegenError(expr, `\`new ${name}\` is unsupported`);
+      throw new CodegenError(newAnchor, `\`new ${name}\` is unsupported`);
     }
     throw new CodegenError({ pos: expr.pos }, `unsupported expression (${expr.kind})`);
   }
