@@ -3289,8 +3289,9 @@ class Emitter {
 
   private classMemberSignatures(info: ClassInfo): string[] {
     const lines: string[] = [];
-    if (info.ctor) {
-      lines.push(this.constructorSignature(info));
+    const ctor = info.ctor;
+    if (ctor !== undefined) {
+      lines.push(this.constructorSignature(info, ctor));
     }
     for (const method of info.methods.values()) {
       lines.push(this.methodSignature(info, method));
@@ -3300,18 +3301,23 @@ class Emitter {
 
   private emitClassMemberDefinitions(info: ClassInfo): string[] {
     const out: string[] = [];
-    if (info.ctor) out.push(this.emitConstructorDefinition(info));
+    const ctor = info.ctor;
+    if (ctor !== undefined) out.push(this.emitConstructorDefinition(info, ctor));
     for (const method of info.methods.values()) {
       out.push(this.emitMethodDefinition(info, method));
     }
     return out;
   }
 
-  private constructorSignature(info: ClassInfo): string {
-    const params = info.ctor!.params
+  private constructorSignature(
+    info: ClassInfo,
+    ctor: { params: ParamInfo[]; decl: ClassMethodMember | undefined },
+  ): string {
+    const params = ctor.params
       .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
-    return `static topaz_class_${info.name} *topaz_class_${info.name}_new(${params || "void"})`;
+    const renderedParams = params.length > 0 ? params : "void";
+    return `static topaz_class_${info.name} *topaz_class_${info.name}_new(${renderedParams})`;
   }
 
   private methodSignature(info: ClassInfo, method: MethodInfo): string {
@@ -3322,8 +3328,10 @@ class Emitter {
     return `static ${cReturnTypeName(method.returnType)} topaz_class_${info.name}_method_${name}(${params})`;
   }
 
-  private emitConstructorDefinition(info: ClassInfo): string {
-    const ctor = info.ctor!;
+  private emitConstructorDefinition(
+    info: ClassInfo,
+    ctor: { params: ParamInfo[]; decl: ClassMethodMember | undefined },
+  ): string {
     this.currentClass = info.name;
     this.scope.push();
     // Phase 1.5-6e-3: ctor body / field initializers feed the SCC, so set the
@@ -3373,7 +3381,7 @@ class Emitter {
       }
       bodyLines.push(`  return ${TOPAZ_THIS};`);
       bodyLines.push("}");
-      return `${this.constructorSignature(info)} ${bodyLines.join("\n")}`;
+      return `${this.constructorSignature(info, ctor)} ${bodyLines.join("\n")}`;
     } finally {
       this.scope.pop();
       this.currentClass = undefined;
