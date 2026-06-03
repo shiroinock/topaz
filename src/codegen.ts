@@ -8185,13 +8185,18 @@ class Emitter {
         throw new CodegenError({ pos: a.pos }, "spread in call arguments is unsupported");
       }
     }
-    const expectedFn: TopazType = {
-      kind: "fn",
-      params: expr.args.map((a, i) => ({
+    const expectedParams: Array<ParamInfo> = [];
+    for (let i = 0; i < expr.args.length; i++) {
+      const a = expr.args[i];
+      expectedParams.push({
         name: `__p${i}`,
         type: this.inferType(a),
         isOptional: false,
-      })),
+      });
+    }
+    const expectedFn: TopazType = {
+      kind: "fn",
+      params: expectedParams,
       returnType: expected,
     };
     const fnType = this.inferArrowType(arrow, expectedFn);
