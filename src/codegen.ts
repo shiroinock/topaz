@@ -4139,8 +4139,9 @@ class Emitter {
   }
 
   private popLoopCtx(): void {
-    if (this.loopCtx !== undefined) {
-      this.loopCtx = this.loopCtx.prev;
+    const top = this.loopCtx;
+    if (top !== undefined) {
+      this.loopCtx = top.prev;
     }
   }
 
