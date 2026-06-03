@@ -6245,78 +6245,77 @@ class Emitter {
     // Phase 1.5-3.5h-entries: `.entries()` also goes through this special form
     // path; pair binding lowers to two declarations off the same slot.
     const source = stmt.source;
-    if (
-      source.kind === "call_expr" &&
-      !source.optional &&
-      source.callee.kind === "prop_access" &&
-      !source.callee.optional
-    ) {
+    if (source.kind === "call_expr") {
       const callExpr = source;
-      const callee = source.callee;
-      const methodName = callee.name;
-      if (methodName === "values" || methodName === "keys" || methodName === "entries") {
-        const baseType = this.inferType(callee.receiver);
-        if (isMapType(baseType) || isSetType(baseType)) {
-          if (callExpr.args.length !== 0) {
-            throw new CodegenError(callExpr, `.${methodName}() takes no arguments`);
-          }
-          if (methodName === "entries") {
-            if (binding.kind !== "for_of_pair") {
-              throw new CodegenError(
-                stmt,
-                "for-of over .entries() requires destructuring binding `for (const [k, v] of ...)`",
+      if (callExpr.optional === false) {
+        const callee = callExpr.callee;
+        if (callee.kind === "prop_access" && callee.optional === false) {
+          const methodName = callee.name;
+          if (methodName === "values" || methodName === "keys" || methodName === "entries") {
+            const baseType = this.inferType(callee.receiver);
+            if (isMapType(baseType) || isSetType(baseType)) {
+              if (callExpr.args.length !== 0) {
+                throw new CodegenError({ pos: callExpr.pos }, `.${methodName}() takes no arguments`);
+              }
+              if (methodName === "entries") {
+                if (binding.kind !== "for_of_pair") {
+                  throw new CodegenError(
+                    { pos: stmt.pos },
+                    "for-of over .entries() requires destructuring binding `for (const [k, v] of ...)`",
+                  );
+                }
+                let keyType: TopazType;
+                let valueType: TopazType;
+                if (isMapType(baseType)) {
+                  this.recordMapMonomorph(baseType);
+                  keyType = mapKey(baseType)!;
+                  valueType = mapValue(baseType)!;
+                } else {
+                  // Set.entries() yields [elem, elem] pairs (matches JS).
+                  this.recordSetMonomorph(baseType);
+                  keyType = setElem(baseType)!;
+                  valueType = setElem(baseType)!;
+                }
+                return this.emitForOfHashLowering(
+                  stmt, indent, baseType, callee.receiver,
+                  { kind: "pair",
+                    firstName: binding.first, firstField: "key", firstType: keyType,
+                    secondName: binding.second, secondField: isMapType(baseType) ? "value" : "key", secondType: valueType,
+                  },
+                  undefined, isConst,
+                );
+              }
+              // .values() / .keys() — single binding required.
+              if (binding.kind !== "for_of_single") {
+                throw new CodegenError(
+                  { pos: stmt.pos },
+                  `for-of over .${methodName}() takes a single binding, not destructuring`,
+                );
+              }
+              let bindType: TopazType;
+              let field: "key" | "value";
+              if (isMapType(baseType)) {
+                this.recordMapMonomorph(baseType);
+                if (methodName === "values") {
+                  bindType = mapValue(baseType)!;
+                  field = "value";
+                } else {
+                  bindType = mapKey(baseType)!;
+                  field = "key";
+                }
+              } else {
+                // Set: both .values() and .keys() yield the element (matches JS).
+                this.recordSetMonomorph(baseType);
+                bindType = setElem(baseType)!;
+                field = "key";
+              }
+              return this.emitForOfHashLowering(
+                stmt, indent, baseType, callee.receiver,
+                { kind: "single", name: binding.name, field, type: bindType },
+                bindingType, isConst,
               );
             }
-            let keyType: TopazType;
-            let valueType: TopazType;
-            if (isMapType(baseType)) {
-              this.recordMapMonomorph(baseType);
-              keyType = mapKey(baseType)!;
-              valueType = mapValue(baseType)!;
-            } else {
-              // Set.entries() yields [elem, elem] pairs (matches JS).
-              this.recordSetMonomorph(baseType);
-              keyType = setElem(baseType)!;
-              valueType = setElem(baseType)!;
-            }
-            return this.emitForOfHashLowering(
-              stmt, indent, baseType, callee.receiver,
-              { kind: "pair",
-                firstName: binding.first, firstField: "key", firstType: keyType,
-                secondName: binding.second, secondField: isMapType(baseType) ? "value" : "key", secondType: valueType,
-              },
-              undefined, isConst,
-            );
           }
-          // .values() / .keys() — single binding required.
-          if (binding.kind !== "for_of_single") {
-            throw new CodegenError(
-              stmt,
-              `for-of over .${methodName}() takes a single binding, not destructuring`,
-            );
-          }
-          let bindType: TopazType;
-          let field: "key" | "value";
-          if (isMapType(baseType)) {
-            this.recordMapMonomorph(baseType);
-            if (methodName === "values") {
-              bindType = mapValue(baseType)!;
-              field = "value";
-            } else {
-              bindType = mapKey(baseType)!;
-              field = "key";
-            }
-          } else {
-            // Set: both .values() and .keys() yield the element (matches JS).
-            this.recordSetMonomorph(baseType);
-            bindType = setElem(baseType)!;
-            field = "key";
-          }
-          return this.emitForOfHashLowering(
-            stmt, indent, baseType, callee.receiver,
-            { kind: "single", name: binding.name, field, type: bindType },
-            bindingType, isConst,
-          );
         }
       }
     }
