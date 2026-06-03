@@ -4209,6 +4209,44 @@ class Emitter {
     throw new CodegenError(cbAnchor, `${label} callback must be a function value, got ${typeIdent(t)}`);
   }
 
+  private inferArrayMapCallbackFn(cb: Expr, elem: TopazType): FnType {
+    if (cb.kind === "arrow_expr") {
+      if (cb.params.length === 1) {
+        return this.inferCallbackFn(cb, [elem], "Array.map");
+      }
+      if (cb.params.length === 2) {
+        return this.inferCallbackFn(cb, [elem, T_NUMBER], "Array.map");
+      }
+      throw new CodegenError(
+        { pos: cb.pos },
+        `Array.map callback arity ${cb.params.length} does not match expected 1 or 2`,
+      );
+    }
+    const t = this.inferType(cb);
+    if (t.kind !== "fn") {
+      throw new CodegenError({ pos: cb.pos }, `Array.map callback must be a function value, got ${typeIdent(t)}`);
+    }
+    const fnType = t;
+    if (fnType.params.length !== 1 && fnType.params.length !== 2) {
+      throw new CodegenError(
+        { pos: cb.pos },
+        `Array.map callback arity ${fnType.params.length} does not match expected 1 or 2`,
+      );
+    }
+    const expectedParams = fnType.params.length === 1 ? [elem] : [elem, T_NUMBER];
+    for (let i = 0; i < expectedParams.length; i++) {
+      const gotParam = fnType.params[i];
+      const expectedParam = expectedParams[i];
+      if (!typeEq(gotParam.type, expectedParam)) {
+        throw new CodegenError(
+          { pos: cb.pos },
+          `Array.map callback parameter ${i} type ${typeIdent(gotParam.type)} does not match expected ${typeIdent(expectedParam)}`,
+        );
+      }
+    }
+    return fnType;
+  }
+
   // Phase 1.5-3.5e: emit a typedef for a fn signature. The struct holds a
   // function pointer that takes `void *env` as its hidden first parameter
   // followed by the user-visible params, and a generic env pointer that the
@@ -8269,7 +8307,7 @@ class Emitter {
         throw new CodegenError({ pos: expr.pos }, "Array.map expects exactly one argument");
       }
       const cb = expr.args[0];
-      const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
+      const fnType = this.inferArrayMapCallbackFn(cb, elem);
       const u = fnType.returnType;
       if (u.kind === "void") {
         throw new CodegenError({ pos: cb.pos }, "Array.map callback cannot return `void` (no Array<void> monomorph)");
@@ -8300,7 +8338,9 @@ class Emitter {
       const cbVar = `__topaz_map_cb_${id}`;
       const dstVar = `__topaz_map_dst_${id}`;
       const idxVar = `__topaz_map_i_${id}`;
-      const callArgs = `${cbVar}.env, ${srcVar}->data[${idxVar}]`;
+      const callArgs = fnType.params.length === 2
+        ? `${cbVar}.env, ${srcVar}->data[${idxVar}], (topaz_number)${idxVar}`
+        : `${cbVar}.env, ${srcVar}->data[${idxVar}]`;
       return (
         `({ ${srcTy} ${srcVar} = ${base}; ` +
         `${fnTy} ${cbVar} = ${cbStr}; ` +
@@ -10120,7 +10160,7 @@ class Emitter {
               throw new CodegenError({ pos: expr.pos }, "Array.map expects exactly one argument");
             }
             const cb = expr.args[0];
-            const fnType = this.inferCallbackFn(cb, [elem], "Array.map");
+            const fnType = this.inferArrayMapCallbackFn(cb, elem);
             const u = fnType.returnType;
             if (u.kind === "void") {
               throw new CodegenError({ pos: cb.pos }, "Array.map callback cannot return `void` (no Array<void> monomorph)");

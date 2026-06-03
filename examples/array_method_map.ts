@@ -66,3 +66,16 @@ console.log(chained[2]);  // 40
 const stripped: Array<number> = boxes.map((b: Box): number => b.value + 1);
 console.log(stripped[0]);  // 101
 console.log(stripped[2]);  // 301
+
+// --- callback can receive the zero-based index ---
+const indexed: Array<number> = [10, 20, 30].map((x, i) => x + i);
+console.log(indexed[0]);  // 10
+console.log(indexed[1]);  // 21
+console.log(indexed[2]);  // 32
+
+// --- fn-valued callback can also receive the index ---
+const addIndex: (n: number, i: number) => number = (n, i) => n + i;
+const indexedFn: Array<number> = xs.map(addIndex);
+console.log(indexedFn[0]);  // 1
+console.log(indexedFn[1]);  // 3
+console.log(indexedFn[2]);  // 5

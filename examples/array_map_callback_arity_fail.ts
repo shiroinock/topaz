@@ -1,3 +1,4 @@
-// Phase 1.5-3.5f: Array.map callback must have arity 1.
+// Phase 251: Array.map accepts one or two callback parameters, but not the
+// JavaScript third array argument.
 const xs: Array<number> = [1, 2, 3];
-const ys = xs.map((x, y) => x + y);
+const ys = xs.map((x, y, arr) => x + y + arr.length);
