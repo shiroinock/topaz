@@ -10766,6 +10766,11 @@ class Emitter {
   // interface coercion (fat pointer compound literal) when needed. Use this
   // helper at every value-passing site (variable init, call argument, return
   // statement, assignment RHS) where the expected type is known.
+  private unwrapParenExpr(expr: Expr): Expr {
+    if (expr.kind === "paren_expr") return this.unwrapParenExpr(expr.inner);
+    return expr;
+  }
+
   private emitWithExpected(expr: Expr, expected: TopazType): string {
     const exprAnchor: { pos: number } = { pos: expr.pos };
     // Phase 1.5-3b: the literal `undefined` lowers based on the expected
@@ -10996,8 +11001,7 @@ class Emitter {
     // type on their own and fall through to the normal call path (their return
     // may differ from `expected`, so we must not override it).
     if (expr.kind === "call_expr" && !expr.optional) {
-      let callee: Expr = expr.callee;
-      while (callee.kind === "paren_expr") callee = callee.inner;
+      const callee = this.unwrapParenExpr(expr.callee);
       if (callee.kind === "arrow_expr" && !callee.returnType) {
         return this.emitContextualIIFE(expr, callee, expected);
       }
