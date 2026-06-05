@@ -217,6 +217,5 @@ try {
   if (err instanceof LexError) die(formatSourceError(err.file, err.pos, err.message));
   if (err instanceof LoaderError) die(err.message);
   if (err instanceof CodegenError) die(err.message);
-  if (err instanceof Error) die(err.message);
   throw err;
 }
