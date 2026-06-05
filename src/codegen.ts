@@ -10215,7 +10215,7 @@ class Emitter {
           // is T when the RHS is T, or T | undefined when the RHS is itself
           // T | undefined (so chained `a ?? b ?? c` keeps optional through
           // the middle layer). The RHS must be assignable to one of those.
-          const exprAnchor = { pos: expr.pos };
+          const exprAnchor: { pos: number } = { pos: expr.pos };
           const lt = this.inferType(expr.lhs);
           const innerMaybe = withoutUndefined(lt);
           if (innerMaybe === undefined || typeEq(innerMaybe, lt)) {
