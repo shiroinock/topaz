@@ -10975,12 +10975,16 @@ class Emitter {
           `object literal is missing required property: ${missingRequired.join(", ")} (for type ${typeIdent(expected)})`,
         );
       }
-      const args = info.fieldOrder.map((f) => {
+      const args: string[] = [];
+      for (const f of info.fieldOrder) {
         const fty = info.fields.get(f)!;
         const v = valuesByField.get(f);
-        if (v !== undefined) return this.emitWithExpected(v, fty);
-        return this.emitUndefinedLiteral(fty, exprAnchor);
-      });
+        if (v !== undefined) {
+          args.push(this.emitWithExpected(v, fty));
+        } else {
+          args.push(this.emitUndefinedLiteral(fty, exprAnchor));
+        }
+      }
       return `topaz_class_${className}_new(${args.join(", ")})`;
     }
     // Phase 1.5-6 prep: IIFE `(() => { ... })(args)` whose arrow lacks a return
