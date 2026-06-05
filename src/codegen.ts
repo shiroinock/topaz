@@ -10749,12 +10749,14 @@ class Emitter {
     // set is a subset of the target's. Both share the `{ <disc>; void *data; }`
     // fat layout, so the value is layout-compatible; coercion only re-wraps the
     // same kind + payload into the wider typedef.
-    if (expected.kind === "dunion" && actual.kind === "dunion") {
-      if (actual.discriminator !== expected.discriminator) return false;
-      for (const v of actual.variants) {
-        if (!expected.variants.includes(v)) return false;
+    if (expected.kind === "dunion") {
+      if (actual.kind === "dunion") {
+        if (actual.discriminator !== expected.discriminator) return false;
+        for (const v of actual.variants) {
+          if (!expected.variants.includes(v)) return false;
+        }
+        return true;
       }
-      return true;
     }
     return false;
   }
@@ -11127,18 +11129,20 @@ class Emitter {
     // discriminator + payload are re-wrapped into the wider struct. Bind the
     // (possibly side-effectful) source once in a statement expression; the
     // runtime `.kind` already carries the correct variant tag.
-    if (expected.kind === "dunion" && actual.kind === "dunion") {
-      if (actual.discriminator !== expected.discriminator) {
-        throw new CodegenError(anchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
-      }
-      for (const v of actual.variants) {
-        if (!expected.variants.includes(v)) {
-          throw new CodegenError(anchor, `class '${v}' is not a variant of ${typeIdent(expected)}`);
+    if (expected.kind === "dunion") {
+      if (actual.kind === "dunion") {
+        if (actual.discriminator !== expected.discriminator) {
+          throw new CodegenError(anchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
         }
+        for (const v of actual.variants) {
+          if (!expected.variants.includes(v)) {
+            throw new CodegenError(anchor, `class '${v}' is not a variant of ${typeIdent(expected)}`);
+          }
+        }
+        const id = this.tmpCounter++;
+        const tmp = `__topaz_dw_${id}`;
+        return `({ ${typeIdent(actual)} ${tmp} = ${raw}; (${typeIdent(expected)}){ ${tmp}.${actual.discriminator}, ${tmp}.data }; })`;
       }
-      const id = this.tmpCounter++;
-      const tmp = `__topaz_dw_${id}`;
-      return `({ ${typeIdent(actual)} ${tmp} = ${raw}; (${typeIdent(expected)}){ ${tmp}.${actual.discriminator}, ${tmp}.data }; })`;
     }
     // Phase 1.5-3e: string_literal "X" widens to plain string (the literal
     // already has the right C representation, so no transformation needed).
