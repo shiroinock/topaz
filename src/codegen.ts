@@ -10766,11 +10766,11 @@ class Emitter {
   // helper at every value-passing site (variable init, call argument, return
   // statement, assignment RHS) where the expected type is known.
   private emitWithExpected(expr: Expr, expected: TopazType): string {
+    const exprAnchor: { pos: number } = { pos: expr.pos };
     // Phase 1.5-3b: the literal `undefined` lowers based on the expected
     // container type (NULL pointer for reference, fat pointer with .data=NULL
     // for interface). Without a `T | undefined` expected this is a type error.
     if (expr.kind === "undefined_lit") {
-      const exprAnchor: { pos: number } = { pos: expr.pos };
       return this.emitUndefinedLiteral(expected, exprAnchor);
     }
     // Phase 1.5-6 prep #25: thread the expected type into both ternary arms so
@@ -10789,7 +10789,7 @@ class Emitter {
       }
       const actual = this.inferArrowType(expr, undefined);
       const raw = this.emitArrowFunction(expr, undefined);
-      return this.applyCoercion(raw, actual, expected, expr);
+      return this.applyCoercion(raw, actual, expected, exprAnchor);
     }
     // Phase 1.5-3e: an expected string_literal accepts the matching literal
     // expression (the value flows in as plain string at runtime, so the
@@ -10831,7 +10831,7 @@ class Emitter {
       // keep the class type and let coercion below wrap it.
       const ctx = isInterfaceType(expected) ? undefined : expected;
       const raw = this.emitNewExpression(expr, ctx);
-      return this.applyCoercion(raw, newType, expected, expr);
+      return this.applyCoercion(raw, newType, expected, exprAnchor);
     }
     // Phase 1.5-6 prep: object literal expression `{ a: 1, b: "x" }` lowers to
     // an anonymous-class positional ctor call. Requires a contextual anonymous
@@ -10855,7 +10855,7 @@ class Emitter {
         const inner = withoutUndefined(expected);
         if (inner !== undefined) {
           const innerC = this.emitWithExpected(expr, inner);
-          return this.applyCoercion(innerC, inner, expected, expr);
+          return this.applyCoercion(innerC, inner, expected, exprAnchor);
         }
       }
       // Phase 1.5-6 prep #11: dunion contextual target. Find the discriminator
@@ -10913,7 +10913,7 @@ class Emitter {
         }
         const variantType: TopazType = { kind: "class", name: matchedVariant };
         const inner = this.emitWithExpected(expr, variantType);
-        return this.applyCoercion(inner, variantType, expected, expr);
+        return this.applyCoercion(inner, variantType, expected, exprAnchor);
       }
       if (!isClassType(expected) || !this.isAnonClassName(classNameOf(expected)!)) {
         throw new CodegenError(
@@ -10972,7 +10972,6 @@ class Emitter {
         const fty = info.fields.get(f)!;
         const v = valuesByField.get(f);
         if (v !== undefined) return this.emitWithExpected(v, fty);
-        const exprAnchor: { pos: number } = { pos: expr.pos };
         return this.emitUndefinedLiteral(fty, exprAnchor);
       });
       return `topaz_class_${className}_new(${args.join(", ")})`;
@@ -11000,7 +10999,7 @@ class Emitter {
       throw new CodegenError({ pos: expr.pos }, `cannot use a \`void\` value (call expression returns void)`);
     }
     const raw = this.emitExpression(expr);
-    return this.applyCoercion(raw, actual, expected, expr);
+    return this.applyCoercion(raw, actual, expected, exprAnchor);
   }
 
   // Phase 1.5-3b: lower the literal `undefined` for an expected `T | undefined`
