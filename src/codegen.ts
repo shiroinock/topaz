@@ -10582,8 +10582,10 @@ class Emitter {
         if (expr.typeArgs.length !== 2) {
           throw new CodegenError(constructorAnchor, "Map<K, V> requires exactly two type arguments");
         }
-        const k = this.typeFromAnnotation(expr.typeArgs[0]!, constructorAnchor, g_currentModule!);
-        const v = this.typeFromAnnotation(expr.typeArgs[1]!, constructorAnchor, g_currentModule!);
+        const keyTypeArg = expr.typeArgs[0];
+        const valueTypeArg = expr.typeArgs[1];
+        const k = this.typeFromAnnotation(keyTypeArg, constructorAnchor, g_currentModule!);
+        const v = this.typeFromAnnotation(valueTypeArg, constructorAnchor, g_currentModule!);
         const t = mapOf(k, v);
         if (t === undefined) throw new CodegenError(constructorAnchor, `no Map monomorph for key=${typeIdent(k)}, value=${typeIdent(v)}`);
         this.recordMapMonomorph(t);
@@ -11023,9 +11025,10 @@ class Emitter {
     }
     const out: string[] = [];
     for (let i = 0; i < params.length; i++) {
-      const p = params[i]!;
+      const p = params[i];
       if (i < args.length) {
-        out.push(this.emitWithExpected(args[i]!, p.type));
+        const arg = args[i];
+        out.push(this.emitWithExpected(arg, p.type));
       } else {
         out.push(this.emitUndefinedLiteral(p.type, anchor));
       }
