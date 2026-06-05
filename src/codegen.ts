@@ -10770,7 +10770,8 @@ class Emitter {
     // container type (NULL pointer for reference, fat pointer with .data=NULL
     // for interface). Without a `T | undefined` expected this is a type error.
     if (expr.kind === "undefined_lit") {
-      return this.emitUndefinedLiteral(expected, expr);
+      const exprAnchor: { pos: number } = { pos: expr.pos };
+      return this.emitUndefinedLiteral(expected, exprAnchor);
     }
     // Phase 1.5-6 prep #25: thread the expected type into both ternary arms so
     // each coerces to it (class -> interface / dunion, T -> T | undefined) and
@@ -10971,7 +10972,8 @@ class Emitter {
         const fty = info.fields.get(f)!;
         const v = valuesByField.get(f);
         if (v !== undefined) return this.emitWithExpected(v, fty);
-        return this.emitUndefinedLiteral(fty, expr);
+        const exprAnchor: { pos: number } = { pos: expr.pos };
+        return this.emitUndefinedLiteral(fty, exprAnchor);
       });
       return `topaz_class_${className}_new(${args.join(", ")})`;
     }
