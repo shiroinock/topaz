@@ -9056,6 +9056,12 @@ class Emitter {
     }
     const init = prop.value;
     const initLit = stringLitText(init);
+    if (initLit === undefined) {
+      throw new CodegenError(
+        { pos: init.pos },
+        "execFileSync `stdio` must be the string literal \"inherit\"",
+      );
+    }
     if (initLit !== "inherit") {
       throw new CodegenError(
         { pos: init.pos },
