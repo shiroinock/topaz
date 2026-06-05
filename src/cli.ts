@@ -217,5 +217,5 @@ try {
   if (err instanceof LexError) die(formatSourceError(err.file, err.pos, err.message));
   if (err instanceof LoaderError) die(err.message);
   if (err instanceof CodegenError) die(err.message);
-  throw err;
+  die("internal error: unhandled exception");
 }
