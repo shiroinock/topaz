@@ -176,7 +176,10 @@ run_case generic_fn $'42\n7\nhi\nyo\ntrue\nfalse\n10\n30\nalpha\ngamma\ntwo\n2\n
 run_case generic_class $'42\n42\n99\nhello\ntrue\n1\none\n3\n20\n99\nhello'
 run_case try_catch_basic $'boom\n1\nnegative\n42\n10\n7\n100\n9\nrewrapped\n2\n0\n999'
 run_case try_return $'10\n-1\n3\n99\n107\n10\nboom'
+run_case try_finally $'try-normal\nfinally-normal\nnormal\ntry-throw\nfinally-throw\nboom\ntry-override\nfinally-override\ncleanup'
 run_fail_case try_break_fail examples/try_break_fail.ts "\`break\` inside a \`try\` body is unsupported"
+run_fail_case try_finally_return_fail examples/try_finally_return_fail.ts "\`return\` inside a \`try/finally\` try body is unsupported"
+run_fail_case try_catch_finally_fail examples/try_catch_finally_fail.ts "\`try/catch/finally\` is unsupported"
 
 run_case optional_basic $'false\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue'
 run_case optional_narrow $'10\n0\n10\n-1\n10\n0\n16\n7\n20\n99'

@@ -5557,9 +5557,10 @@ class Emitter {
   // Phase 1.5-1: try/catch. setjmp returns 0 on the initial call (run body
   // then pop the frame), nonzero after a longjmp from topaz_throw (frame is
   // already popped by topaz_throw; catch body just rebinds the global
-  // throw_value to the annotated class type). finally and bare-binding catch
-  // are deferred; return/break/continue inside the try body are rejected
-  // because they would skip the pop.
+  // throw_value to the annotated class type). No-catch `finally` is lowered as
+  // cleanup plus rethrow; catch+finally remains deferred. bare-binding catch is
+  // also deferred; break/continue inside the try body are rejected because they
+  // would skip the pop.
   // Phase 1.5-X: a run of `topaz_try_pop()` calls (one per live try frame)
   // prepended to a `return` that escapes one or more try bodies.
   private popFrames(): string {
@@ -5570,8 +5571,14 @@ class Emitter {
     const pad = "  ".repeat(indent);
     const finallyBlockMaybe = stmt.finallyBlock;
     if (finallyBlockMaybe !== undefined) {
-      const finallyAnchor: { pos: number } = { pos: finallyBlockMaybe.pos };
-      throw new CodegenError(finallyAnchor, "`finally` is unsupported (Phase 1.5-1)");
+      if (stmt.catchClause !== undefined) {
+        const finallyAnchor: { pos: number } = { pos: finallyBlockMaybe.pos };
+        throw new CodegenError(
+          finallyAnchor,
+          "`try/catch/finally` is unsupported; use either `try/catch` or no-catch `try/finally`",
+        );
+      }
+      return this.emitTryFinallyStatement(stmt, finallyBlockMaybe, indent);
     }
     const catchClauseMaybe = stmt.catchClause;
     if (catchClauseMaybe === undefined) {
@@ -5648,6 +5655,47 @@ class Emitter {
     return lines.join("\n");
   }
 
+  private emitTryFinallyStatement(
+    stmt: TryStmt,
+    finallyBlock: BlockStmt,
+    indent: number,
+  ): string {
+    const pad = "  ".repeat(indent);
+    this.checkTryFinallyNoEscape(stmt.tryBlock, "`try/finally` try body");
+    this.checkTryFinallyNoEscape(finallyBlock, "`finally` block");
+
+    const id = this.tmpCounter++;
+    const frame = `__topaz_try_${id}`;
+
+    this.scope.push();
+    this.liveTryFrames++;
+    const tryBodyLines = stmt.tryBlock.stmts.map((s) => this.emitStatement(s, indent + 2));
+    this.liveTryFrames--;
+    this.scope.pop();
+
+    this.scope.push();
+    const finallyBodyLines = finallyBlock.stmts.map((s) =>
+      this.emitStatement(s, indent + 2),
+    );
+    this.scope.pop();
+    const finallyBodyStr = finallyBodyLines.join("\n");
+
+    const lines: string[] = [];
+    lines.push(`${pad}{`);
+    lines.push(`${pad}  topaz_try_frame ${frame};`);
+    lines.push(`${pad}  topaz_try_push(&${frame});`);
+    lines.push(`${pad}  if (setjmp(${frame}.env) == 0) {`);
+    if (tryBodyLines.length > 0) lines.push(tryBodyLines.join("\n"));
+    lines.push(`${pad}    topaz_try_pop();`);
+    if (finallyBodyStr.length > 0) lines.push(finallyBodyStr);
+    lines.push(`${pad}  } else {`);
+    if (finallyBodyStr.length > 0) lines.push(finallyBodyStr);
+    lines.push(`${pad}    topaz_throw(topaz_throw_value);`);
+    lines.push(`${pad}  }`);
+    lines.push(`${pad}}`);
+    return lines.join("\n");
+  }
+
   // Reject break/continue inside the try body — those exit the surrounding C
   // block before `topaz_try_pop()` runs, which would leave the frame on the
   // stack pointing at a dead jmp_buf. (Phase 1.5-X: `return` is now handled by
@@ -5659,6 +5707,104 @@ class Emitter {
   // the rule one sentence long.
   private checkTryBodyNoEscape(block: BlockStmt): void {
     for (const s of block.stmts) this.checkTryBodyNoEscapeStmt(s);
+  }
+
+  private checkTryFinallyNoEscape(block: BlockStmt, context: string): void {
+    for (const s of block.stmts) this.checkTryFinallyNoEscapeStmt(s, context);
+  }
+
+  private checkTryFinallyNoEscapeStmt(s: Stmt, context: string): void {
+    switch (s.kind) {
+      case "return_stmt":
+        throw new CodegenError(
+          { pos: s.pos },
+          `\`return\` inside a ${context} is unsupported (return through finally needs cleanup dispatch)`,
+        );
+      case "break_stmt":
+        throw new CodegenError(
+          { pos: s.pos },
+          `\`break\` inside a ${context} is unsupported (would skip finally cleanup)`,
+        );
+      case "continue_stmt":
+        throw new CodegenError(
+          { pos: s.pos },
+          `\`continue\` inside a ${context} is unsupported (would skip finally cleanup)`,
+        );
+      case "expr_stmt":
+        this.checkTryBodyNoEscapeExpr(s.expr);
+        return;
+      case "var_decl":
+        const varDeclInit = s.init;
+        if (varDeclInit !== undefined) this.checkTryBodyNoEscapeExpr(varDeclInit);
+        return;
+      case "var_destr_decl":
+        this.checkTryBodyNoEscapeExpr(s.init);
+        return;
+      case "block_stmt":
+        for (const st of s.stmts) this.checkTryFinallyNoEscapeStmt(st, context);
+        return;
+      case "if_stmt":
+        this.checkTryBodyNoEscapeExpr(s.cond);
+        this.checkTryFinallyNoEscapeStmt(s.thenBranch, context);
+        const ifElseBranch = s.elseBranch;
+        if (ifElseBranch !== undefined) this.checkTryFinallyNoEscapeStmt(ifElseBranch, context);
+        return;
+      case "while_stmt":
+        this.checkTryBodyNoEscapeExpr(s.cond);
+        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        return;
+      case "do_while_stmt":
+        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        this.checkTryBodyNoEscapeExpr(s.cond);
+        return;
+      case "for_stmt":
+        const forInit = s.init;
+        if (forInit !== undefined) {
+          if (forInit.kind === "for_init_decl") {
+            this.checkTryFinallyNoEscapeStmt(forInit.decl, context);
+          } else {
+            this.checkTryBodyNoEscapeExpr(forInit.expr);
+          }
+        }
+        const forCond = s.cond;
+        if (forCond !== undefined) this.checkTryBodyNoEscapeExpr(forCond);
+        const forUpdate = s.update;
+        if (forUpdate !== undefined) this.checkTryBodyNoEscapeExpr(forUpdate);
+        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        return;
+      case "for_of_stmt":
+        this.checkTryBodyNoEscapeExpr(s.source);
+        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        return;
+      case "switch_stmt":
+        this.checkTryBodyNoEscapeExpr(s.discriminant);
+        for (const c of s.cases) {
+          const switchCaseTest = c.test;
+          if (switchCaseTest !== undefined) this.checkTryBodyNoEscapeExpr(switchCaseTest);
+          for (const st of c.stmts) this.checkTryFinallyNoEscapeStmt(st, context);
+        }
+        return;
+      case "try_stmt":
+        for (const st of s.tryBlock.stmts) this.checkTryFinallyNoEscapeStmt(st, context);
+        const nestedCatchClause = s.catchClause;
+        if (nestedCatchClause !== undefined) {
+          for (const st of nestedCatchClause.body.stmts) {
+            this.checkTryFinallyNoEscapeStmt(st, context);
+          }
+        }
+        const nestedFinallyBlock = s.finallyBlock;
+        if (nestedFinallyBlock !== undefined) {
+          for (const st of nestedFinallyBlock.stmts) {
+            this.checkTryFinallyNoEscapeStmt(st, context);
+          }
+        }
+        return;
+      case "throw_stmt":
+        this.checkTryBodyNoEscapeExpr(s.value);
+        return;
+      case "empty_stmt":
+        return;
+    }
   }
 
   // Recursive visitor over the Topaz statement / expression tree. Descent stops
