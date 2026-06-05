@@ -10927,19 +10927,33 @@ class Emitter {
       const seen = new Set<string>();
       const valuesByField = new Map<string, Expr>();
       for (const prop of expr.props) {
-        let fname: string;
-        let valueExpr: Expr;
         if (prop.kind === "prop_kv") {
-          fname = prop.name;
-          valueExpr = prop.value;
+          const fname = prop.name;
+          const valueExpr = prop.value;
+          if (seen.has(fname)) {
+            throw new CodegenError({ pos: prop.pos }, `duplicate property '${fname}' in object literal`);
+          }
+          seen.add(fname);
+          if (!info.fields.has(fname)) {
+            throw new CodegenError({ pos: prop.pos }, `property '${fname}' does not exist on type ${typeIdent(expected)}`);
+          }
+          valuesByField.set(fname, valueExpr);
         } else if (prop.kind === "prop_shorthand") {
           // Phase 1.5-6 prep: `{ x }` desugars to `{ x: x }` — the property name
           // doubles as an identifier reference resolved in the current scope, so
           // the value expression is just an ident reading `x`. `{ x = default }`
           // (objectAssignmentInitializer) is destructuring-target-only syntax
           // and is rejected in convert.
-          fname = prop.name;
-          valueExpr = { kind: "ident", name: prop.name, pos: prop.pos, end: prop.end };
+          const fname = prop.name;
+          const valueExpr: Expr = { kind: "ident", name: prop.name, pos: prop.pos, end: prop.end };
+          if (seen.has(fname)) {
+            throw new CodegenError({ pos: prop.pos }, `duplicate property '${fname}' in object literal`);
+          }
+          seen.add(fname);
+          if (!info.fields.has(fname)) {
+            throw new CodegenError({ pos: prop.pos }, `property '${fname}' does not exist on type ${typeIdent(expected)}`);
+          }
+          valuesByField.set(fname, valueExpr);
         } else {
           // prop_spread — method shorthand / getter / setter are rejected in
           // convert; spread reaches here.
@@ -10948,14 +10962,6 @@ class Emitter {
             "object literal only supports `name: value` and `name` shorthand properties (no method shorthand, getter / setter, spread)",
           );
         }
-        if (seen.has(fname)) {
-          throw new CodegenError({ pos: prop.pos }, `duplicate property '${fname}' in object literal`);
-        }
-        seen.add(fname);
-        if (!info.fields.has(fname)) {
-          throw new CodegenError({ pos: prop.pos }, `property '${fname}' does not exist on type ${typeIdent(expected)}`);
-        }
-        valuesByField.set(fname, valueExpr);
       }
       // Phase 1.5-6 prep-optional-param: `f?: T` fields may be omitted; each
       // missing slot auto-fills with the undefined literal of the field's
