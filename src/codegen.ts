@@ -521,6 +521,17 @@ function hasDecimalOrExponent(text: string): boolean {
   return false;
 }
 
+function isNonDecimalIntegerLiteral(text: string): boolean {
+  if (text.length < 2 || text.charCodeAt(0) !== 48) return false;
+  const c1 = text.charCodeAt(1);
+  return c1 === 120 || c1 === 88 || c1 === 98 || c1 === 66;
+}
+
+function emitNumberLiteralText(text: string, value: number): string {
+  const cText = isNonDecimalIntegerLiteral(text) ? `${value}` : text;
+  return hasDecimalOrExponent(cText) ? cText : `${cText}.0`;
+}
+
 function isBuiltinName(name: string): boolean {
   // `undefined` lowers via emitUndefinedLiteral, never via a binding lookup.
   // `console` is a synthetic namespace handled directly in emitCall.
@@ -6121,8 +6132,7 @@ class Emitter {
   ): { type: TopazType; cExpr: string } | undefined {
     switch (expr.kind) {
       case "num_lit":
-        const t = expr.text;
-        return { type: T_NUMBER, cExpr: hasDecimalOrExponent(t) ? t : `${t}.0` };
+        return { type: T_NUMBER, cExpr: emitNumberLiteralText(expr.text, expr.value) };
       case "bool_lit":
         return { type: T_BOOLEAN, cExpr: expr.value ? "true" : "false" };
       case "prefix_op":
@@ -6132,8 +6142,7 @@ class Emitter {
         const operand = expr.operand;
         switch (operand.kind) {
           case "num_lit":
-            const operandText = operand.text;
-            const num = hasDecimalOrExponent(operandText) ? operandText : `${operandText}.0`;
+            const num = emitNumberLiteralText(operand.text, operand.value);
             return { type: T_NUMBER, cExpr: `${expr.op}${num}` };
           default:
             return undefined;
@@ -7079,8 +7088,7 @@ class Emitter {
 
   private emitExpression(expr: Expr): string {
     if (expr.kind === "num_lit") {
-      const t = expr.text;
-      return hasDecimalOrExponent(t) ? t : `${t}.0`;
+      return emitNumberLiteralText(expr.text, expr.value);
     }
     if (expr.kind === "bool_lit") return expr.value ? "true" : "false";
     if (expr.kind === "null_lit") {
