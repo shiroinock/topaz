@@ -11002,7 +11002,7 @@ class Emitter {
     // may differ from `expected`, so we must not override it).
     if (expr.kind === "call_expr" && !expr.optional) {
       const callee = this.unwrapParenExpr(expr.callee);
-      if (callee.kind === "arrow_expr" && !callee.returnType) {
+      if (callee.kind === "arrow_expr" && callee.returnType === undefined) {
         return this.emitContextualIIFE(expr, callee, expected);
       }
     }
