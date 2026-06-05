@@ -21,6 +21,7 @@ import {
   BinOpExpr,
   TernaryExpr,
   ArrayLitExpr,
+  ObjectPropKV,
   NewExpr,
   TemplateLitExpr,
   PrefixOpExpr,
@@ -10867,7 +10868,7 @@ class Emitter {
       // diverge from the ctor parameter order).
       if (expected.kind === "dunion") {
         const disc = expected.discriminator;
-        let kindProp: { value: Expr; pos: number; end: number } | undefined = undefined;
+        let kindProp: ObjectPropKV | undefined = undefined;
         for (const prop of expr.props) {
           if (prop.kind === "prop_kv" && prop.name === disc) {
             kindProp = prop;
