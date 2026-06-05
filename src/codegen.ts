@@ -10867,7 +10867,7 @@ class Emitter {
       // diverge from the ctor parameter order).
       if (expected.kind === "dunion") {
         const disc = expected.discriminator;
-        let kindProp: { value: Expr; pos: number; end: number } | undefined;
+        let kindProp: { value: Expr; pos: number; end: number } | undefined = undefined;
         for (const prop of expr.props) {
           if (prop.kind === "prop_kv" && prop.name === disc) {
             kindProp = prop;
@@ -10887,7 +10887,7 @@ class Emitter {
             `discriminator '${disc}' must be a plain string literal to select a ${typeIdent(expected)} variant`,
           );
         }
-        let matchedVariant: string | undefined;
+        let matchedVariant: string | undefined = undefined;
         for (const variantName of expected.variants) {
           const info = this.classes.get(variantName);
           if (info === undefined) continue;
