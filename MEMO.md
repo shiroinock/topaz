@@ -240,7 +240,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **2.3d try/finally cleanup dispatch design** — ADR `0319` で `normal` / `throw` / `return` / `break` / `continue` を明示的な cleanup reason として扱う dispatch model を固定。実装は no-catch `try/finally` return、`try/catch/finally` normal/throw、break/continue cleanup labels の順に分割する。
 - [x] **2.3d-1 return through no-catch try/finally** — no-catch `try/finally` の try body からの `return` を ADR `0320` の cleanup dispatch 経由で通す。finally body からの `return`、nested active finally return、`break` / `continue`、`try/catch/finally` は引き続き未対応として残す。
 - [x] **2.3d-2 try/catch/finally normal/throw dispatch** — `try { ... } catch (...) { ... } finally { ... }` の normal completion と throw propagation を ADR `0321` の cleanup dispatch に接続した。catch body の throw も finally 実行後に伝播する。`return` through catch+finally、finally body return、nested active finally return、`break` / `continue` cleanup labels は引き続き未対応として残す。
-- [ ] **2.3d-3 break/continue through cleanup labels** — loop/switch context に明示的な break/continue label target を持たせ、protected region からの `break` / `continue` を active cleanup context 経由で dispatch する。
+- [x] **2.3d-3 break/continue through cleanup labels** — loop/switch context に明示的な break/continue label target を持たせ、no-catch `try/finally` protected region からの `break` / `continue` を active cleanup context 経由で dispatch する。`continue` inside `switch` と `try/catch/finally` の break/continue、nested active finally break/continue は引き続き未対応として残す。ADR `0322`。
 - [ ] **2.4 async / regexp / bigint** — Promise / async-await(Fiber ベース実装)、regexp 統合、bigint 統合(必要時のみリンク)は、2.0〜2.3 の足場ができてから個別 ADR で設計する。
 
 ### Phase 3 以降: エコシステム
@@ -285,7 +285,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **try/finally cleanup dispatch design** — 2.3d として、ADR `0319` で cleanup reason / payload model と follow-up order を固定した。
 - [x] **try/finally return cleanup dispatch** — 2.3d-1 として、no-catch `try/finally` の try body `return` を cleanup dispatch 経由で解禁した。ADR `0320`。
 - [x] **try/catch/finally normal/throw dispatch** — 2.3d-2 として、return / break / continue より前に `try/catch/finally` の normal/throw path を通した。ADR `0321`。
-- [ ] **break/continue cleanup labels** — 2.3d-3 として、protected region からの `break` / `continue` を cleanup label target へ dispatch する。
+- [x] **break/continue cleanup labels** — 2.3d-3 として、no-catch `try/finally` protected region からの `break` / `continue` を cleanup label target へ dispatch する。ADR `0322`。
 
 ---
 

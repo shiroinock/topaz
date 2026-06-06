@@ -32,6 +32,7 @@ import {
   VarDestrDeclStmt,
   SwitchStmt,
   SwitchCase,
+  BreakStmt,
   ContinueStmt,
   ThrowStmt,
   TryStmt,
@@ -666,15 +667,22 @@ class ScopeFrame {
 
 class LoopCtxFrame {
   kind: string = "";
+  breakLabel: string | undefined = undefined;
+  continueLabel: string | undefined = undefined;
   prev: LoopCtxFrame | undefined = undefined;
 }
 
 type FinallyReturnContext = {
   cleanupLabel: string;
   reasonVar: string;
+  breakTargetVar: string;
+  continueTargetVar: string;
+  breakTargets: string[];
+  continueTargets: string[];
   returnVar: string | undefined;
-  returnType: TopazType;
+  returnType: TopazType | undefined;
   outerLiveTryFrames: number;
+  loopBoundary: LoopCtxFrame | undefined;
 };
 
 // Phase 1.5-6e-4: resolve a byte offset to 0-based { line, col } using the
@@ -4340,9 +4348,19 @@ class Emitter {
     return `((${fnTypeName}){ .fn = (${retCType}(*)(void *${paramCasts}))${wrapperName}, .env = NULL })`;
   }
 
-  private pushLoopCtx(kind: string): void {
+  private makeControlFlowLabel(prefix: string): string {
+    return `__topaz_${prefix}_${this.tmpCounter++}`;
+  }
+
+  private pushLoopCtx(
+    kind: string,
+    breakLabel: string | undefined,
+    continueLabel: string | undefined,
+  ): void {
     const next = new LoopCtxFrame();
     next.kind = kind;
+    next.breakLabel = breakLabel;
+    next.continueLabel = continueLabel;
     next.prev = this.loopCtx;
     this.loopCtx = next;
   }
@@ -5564,19 +5582,39 @@ class Emitter {
     if (stmt.kind === "while_stmt") {
       this.expectType(stmt.cond, T_BOOLEAN);
       const cond = this.emitExpression(stmt.cond);
-      this.pushLoopCtx("loop");
-      const body = this.emitStatementAsBlock(stmt.body, indent);
+      const breakLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "break")
+        ? this.makeControlFlowLabel("while_break")
+        : undefined;
+      const continueLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "continue")
+        ? this.makeControlFlowLabel("while_continue")
+        : undefined;
+      this.pushLoopCtx("loop", breakLabel, continueLabel);
+      const body =
+        continueLabel !== undefined
+          ? this.emitStatementAsBlockWithTrailingLabel(stmt.body, indent, continueLabel)
+          : this.emitStatementAsBlock(stmt.body, indent);
       this.popLoopCtx();
-      return `${pad}while (${cond}) ${body.trimStart()}`;
+      const breakTail = breakLabel !== undefined ? `\n${pad}${breakLabel}:;` : "";
+      return `${pad}while (${cond}) ${body.trimStart()}${breakTail}`;
     }
 
     if (stmt.kind === "do_while_stmt") {
       this.expectType(stmt.cond, T_BOOLEAN);
       const cond = this.emitExpression(stmt.cond);
-      this.pushLoopCtx("loop");
-      const body = this.emitStatementAsBlock(stmt.body, indent);
+      const breakLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "break")
+        ? this.makeControlFlowLabel("do_break")
+        : undefined;
+      const continueLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "continue")
+        ? this.makeControlFlowLabel("do_continue")
+        : undefined;
+      this.pushLoopCtx("loop", breakLabel, continueLabel);
+      const body =
+        continueLabel !== undefined
+          ? this.emitStatementAsBlockWithTrailingLabel(stmt.body, indent, continueLabel)
+          : this.emitStatementAsBlock(stmt.body, indent);
       this.popLoopCtx();
-      return `${pad}do ${body.trimStart()} while (${cond});`;
+      const breakTail = breakLabel !== undefined ? `\n${pad}${breakLabel}:;` : "";
+      return `${pad}do ${body.trimStart()} while (${cond});${breakTail}`;
     }
 
     if (stmt.kind === "for_stmt") {
@@ -5592,12 +5630,11 @@ class Emitter {
     }
 
     if (stmt.kind === "break_stmt") {
-      return `${pad}break;`;
+      return this.emitBreakStatement(stmt, indent);
     }
 
     if (stmt.kind === "continue_stmt") {
-      this.checkContinueAllowed(stmt);
-      return `${pad}continue;`;
+      return this.emitContinueStatement(stmt, indent);
     }
 
     if (stmt.kind === "block_stmt") {
@@ -5773,13 +5810,20 @@ class Emitter {
       stmt.tryBlock,
       "`try/catch/finally` try body",
       /* allowReturn */ false,
+      /* allowBreakContinue */ false,
     );
     this.checkTryFinallyNoEscape(
       catchClause.body,
       "`try/catch/finally` catch body",
       /* allowReturn */ false,
+      /* allowBreakContinue */ false,
     );
-    this.checkTryFinallyNoEscape(finallyBlock, "`finally` block", /* allowReturn */ false);
+    this.checkTryFinallyNoEscape(
+      finallyBlock,
+      "`finally` block",
+      /* allowReturn */ false,
+      /* allowBreakContinue */ false,
+    );
 
     const id = this.tmpCounter++;
     const tryFrame = `__topaz_try_${id}`;
@@ -5841,18 +5885,33 @@ class Emitter {
   ): string {
     const pad = "  ".repeat(indent);
     this.checkTryFinallyTryBodyNoEscape(stmt.tryBlock);
-    this.checkTryFinallyNoEscape(finallyBlock, "`finally` block", /* allowReturn */ false);
+    this.checkTryFinallyNoEscape(
+      finallyBlock,
+      "`finally` block",
+      /* allowReturn */ false,
+      /* allowBreakContinue */ false,
+    );
     const tryBlockHasReturn = this.blockHasReturn(stmt.tryBlock);
+    const tryBlockHasBreakContinue = this.blockHasBreakOrContinue(stmt.tryBlock);
+    const tryBlockHasCleanupExit = tryBlockHasReturn || tryBlockHasBreakContinue;
     if (this.finallyReturnContext !== undefined && tryBlockHasReturn) {
       throw new CodegenError(
         { pos: stmt.pos },
         "nested return through multiple finally cleanup contexts is unsupported",
       );
     }
+    if (this.finallyReturnContext !== undefined && tryBlockHasBreakContinue) {
+      throw new CodegenError(
+        { pos: stmt.pos },
+        "nested break/continue through multiple finally cleanup contexts is unsupported",
+      );
+    }
 
     const id = this.tmpCounter++;
     const frame = `__topaz_try_${id}`;
     const reason = `__topaz_finally_reason_${id}`;
+    const breakTarget = `__topaz_finally_break_target_${id}`;
+    const continueTarget = `__topaz_finally_continue_target_${id}`;
     const cleanupLabel = `__topaz_finally_cleanup_${id}`;
     const currentReturnTypeMaybe = this.currentReturnType;
     const returnVar =
@@ -5863,16 +5922,19 @@ class Emitter {
 
     this.scope.push();
     const prevFinallyReturn = this.finallyReturnContext;
-    this.finallyReturnContext =
-      currentReturnTypeMaybe !== undefined
-        ? {
-            cleanupLabel,
-            reasonVar: reason,
-            returnVar,
-            returnType: currentReturnTypeMaybe,
-            outerLiveTryFrames,
-          }
-        : undefined;
+    const cleanupContext: FinallyReturnContext = {
+      cleanupLabel,
+      reasonVar: reason,
+      breakTargetVar: breakTarget,
+      continueTargetVar: continueTarget,
+      breakTargets: [],
+      continueTargets: [],
+      returnVar,
+      returnType: currentReturnTypeMaybe,
+      outerLiveTryFrames,
+      loopBoundary: this.loopCtx,
+    };
+    this.finallyReturnContext = cleanupContext;
     this.liveTryFrames++;
     const tryBodyLines = stmt.tryBlock.stmts.map((s) => this.emitStatement(s, indent + 2));
     this.liveTryFrames--;
@@ -5889,6 +5951,12 @@ class Emitter {
     const lines: string[] = [];
     lines.push(`${pad}{`);
     lines.push(`${pad}  int ${reason} = 0;`);
+    if (cleanupContext.breakTargets.length > 0) {
+      lines.push(`${pad}  int ${breakTarget} = 0;`);
+    }
+    if (cleanupContext.continueTargets.length > 0) {
+      lines.push(`${pad}  int ${continueTarget} = 0;`);
+    }
     if (returnVar !== undefined && currentReturnTypeMaybe !== undefined) {
       lines.push(`${pad}  ${cTypeName(currentReturnTypeMaybe)} ${returnVar};`);
     }
@@ -5900,7 +5968,7 @@ class Emitter {
     lines.push(`${pad}  } else {`);
     lines.push(`${pad}    ${reason} = 2;`);
     lines.push(`${pad}  }`);
-    if (tryBlockHasReturn) lines.push(`${pad}${cleanupLabel}:`);
+    if (tryBlockHasCleanupExit) lines.push(`${pad}${cleanupLabel}:`);
     if (finallyBodyStr.length > 0) lines.push(finallyBodyStr);
     lines.push(`${pad}  if (${reason} == 1) {`);
     if (currentReturnTypeMaybe !== undefined && currentReturnTypeMaybe.kind === "void") {
@@ -5912,6 +5980,24 @@ class Emitter {
     lines.push(`${pad}  if (${reason} == 2) {`);
     lines.push(`${pad}    topaz_throw(topaz_throw_value);`);
     lines.push(`${pad}  }`);
+    if (cleanupContext.breakTargets.length > 0) {
+      lines.push(`${pad}  if (${reason} == 3) {`);
+      let breakIndex = 0;
+      while (breakIndex < cleanupContext.breakTargets.length) {
+        lines.push(`${pad}    if (${breakTarget} == ${breakIndex}) goto ${cleanupContext.breakTargets[breakIndex]};`);
+        breakIndex = breakIndex + 1;
+      }
+      lines.push(`${pad}  }`);
+    }
+    if (cleanupContext.continueTargets.length > 0) {
+      lines.push(`${pad}  if (${reason} == 4) {`);
+      let continueIndex = 0;
+      while (continueIndex < cleanupContext.continueTargets.length) {
+        lines.push(`${pad}    if (${continueTarget} == ${continueIndex}) goto ${cleanupContext.continueTargets[continueIndex]};`);
+        continueIndex = continueIndex + 1;
+      }
+      lines.push(`${pad}  }`);
+    }
     lines.push(`${pad}}`);
     return lines.join("\n");
   }
@@ -5930,16 +6016,22 @@ class Emitter {
   }
 
   private checkTryFinallyTryBodyNoEscape(block: BlockStmt): void {
-    this.checkTryFinallyNoEscape(block, "`try/finally` try body", /* allowReturn */ true);
+    this.checkTryFinallyNoEscape(
+      block,
+      "`try/finally` try body",
+      /* allowReturn */ true,
+      /* allowBreakContinue */ true,
+    );
   }
 
   private checkTryFinallyNoEscape(
     block: BlockStmt,
     context: string,
     allowReturn: boolean,
+    allowBreakContinue: boolean,
   ): void {
     for (const s of block.stmts) {
-      this.checkTryFinallyNoEscapeStmt(s, context, allowReturn);
+      this.checkTryFinallyNoEscapeStmt(s, context, allowReturn, allowBreakContinue);
     }
   }
 
@@ -5947,6 +6039,7 @@ class Emitter {
     s: Stmt,
     context: string,
     allowReturn: boolean,
+    allowBreakContinue: boolean,
   ): void {
     switch (s.kind) {
       case "return_stmt":
@@ -5960,11 +6053,13 @@ class Emitter {
           `\`return\` inside a ${context} is unsupported`,
         );
       case "break_stmt":
+        if (allowBreakContinue) return;
         throw new CodegenError(
           { pos: s.pos },
           `\`break\` inside a ${context} is unsupported (would skip finally cleanup)`,
         );
       case "continue_stmt":
+        if (allowBreakContinue) return;
         throw new CodegenError(
           { pos: s.pos },
           `\`continue\` inside a ${context} is unsupported (would skip finally cleanup)`,
@@ -5980,29 +6075,31 @@ class Emitter {
         this.checkTryBodyNoEscapeExpr(s.init);
         return;
       case "block_stmt":
-        for (const st of s.stmts) this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
+        for (const st of s.stmts) {
+          this.checkTryFinallyNoEscapeStmt(st, context, allowReturn, allowBreakContinue);
+        }
         return;
       case "if_stmt":
         this.checkTryBodyNoEscapeExpr(s.cond);
-        this.checkTryFinallyNoEscapeStmt(s.thenBranch, context, allowReturn);
+        this.checkTryFinallyNoEscapeStmt(s.thenBranch, context, allowReturn, allowBreakContinue);
         const ifElseBranch = s.elseBranch;
         if (ifElseBranch !== undefined) {
-          this.checkTryFinallyNoEscapeStmt(ifElseBranch, context, allowReturn);
+          this.checkTryFinallyNoEscapeStmt(ifElseBranch, context, allowReturn, allowBreakContinue);
         }
         return;
       case "while_stmt":
         this.checkTryBodyNoEscapeExpr(s.cond);
-        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn, allowBreakContinue);
         return;
       case "do_while_stmt":
-        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn, allowBreakContinue);
         this.checkTryBodyNoEscapeExpr(s.cond);
         return;
       case "for_stmt":
         const forInit = s.init;
         if (forInit !== undefined) {
           if (forInit.kind === "for_init_decl") {
-            this.checkTryFinallyNoEscapeStmt(forInit.decl, context, allowReturn);
+            this.checkTryFinallyNoEscapeStmt(forInit.decl, context, allowReturn, allowBreakContinue);
           } else {
             this.checkTryBodyNoEscapeExpr(forInit.expr);
           }
@@ -6011,11 +6108,11 @@ class Emitter {
         if (forCond !== undefined) this.checkTryBodyNoEscapeExpr(forCond);
         const forUpdate = s.update;
         if (forUpdate !== undefined) this.checkTryBodyNoEscapeExpr(forUpdate);
-        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn, allowBreakContinue);
         return;
       case "for_of_stmt":
         this.checkTryBodyNoEscapeExpr(s.source);
-        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn, allowBreakContinue);
         return;
       case "switch_stmt":
         this.checkTryBodyNoEscapeExpr(s.discriminant);
@@ -6023,24 +6120,29 @@ class Emitter {
           const switchCaseTest = c.test;
           if (switchCaseTest !== undefined) this.checkTryBodyNoEscapeExpr(switchCaseTest);
           for (const st of c.stmts) {
-            this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
+            this.checkTryFinallyNoEscapeStmt(st, context, allowReturn, allowBreakContinue);
           }
         }
         return;
       case "try_stmt":
         for (const st of s.tryBlock.stmts) {
-          this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
+          this.checkTryFinallyNoEscapeStmt(st, context, allowReturn, allowBreakContinue);
         }
         const nestedCatchClause = s.catchClause;
         if (nestedCatchClause !== undefined) {
           for (const st of nestedCatchClause.body.stmts) {
-            this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
+            this.checkTryFinallyNoEscapeStmt(st, context, allowReturn, allowBreakContinue);
           }
         }
         const nestedFinallyBlock = s.finallyBlock;
         if (nestedFinallyBlock !== undefined) {
           for (const st of nestedFinallyBlock.stmts) {
-            this.checkTryFinallyNoEscapeStmt(st, "`finally` block", /* allowReturn */ false);
+            this.checkTryFinallyNoEscapeStmt(
+              st,
+              "`finally` block",
+              /* allowReturn */ false,
+              /* allowBreakContinue */ false,
+            );
           }
         }
         return;
@@ -6057,6 +6159,133 @@ class Emitter {
       if (this.stmtHasReturn(s)) return true;
     }
     return false;
+  }
+
+  private switchNeedsCleanupBreakLabel(stmt: SwitchStmt): boolean {
+    for (const c of stmt.cases) {
+      for (const s of c.stmts) {
+        if (this.stmtNeedsCleanupLabelForCurrent(s, "break")) return true;
+      }
+    }
+    return false;
+  }
+
+  private stmtNeedsCleanupLabelForCurrent(
+    s: Stmt,
+    want: "break" | "continue",
+  ): boolean {
+    switch (s.kind) {
+      case "try_stmt":
+        if (
+          s.finallyBlock !== undefined &&
+          s.catchClause === undefined &&
+          this.blockHasTargetedExit(s.tryBlock, want, 0)
+        ) {
+          return true;
+        }
+        return false;
+      case "block_stmt":
+        for (const st of s.stmts) {
+          if (this.stmtNeedsCleanupLabelForCurrent(st, want)) return true;
+        }
+        return false;
+      case "if_stmt":
+        if (this.stmtNeedsCleanupLabelForCurrent(s.thenBranch, want)) return true;
+        return s.elseBranch !== undefined && this.stmtNeedsCleanupLabelForCurrent(s.elseBranch, want);
+      default:
+        return false;
+    }
+  }
+
+  private blockHasTargetedExit(
+    block: BlockStmt,
+    want: "break" | "continue",
+    depth: number,
+  ): boolean {
+    for (const s of block.stmts) {
+      if (this.stmtHasTargetedExit(s, want, depth)) return true;
+    }
+    return false;
+  }
+
+  private stmtHasTargetedExit(
+    s: Stmt,
+    want: "break" | "continue",
+    depth: number,
+  ): boolean {
+    switch (s.kind) {
+      case "break_stmt":
+        return want === "break" && depth === 0;
+      case "continue_stmt":
+        return want === "continue" && depth === 0;
+      case "block_stmt":
+        return this.blockHasTargetedExit(s, want, depth);
+      case "if_stmt":
+        if (this.stmtHasTargetedExit(s.thenBranch, want, depth)) return true;
+        return s.elseBranch !== undefined && this.stmtHasTargetedExit(s.elseBranch, want, depth);
+      case "while_stmt":
+      case "do_while_stmt":
+      case "for_stmt":
+      case "for_of_stmt":
+        return this.stmtHasTargetedExit(s.body, want, depth + 1);
+      case "switch_stmt":
+        if (want === "continue") return false;
+        for (const c of s.cases) {
+          for (const st of c.stmts) {
+            if (this.stmtHasTargetedExit(st, want, depth + 1)) return true;
+          }
+        }
+        return false;
+      case "try_stmt":
+        if (this.blockHasTargetedExit(s.tryBlock, want, depth)) return true;
+        if (s.catchClause !== undefined && this.blockHasTargetedExit(s.catchClause.body, want, depth)) return true;
+        return s.finallyBlock !== undefined && this.blockHasTargetedExit(s.finallyBlock, want, depth);
+      default:
+        return false;
+    }
+  }
+
+  private blockHasBreakOrContinue(block: BlockStmt): boolean {
+    for (const s of block.stmts) {
+      if (this.stmtHasBreakOrContinue(s)) return true;
+    }
+    return false;
+  }
+
+  private stmtHasBreakOrContinue(s: Stmt): boolean {
+    switch (s.kind) {
+      case "break_stmt":
+      case "continue_stmt":
+        return true;
+      case "block_stmt":
+        return this.blockHasBreakOrContinue(s);
+      case "if_stmt":
+        return (
+          this.stmtHasBreakOrContinue(s.thenBranch) ||
+          (s.elseBranch !== undefined && this.stmtHasBreakOrContinue(s.elseBranch))
+        );
+      case "while_stmt":
+      case "do_while_stmt":
+        return this.stmtHasBreakOrContinue(s.body);
+      case "for_stmt":
+        return this.stmtHasBreakOrContinue(s.body);
+      case "for_of_stmt":
+        return this.stmtHasBreakOrContinue(s.body);
+      case "switch_stmt":
+        for (const c of s.cases) {
+          for (const st of c.stmts) {
+            if (this.stmtHasBreakOrContinue(st)) return true;
+          }
+        }
+        return false;
+      case "try_stmt":
+        if (this.blockHasBreakOrContinue(s.tryBlock)) return true;
+        if (s.catchClause !== undefined && this.blockHasBreakOrContinue(s.catchClause.body)) return true;
+        if (s.finallyBlock !== undefined && this.blockHasBreakOrContinue(s.finallyBlock)) return true;
+        return false;
+      default:
+        return false;
+    }
   }
 
   private stmtHasReturn(s: Stmt): boolean {
@@ -6285,6 +6514,30 @@ class Emitter {
     const inner = this.emitStatement(stmt, indent + 1);
     this.scope.pop();
     return `${pad}{\n${inner}\n${pad}}`;
+  }
+
+  private emitStatementAsBlockWithTrailingLabel(
+    stmt: Stmt,
+    indent: number,
+    label: string,
+  ): string {
+    const pad = "  ".repeat(indent);
+    const innerPad = "  ".repeat(indent + 1);
+    if (stmt.kind === "block_stmt") {
+      this.scope.push();
+      const lines: string[] = [];
+      for (const s of stmt.stmts) {
+        lines.push(this.emitStatement(s, indent + 1));
+        this.applyCarryNarrowing(s);
+      }
+      lines.push(`${innerPad}${label}:;`);
+      this.scope.pop();
+      return `${pad}{\n${lines.join("\n")}\n${pad}}`;
+    }
+    this.scope.push();
+    const inner = this.emitStatement(stmt, indent + 1);
+    this.scope.pop();
+    return `${pad}{\n${inner}\n${innerPad}${label}:;\n${pad}}`;
   }
 
   // Phase 1.5-6 prep #13: pure check used during pass 1 to decide whether
@@ -6690,11 +6943,21 @@ class Emitter {
       incrStr = this.emitExpression(updateMaybe);
     }
 
-    this.pushLoopCtx("loop");
-    const bodyStr = this.emitStatementAsBlock(stmt.body, indent);
+    const breakLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "break")
+      ? this.makeControlFlowLabel("for_break")
+      : undefined;
+    const continueLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "continue")
+      ? this.makeControlFlowLabel("for_continue")
+      : undefined;
+    this.pushLoopCtx("loop", breakLabel, continueLabel);
+    const bodyStr =
+      continueLabel !== undefined
+        ? this.emitStatementAsBlockWithTrailingLabel(stmt.body, indent, continueLabel)
+        : this.emitStatementAsBlock(stmt.body, indent);
     this.popLoopCtx();
     this.scope.pop();
-    return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}`;
+    const breakTail = breakLabel !== undefined ? `\n${pad}${breakLabel}:;` : "";
+    return `${pad}for (${initStr}; ${condStr}; ${incrStr}) ${bodyStr.trimStart()}${breakTail}`;
   }
 
   // Phase 1.5-3.5b: for-of over Array<T>. Lower to an index-based C for-loop
@@ -6980,10 +7243,17 @@ class Emitter {
     // Outer Topaz scope holds the binding so the body's inferType / scope
     // lookups see the right element type. We also push a second frame for
     // the body itself so any narrowing inside the loop pops cleanly.
+    const breakLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "break")
+      ? this.makeControlFlowLabel("for_of_break")
+      : undefined;
+    const continueLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "continue")
+      ? this.makeControlFlowLabel("for_of_continue")
+      : undefined;
+
     this.scope.push();
     this.scope.declareBinding(bindName, elemType, isConst, stmtAnchor);
     this.scope.push();
-    this.pushLoopCtx("loop");
+    this.pushLoopCtx("loop", breakLabel, continueLabel);
 
     const stmtLines = this.emitForOfBodyLines(stmt.body, indent + 2);
 
@@ -6995,8 +7265,10 @@ class Emitter {
     );
     lines.push(`${innerPad}${elemCType} ${bindName} = ${arrTmp}->data[${idxTmp}];`);
     if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+    if (continueLabel !== undefined) lines.push(`${innerPad}${continueLabel}:;`);
     lines.push(`${pad}  }`);
     lines.push(`${pad}}`);
+    if (breakLabel !== undefined) lines.push(`${pad}${breakLabel}:;`);
 
     this.popLoopCtx();
     this.scope.pop();
@@ -7055,6 +7327,13 @@ class Emitter {
     const recvStr = this.emitExpression(recvExpr);
     const innerPad = "  ".repeat(indent + 2);
 
+    const breakLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "break")
+      ? this.makeControlFlowLabel("for_of_break")
+      : undefined;
+    const continueLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "continue")
+      ? this.makeControlFlowLabel("for_of_continue")
+      : undefined;
+
     this.scope.push();
     const bindingAnchor: { pos: number } = { pos: stmt.pos };
     if (bindSpec.kind === "single") {
@@ -7064,7 +7343,7 @@ class Emitter {
       this.scope.declareBinding(bindSpec.secondName, bindSpec.secondType, isConst, bindingAnchor);
     }
     this.scope.push();
-    this.pushLoopCtx("loop");
+    this.pushLoopCtx("loop", breakLabel, continueLabel);
 
     const stmtLines = this.emitForOfBodyLines(stmt.body, indent + 2);
 
@@ -7090,8 +7369,10 @@ class Emitter {
       );
     }
     if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+    if (continueLabel !== undefined) lines.push(`${innerPad}${continueLabel}:;`);
     lines.push(`${pad}  }`);
     lines.push(`${pad}}`);
+    if (breakLabel !== undefined) lines.push(`${pad}${breakLabel}:;`);
 
     this.popLoopCtx();
     this.scope.pop();
@@ -7136,11 +7417,18 @@ class Emitter {
     const recvStr = this.emitExpression(recvExpr);
     const innerPad = "  ".repeat(indent + 2);
 
+    const breakLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "break")
+      ? this.makeControlFlowLabel("for_of_break")
+      : undefined;
+    const continueLabel = this.stmtNeedsCleanupLabelForCurrent(stmt.body, "continue")
+      ? this.makeControlFlowLabel("for_of_continue")
+      : undefined;
+
     this.scope.push();
     const bindingAnchor: { pos: number } = { pos: stmt.pos };
     this.scope.declareBinding(bindName, bindType, isConst, bindingAnchor);
     this.scope.push();
-    this.pushLoopCtx("loop");
+    this.pushLoopCtx("loop", breakLabel, continueLabel);
 
     const stmtLines = this.emitForOfBodyLines(stmt.body, indent + 2);
 
@@ -7155,8 +7443,10 @@ class Emitter {
     lines.push(`${innerPad}if (${doneTmp}) break;`);
     lines.push(`${innerPad}${bindCType} ${bindName} = ${valTmp};`);
     if (stmtLines.length > 0) lines.push(stmtLines.join("\n"));
+    if (continueLabel !== undefined) lines.push(`${innerPad}${continueLabel}:;`);
     lines.push(`${pad}  }`);
     lines.push(`${pad}}`);
+    if (breakLabel !== undefined) lines.push(`${pad}${breakLabel}:;`);
 
     this.popLoopCtx();
     this.scope.pop();
@@ -7280,6 +7570,10 @@ class Emitter {
     const id = this.switchCounter++;
     const tmp = `__topaz_sw_${id}`;
     const discExpr = this.emitExpression(stmt.discriminant);
+    const switchNeedsBreakLabel = this.switchNeedsCleanupBreakLabel(stmt);
+    const breakLabel = switchNeedsBreakLabel
+      ? this.makeControlFlowLabel("switch_break")
+      : undefined;
 
     const out: string[] = [];
     out.push(`${pad}{`);
@@ -7291,7 +7585,7 @@ class Emitter {
     // case body must be rejected (it would `continue` the synthetic loop). Push
     // a "switch" context around the case-body emission so checkContinueAllowed
     // sees it on top.
-    this.pushLoopCtx("switch");
+    this.pushLoopCtx("switch", breakLabel, undefined);
     const cmp = (rhs: string): string =>
       discType.kind === "string"
         ? `topaz_string_eq(${tmp}, ${rhs})`
@@ -7340,10 +7634,81 @@ class Emitter {
 
     out.push(`${pad}  } while (0);`);
     out.push(`${pad}}`);
+    if (breakLabel !== undefined) out.push(`${pad}${breakLabel}:;`);
     return out.join("\n");
   }
 
-  private checkContinueAllowed(stmt: ContinueStmt): void {
+  private registerCleanupTarget(targets: string[], label: string): number {
+    let index = 0;
+    while (index < targets.length) {
+      const existing = targets[index];
+      if (existing === label) return index;
+      index = index + 1;
+    }
+    targets.push(label);
+    return targets.length - 1;
+  }
+
+  private targetEscapesCleanupContext(
+    context: FinallyReturnContext,
+    target: LoopCtxFrame,
+  ): boolean {
+    let frame = context.loopBoundary;
+    while (frame !== undefined) {
+      if (frame === target) return true;
+      frame = frame.prev;
+    }
+    return false;
+  }
+
+  private checkBreakAllowed(stmt: BreakStmt): LoopCtxFrame {
+    const stmtAnchor: { pos: number } = { pos: stmt.pos };
+    const top = this.loopCtx;
+    if (top === undefined) {
+      throw new CodegenError(stmtAnchor, "`break` outside of a loop or switch");
+    }
+    return top;
+  }
+
+  private emitBreakStatement(stmt: BreakStmt, indent: number): string {
+    const pad = "  ".repeat(indent);
+    const target = this.checkBreakAllowed(stmt);
+    const finallyContextMaybe = this.finallyReturnContext;
+    if (
+      finallyContextMaybe === undefined ||
+      !this.targetEscapesCleanupContext(finallyContextMaybe, target)
+    ) {
+      return `${pad}break;`;
+    }
+    const breakLabel = target.breakLabel;
+    if (breakLabel === undefined) {
+      throwInternalCodegenError("break cleanup dispatch target is missing a label");
+    }
+    const targetIndex = this.registerCleanupTarget(finallyContextMaybe.breakTargets, breakLabel);
+    const popCount = this.liveTryFrames - finallyContextMaybe.outerLiveTryFrames;
+    return `${pad}{ ${finallyContextMaybe.reasonVar} = 3; ${finallyContextMaybe.breakTargetVar} = ${targetIndex}; ${this.popFrameCount(popCount)}goto ${finallyContextMaybe.cleanupLabel}; }`;
+  }
+
+  private emitContinueStatement(stmt: ContinueStmt, indent: number): string {
+    const pad = "  ".repeat(indent);
+    const target = this.checkContinueAllowed(stmt);
+    const finallyContextMaybe = this.finallyReturnContext;
+    if (
+      finallyContextMaybe === undefined ||
+      !this.targetEscapesCleanupContext(finallyContextMaybe, target)
+    ) {
+      return `${pad}continue;`;
+    }
+    const continueLabel = target.continueLabel;
+    if (continueLabel === undefined) {
+      throwInternalCodegenError("continue cleanup dispatch target is missing a label");
+    }
+    const targetIndex = this.registerCleanupTarget(finallyContextMaybe.continueTargets, continueLabel);
+    const popCount = this.liveTryFrames - finallyContextMaybe.outerLiveTryFrames;
+    return `${pad}{ ${finallyContextMaybe.reasonVar} = 4; ${finallyContextMaybe.continueTargetVar} = ${targetIndex}; ${this.popFrameCount(popCount)}goto ${finallyContextMaybe.cleanupLabel}; }`;
+  }
+
+  private checkContinueAllowed(stmt: ContinueStmt): LoopCtxFrame {
     // Phase 1.5-6e-2: Topaz nodes have no `.parent`, so consult the instance
     // `loopCtx` stack maintained while emitting. The top frame is the nearest
     // enclosing loop / switch (matching the old parent walk's nearest-first
@@ -7359,6 +7724,7 @@ class Emitter {
         "`continue` inside `switch` is unsupported (switch lowers to do/while(0))",
       );
     }
+    return top;
   }
 
   private emitExpression(expr: Expr): string {
