@@ -223,6 +223,9 @@ run_fail_case bigint_non_decimal_fail examples/bigint_non_decimal_fail.ts "only 
 run_fail_case bigint_array_deferred_fail examples/bigint_array_deferred_fail.ts "no Array monomorph for element type topaz_bigint"
 run_fail_case bigint_map_deferred_fail examples/bigint_map_deferred_fail.ts "no Map monomorph for key=topaz_string, value=topaz_bigint"
 run_fail_case bigint_set_deferred_fail examples/bigint_set_deferred_fail.ts "no Set monomorph for element type topaz_bigint"
+run_fail_case regexp_literal_deferred_fail examples/regexp_literal_deferred_fail.ts "expected expression"
+run_fail_case regexp_constructor_deferred_fail examples/regexp_constructor_deferred_fail.ts "\`new RegExp\` is unsupported"
+run_fail_case regexp_string_test_deferred_fail examples/regexp_string_test_deferred_fail.ts "unsupported method '.test' on topaz_string"
 
 run_case for_of_array $'15\n-7\n0\n2\n9\n3\nalpha\nbeta\ngamma\n102\n101\n103\nsquare\ncircle\n25\ntrue\n4'
 
