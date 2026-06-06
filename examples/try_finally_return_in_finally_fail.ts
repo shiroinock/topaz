@@ -2,7 +2,7 @@ function f(): number {
   try {
     return 1;
   } finally {
-    console.log("cleanup");
+    return 2;
   }
 }
 

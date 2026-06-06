@@ -668,6 +668,14 @@ class LoopCtxFrame {
   prev: LoopCtxFrame | undefined = undefined;
 }
 
+type FinallyReturnContext = {
+  cleanupLabel: string;
+  reasonVar: string;
+  returnVar: string | undefined;
+  returnType: TopazType;
+  outerLiveTryFrames: number;
+};
+
 // Phase 1.5-6e-4: resolve a byte offset to 0-based { line, col } using the
 // module's lineStarts table (the byte offset of each line start). Mirrors
 // ts.SourceFile.getLineAndCharacterOfPosition so `file:line:col` diagnostics
@@ -1205,6 +1213,7 @@ class Emitter {
   // balanced. Reset to 0 at every function boundary (nested fn/arrow returns
   // don't cross the outer try).
   private liveTryFrames: number = 0;
+  private finallyReturnContext: FinallyReturnContext | undefined = undefined;
   private switchCounter: number = 0;
   private tmpCounter: number = 0;
   // Phase 1.4c-1a: each Array<class>/Array<interface> referenced in user code
@@ -3453,8 +3462,10 @@ class Emitter {
     this.currentClass = info.name;
     const prevRet = this.currentReturnType;
     const prevLive = this.liveTryFrames;
+    const prevFinallyReturn = this.finallyReturnContext;
     this.currentReturnType = method.returnType;
     this.liveTryFrames = 0;
+    this.finallyReturnContext = undefined;
     this.scope.push();
     const methodAnchor: { pos: number } = { pos: method.decl.pos };
     for (const p of method.params) {
@@ -3473,6 +3484,7 @@ class Emitter {
     this.currentClass = undefined;
     this.currentReturnType = prevRet;
     this.liveTryFrames = prevLive;
+    this.finallyReturnContext = prevFinallyReturn;
     return rendered;
   }
 
@@ -3905,8 +3917,10 @@ class Emitter {
     const sig = this.functionSigForDecl(fn);
     const prevRet = this.currentReturnType;
     const prevLive = this.liveTryFrames;
+    const prevFinallyReturn = this.finallyReturnContext;
     this.currentReturnType = sig.returnType;
     this.liveTryFrames = 0;
+    this.finallyReturnContext = undefined;
     this.scope.push();
     const fnAnchor: { pos: number } = { pos: fn.pos };
     // Phase 1.5-6 prep-optional-param: declare each param using the lifted
@@ -3921,6 +3935,7 @@ class Emitter {
     this.scope.pop();
     this.currentReturnType = prevRet;
     this.liveTryFrames = prevLive;
+    this.finallyReturnContext = prevFinallyReturn;
     return rendered;
   }
 
@@ -3941,8 +3956,10 @@ class Emitter {
     this.typeParamScope = mono.subs;
     const prevRet = this.currentReturnType;
     const prevLive = this.liveTryFrames;
+    const prevFinallyReturn = this.finallyReturnContext;
     this.currentReturnType = mono.sig.returnType;
     this.liveTryFrames = 0;
+    this.finallyReturnContext = undefined;
     this.scope.push();
     const monoAnchor: { pos: number } = { pos: mono.decl.pos };
     for (const p of mono.sig.params) {
@@ -3953,6 +3970,7 @@ class Emitter {
     this.scope.pop();
     this.currentReturnType = prevRet;
     this.liveTryFrames = prevLive;
+    this.finallyReturnContext = prevFinallyReturn;
     this.typeParamScope = prevScope;
     return rendered;
   }
@@ -4471,12 +4489,14 @@ class Emitter {
     const prevCaptureContext = this.captureContext;
     const prevRet = this.currentReturnType;
     const prevLive = this.liveTryFrames;
+    const prevFinallyReturn = this.finallyReturnContext;
     // Phase 1.5-6e-2: an arrow is a function boundary — `continue` inside the
     // body must not see the outer loop context. Save / clear / restore.
     const prevLoopCtx = this.resetLoopCtx();
     this.captureContext = { envType: envName, envIsEmpty, captures };
     this.currentReturnType = returnType;
     this.liveTryFrames = 0;
+    this.finallyReturnContext = undefined;
     // Barrier must come BEFORE the scope.push so that the new (inner) frame
     // sits at the barrier floor and lookups within the body can still see
     // it. Outer frames remain hidden behind the barrier.
@@ -4508,6 +4528,7 @@ class Emitter {
     this.captureContext = prevCaptureContext;
     this.currentReturnType = prevRet;
     this.liveTryFrames = prevLive;
+    this.finallyReturnContext = prevFinallyReturn;
     this.restoreLoopCtx(prevLoopCtx);
 
     // Build the call-site compound literal. Allocate the env on the arena
@@ -5470,6 +5491,11 @@ class Emitter {
             `\`return;\` is only allowed in a void-returning function (current return type is ${typeIdent(currentReturnType)})`,
           );
         }
+        const finallyReturnContextMaybe = this.finallyReturnContext;
+        if (finallyReturnContextMaybe !== undefined) {
+          const popCount = this.liveTryFrames - finallyReturnContextMaybe.outerLiveTryFrames;
+          return `${pad}{ ${finallyReturnContextMaybe.reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${finallyReturnContextMaybe.cleanupLabel}; }`;
+        }
         if (this.liveTryFrames > 0) {
           return `${pad}{ ${this.popFrames()}return; }`;
         }
@@ -5483,6 +5509,15 @@ class Emitter {
       }
       const returnValue = returnValueMaybe;
       const retExpr = this.emitWithExpected(returnValue, currentReturnType);
+      const finallyReturnContextMaybe = this.finallyReturnContext;
+      if (finallyReturnContextMaybe !== undefined) {
+        const returnVarMaybe = finallyReturnContextMaybe.returnVar;
+        if (returnVarMaybe === undefined) {
+          throwInternalCodegenError("missing try/finally return temporary for non-void return");
+        }
+        const popCount = this.liveTryFrames - finallyReturnContextMaybe.outerLiveTryFrames;
+        return `${pad}{ ${returnVarMaybe} = ${retExpr}; ${finallyReturnContextMaybe.reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${finallyReturnContextMaybe.cleanupLabel}; }`;
+      }
       if (this.liveTryFrames > 0) {
         // Phase 1.5-X: evaluate the value into a temp while the frame is still
         // live (so a throw inside the expression is still caught here), then
@@ -5610,7 +5645,11 @@ class Emitter {
   // Phase 1.5-X: a run of `topaz_try_pop()` calls (one per live try frame)
   // prepended to a `return` that escapes one or more try bodies.
   private popFrames(): string {
-    return "topaz_try_pop(); ".repeat(this.liveTryFrames);
+    return this.popFrameCount(this.liveTryFrames);
+  }
+
+  private popFrameCount(count: number): string {
+    return "topaz_try_pop(); ".repeat(count);
   }
 
   private emitTryStatement(stmt: TryStmt, indent: number): string {
@@ -5707,35 +5746,76 @@ class Emitter {
     indent: number,
   ): string {
     const pad = "  ".repeat(indent);
-    this.checkTryFinallyNoEscape(stmt.tryBlock, "`try/finally` try body");
-    this.checkTryFinallyNoEscape(finallyBlock, "`finally` block");
+    this.checkTryFinallyTryBodyNoEscape(stmt.tryBlock);
+    this.checkTryFinallyNoEscape(finallyBlock, "`finally` block", /* allowReturn */ false);
+    const tryBlockHasReturn = this.blockHasReturn(stmt.tryBlock);
+    if (this.finallyReturnContext !== undefined && tryBlockHasReturn) {
+      throw new CodegenError(
+        { pos: stmt.pos },
+        "nested return through multiple finally cleanup contexts is unsupported",
+      );
+    }
 
     const id = this.tmpCounter++;
     const frame = `__topaz_try_${id}`;
+    const reason = `__topaz_finally_reason_${id}`;
+    const cleanupLabel = `__topaz_finally_cleanup_${id}`;
+    const currentReturnTypeMaybe = this.currentReturnType;
+    const returnVar =
+      currentReturnTypeMaybe !== undefined && currentReturnTypeMaybe.kind !== "void"
+        ? `__topaz_finally_ret_${id}`
+        : undefined;
+    const outerLiveTryFrames = this.liveTryFrames;
 
     this.scope.push();
+    const prevFinallyReturn = this.finallyReturnContext;
+    this.finallyReturnContext =
+      currentReturnTypeMaybe !== undefined
+        ? {
+            cleanupLabel,
+            reasonVar: reason,
+            returnVar,
+            returnType: currentReturnTypeMaybe,
+            outerLiveTryFrames,
+          }
+        : undefined;
     this.liveTryFrames++;
     const tryBodyLines = stmt.tryBlock.stmts.map((s) => this.emitStatement(s, indent + 2));
     this.liveTryFrames--;
+    this.finallyReturnContext = prevFinallyReturn;
     this.scope.pop();
 
     this.scope.push();
     const finallyBodyLines = finallyBlock.stmts.map((s) =>
-      this.emitStatement(s, indent + 2),
+      this.emitStatement(s, indent + 1),
     );
     this.scope.pop();
     const finallyBodyStr = finallyBodyLines.join("\n");
 
     const lines: string[] = [];
     lines.push(`${pad}{`);
+    lines.push(`${pad}  int ${reason} = 0;`);
+    if (returnVar !== undefined && currentReturnTypeMaybe !== undefined) {
+      lines.push(`${pad}  ${cTypeName(currentReturnTypeMaybe)} ${returnVar};`);
+    }
     lines.push(`${pad}  topaz_try_frame ${frame};`);
     lines.push(`${pad}  topaz_try_push(&${frame});`);
     lines.push(`${pad}  if (setjmp(${frame}.env) == 0) {`);
     if (tryBodyLines.length > 0) lines.push(tryBodyLines.join("\n"));
     lines.push(`${pad}    topaz_try_pop();`);
-    if (finallyBodyStr.length > 0) lines.push(finallyBodyStr);
     lines.push(`${pad}  } else {`);
+    lines.push(`${pad}    ${reason} = 2;`);
+    lines.push(`${pad}  }`);
+    if (tryBlockHasReturn) lines.push(`${pad}${cleanupLabel}:`);
     if (finallyBodyStr.length > 0) lines.push(finallyBodyStr);
+    lines.push(`${pad}  if (${reason} == 1) {`);
+    if (currentReturnTypeMaybe !== undefined && currentReturnTypeMaybe.kind === "void") {
+      lines.push(`${pad}    ${this.popFrameCount(outerLiveTryFrames)}return;`);
+    } else if (returnVar !== undefined) {
+      lines.push(`${pad}    ${this.popFrameCount(outerLiveTryFrames)}return ${returnVar};`);
+    }
+    lines.push(`${pad}  }`);
+    lines.push(`${pad}  if (${reason} == 2) {`);
     lines.push(`${pad}    topaz_throw(topaz_throw_value);`);
     lines.push(`${pad}  }`);
     lines.push(`${pad}}`);
@@ -5755,16 +5835,35 @@ class Emitter {
     for (const s of block.stmts) this.checkTryBodyNoEscapeStmt(s);
   }
 
-  private checkTryFinallyNoEscape(block: BlockStmt, context: string): void {
-    for (const s of block.stmts) this.checkTryFinallyNoEscapeStmt(s, context);
+  private checkTryFinallyTryBodyNoEscape(block: BlockStmt): void {
+    this.checkTryFinallyNoEscape(block, "`try/finally` try body", /* allowReturn */ true);
   }
 
-  private checkTryFinallyNoEscapeStmt(s: Stmt, context: string): void {
+  private checkTryFinallyNoEscape(
+    block: BlockStmt,
+    context: string,
+    allowReturn: boolean,
+  ): void {
+    for (const s of block.stmts) {
+      this.checkTryFinallyNoEscapeStmt(s, context, allowReturn);
+    }
+  }
+
+  private checkTryFinallyNoEscapeStmt(
+    s: Stmt,
+    context: string,
+    allowReturn: boolean,
+  ): void {
     switch (s.kind) {
       case "return_stmt":
+        if (allowReturn) {
+          const returnValue = s.value;
+          if (returnValue !== undefined) this.checkTryBodyNoEscapeExpr(returnValue);
+          return;
+        }
         throw new CodegenError(
           { pos: s.pos },
-          `\`return\` inside a ${context} is unsupported (return through finally needs cleanup dispatch)`,
+          `\`return\` inside a ${context} is unsupported`,
         );
       case "break_stmt":
         throw new CodegenError(
@@ -5787,27 +5886,29 @@ class Emitter {
         this.checkTryBodyNoEscapeExpr(s.init);
         return;
       case "block_stmt":
-        for (const st of s.stmts) this.checkTryFinallyNoEscapeStmt(st, context);
+        for (const st of s.stmts) this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
         return;
       case "if_stmt":
         this.checkTryBodyNoEscapeExpr(s.cond);
-        this.checkTryFinallyNoEscapeStmt(s.thenBranch, context);
+        this.checkTryFinallyNoEscapeStmt(s.thenBranch, context, allowReturn);
         const ifElseBranch = s.elseBranch;
-        if (ifElseBranch !== undefined) this.checkTryFinallyNoEscapeStmt(ifElseBranch, context);
+        if (ifElseBranch !== undefined) {
+          this.checkTryFinallyNoEscapeStmt(ifElseBranch, context, allowReturn);
+        }
         return;
       case "while_stmt":
         this.checkTryBodyNoEscapeExpr(s.cond);
-        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
         return;
       case "do_while_stmt":
-        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
         this.checkTryBodyNoEscapeExpr(s.cond);
         return;
       case "for_stmt":
         const forInit = s.init;
         if (forInit !== undefined) {
           if (forInit.kind === "for_init_decl") {
-            this.checkTryFinallyNoEscapeStmt(forInit.decl, context);
+            this.checkTryFinallyNoEscapeStmt(forInit.decl, context, allowReturn);
           } else {
             this.checkTryBodyNoEscapeExpr(forInit.expr);
           }
@@ -5816,32 +5917,36 @@ class Emitter {
         if (forCond !== undefined) this.checkTryBodyNoEscapeExpr(forCond);
         const forUpdate = s.update;
         if (forUpdate !== undefined) this.checkTryBodyNoEscapeExpr(forUpdate);
-        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
         return;
       case "for_of_stmt":
         this.checkTryBodyNoEscapeExpr(s.source);
-        this.checkTryFinallyNoEscapeStmt(s.body, context);
+        this.checkTryFinallyNoEscapeStmt(s.body, context, allowReturn);
         return;
       case "switch_stmt":
         this.checkTryBodyNoEscapeExpr(s.discriminant);
         for (const c of s.cases) {
           const switchCaseTest = c.test;
           if (switchCaseTest !== undefined) this.checkTryBodyNoEscapeExpr(switchCaseTest);
-          for (const st of c.stmts) this.checkTryFinallyNoEscapeStmt(st, context);
+          for (const st of c.stmts) {
+            this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
+          }
         }
         return;
       case "try_stmt":
-        for (const st of s.tryBlock.stmts) this.checkTryFinallyNoEscapeStmt(st, context);
+        for (const st of s.tryBlock.stmts) {
+          this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
+        }
         const nestedCatchClause = s.catchClause;
         if (nestedCatchClause !== undefined) {
           for (const st of nestedCatchClause.body.stmts) {
-            this.checkTryFinallyNoEscapeStmt(st, context);
+            this.checkTryFinallyNoEscapeStmt(st, context, allowReturn);
           }
         }
         const nestedFinallyBlock = s.finallyBlock;
         if (nestedFinallyBlock !== undefined) {
           for (const st of nestedFinallyBlock.stmts) {
-            this.checkTryFinallyNoEscapeStmt(st, context);
+            this.checkTryFinallyNoEscapeStmt(st, "`finally` block", /* allowReturn */ false);
           }
         }
         return;
@@ -5850,6 +5955,48 @@ class Emitter {
         return;
       case "empty_stmt":
         return;
+    }
+  }
+
+  private blockHasReturn(block: BlockStmt): boolean {
+    for (const s of block.stmts) {
+      if (this.stmtHasReturn(s)) return true;
+    }
+    return false;
+  }
+
+  private stmtHasReturn(s: Stmt): boolean {
+    switch (s.kind) {
+      case "return_stmt":
+        return true;
+      case "block_stmt":
+        return this.blockHasReturn(s);
+      case "if_stmt":
+        return (
+          this.stmtHasReturn(s.thenBranch) ||
+          (s.elseBranch !== undefined && this.stmtHasReturn(s.elseBranch))
+        );
+      case "while_stmt":
+      case "do_while_stmt":
+        return this.stmtHasReturn(s.body);
+      case "for_stmt":
+        return this.stmtHasReturn(s.body);
+      case "for_of_stmt":
+        return this.stmtHasReturn(s.body);
+      case "switch_stmt":
+        for (const c of s.cases) {
+          for (const st of c.stmts) {
+            if (this.stmtHasReturn(st)) return true;
+          }
+        }
+        return false;
+      case "try_stmt":
+        if (this.blockHasReturn(s.tryBlock)) return true;
+        if (s.catchClause !== undefined && this.blockHasReturn(s.catchClause.body)) return true;
+        if (s.finallyBlock !== undefined && this.blockHasReturn(s.finallyBlock)) return true;
+        return false;
+      default:
+        return false;
     }
   }
 
