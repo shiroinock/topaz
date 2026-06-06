@@ -237,7 +237,10 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **2.3a post-selfhost backlog audit** — self-host probe は `node dist/cli.js src/cli.ts --emit-c-only -o build/selfhost_cli_probe` で通っており、緊急 blocker ではなく再現可能な実用 gap 順に進める。no-catch `try/finally` は ADR `0292` で着地済みのため、残りを 2.3b〜d に分割。決定ログは `docs/adr/0316-post-selfhost-backlog-audit.md`。
 - [x] **2.3b generic function Array<T> monomorph sample** — flat `Array<T>` は既存 coverage で通っていたが、generic 関数が `Array<Array<T>>` を返す経路で nested array element tag / monomorph が欠けていたため、array element array だけを解禁。`Array<Array<number>>` と `Array<Array<Cell>>` の回帰は `examples/array_nested.ts` / ADR `0317`。
 - [x] **2.3c generic method/interface design** — generic method / generic interface は ADR `0318` で staged に分割。2.3c-1 は direct class receiver の generic method monomorph、2.3c-2 は generic interface frontend / realized interface shape、2.3c-3 は realized interface vtable integration。generic interface methods と generic classes implementing interfaces は別設計へ残す。
-- [ ] **2.3d try/finally cleanup dispatch design** — `try/catch/finally` と try body 内 `return` / `break` / `continue` を `finally` cleanup へ流す dispatch lowering を設計専用フェーズで固定する。
+- [x] **2.3d try/finally cleanup dispatch design** — ADR `0319` で `normal` / `throw` / `return` / `break` / `continue` を明示的な cleanup reason として扱う dispatch model を固定。実装は no-catch `try/finally` return、`try/catch/finally` normal/throw、break/continue cleanup labels の順に分割する。
+- [ ] **2.3d-1 return through no-catch try/finally** — no-catch `try/finally` の try body からの `return` を cleanup dispatch 経由で通す。finally body からの `return`、`break` / `continue`、`try/catch/finally` は引き続き未対応として残す。
+- [ ] **2.3d-2 try/catch/finally normal/throw dispatch** — `try { ... } catch (...) { ... } finally { ... }` の normal completion と throw propagation を cleanup dispatch に接続する。catch body の throw も finally 実行後に伝播させる。
+- [ ] **2.3d-3 break/continue through cleanup labels** — loop/switch context に明示的な break/continue label target を持たせ、protected region からの `break` / `continue` を active cleanup context 経由で dispatch する。
 - [ ] **2.4 async / regexp / bigint** — Promise / async-await(Fiber ベース実装)、regexp 統合、bigint 統合(必要時のみリンク)は、2.0〜2.3 の足場ができてから個別 ADR で設計する。
 
 ### Phase 3 以降: エコシステム
@@ -279,7 +282,10 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **generic backlog audit** — Phase 2.3 を ADR `0316` で分割し、generic method / generic interface は 2.3c の設計専用フェーズへ降ろした。
 - [x] **generic function Array<T> monomorph sample** — 2.3b として、flat `Array<T>` は既存 coverage、missing path は generic 関数が返す `Array<Array<T>>` と確認。array element array の monomorph 登録を追加し、`examples/array_nested.ts` で scalar / class inner arrays を固定。
 - [x] **generic method/interface design** — 2.3c として、generic method / generic interface を direct generic methods、generic interface frontend / realization、realized interface vtables に分割し、generic interface methods と generic classes implementing interfaces は別設計へ残す。
-- [ ] **try/finally cleanup dispatch design** — 2.3d として、`try/catch/finally` と try body 内 `return` / `break` / `continue` の cleanup dispatch を設計する。no-catch `try/finally` は ADR `0292` で実装済み。
+- [x] **try/finally cleanup dispatch design** — 2.3d として、ADR `0319` で cleanup reason / payload model と follow-up order を固定した。
+- [ ] **try/finally return cleanup dispatch** — 2.3d-1 として、no-catch `try/finally` の try body `return` を cleanup dispatch 経由で解禁する。
+- [ ] **try/catch/finally normal/throw dispatch** — 2.3d-2 として、return / break / continue より前に `try/catch/finally` の normal/throw path を通す。
+- [ ] **break/continue cleanup labels** — 2.3d-3 として、protected region からの `break` / `continue` を cleanup label target へ dispatch する。
 
 ---
 
