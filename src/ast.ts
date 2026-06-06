@@ -125,6 +125,7 @@ export type TypeUnknown = {
 export type Expr =
   | IdentExpr
   | NumLitExpr
+  | BigIntLitExpr
   | StrLitExpr
   | BoolLitExpr
   | NullLitExpr
@@ -152,6 +153,7 @@ export type Expr =
 
 export type IdentExpr = { kind: "ident"; name: string; pos: number; end: number };
 export type NumLitExpr = { kind: "num_lit"; text: string; value: number; pos: number; end: number };
+export type BigIntLitExpr = { kind: "bigint_lit"; text: string; pos: number; end: number };
 export type StrLitExpr = { kind: "str_lit"; value: string; pos: number; end: number };
 export type BoolLitExpr = { kind: "bool_lit"; value: boolean; pos: number; end: number };
 export type NullLitExpr = { kind: "null_lit"; pos: number; end: number };

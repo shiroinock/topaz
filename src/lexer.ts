@@ -15,6 +15,7 @@
 
 export type IdentToken = { kind: "ident"; text: string; pos: number; end: number };
 export type NumberToken = { kind: "number"; text: string; pos: number; end: number };
+export type BigIntToken = { kind: "bigint"; text: string; pos: number; end: number };
 export type StringToken = { kind: "string"; value: string; pos: number; end: number };
 export type TemplateHeadToken = { kind: "template_head"; value: string; pos: number; end: number };
 export type TemplateMiddleToken = { kind: "template_middle"; value: string; pos: number; end: number };
@@ -28,6 +29,7 @@ export type EofToken = { kind: "eof"; pos: number; end: number };
 export type Token =
   | IdentToken
   | NumberToken
+  | BigIntToken
   | StringToken
   | TemplateHeadToken
   | TemplateMiddleToken
@@ -89,6 +91,7 @@ const CHAR_A_LO: number = 97;
 const CHAR_B_LO: number = 98;
 const CHAR_F_LO: number = 102;
 const CHAR_N_LO: number = 110;
+const CHAR_O_LO: number = 111;
 const CHAR_R_LO: number = 114;
 const CHAR_T_LO: number = 116;
 const CHAR_X_LO: number = 120;
@@ -296,6 +299,9 @@ export class Lexer {
       if (this.pos === hexStart) {
         throw this.error(start, "invalid hex literal");
       }
+      if (this.peek(0) === CHAR_N_LO) {
+        throw this.error(start, "only decimal bigint literals are supported");
+      }
       const text: string = this.source.slice(start, this.pos);
       this.tokens.push({ kind: "number", text: text, pos: start, end: this.pos });
       return;
@@ -311,12 +317,37 @@ export class Lexer {
       if (this.pos === binStart) {
         throw this.error(start, "invalid binary literal");
       }
+      if (this.peek(0) === CHAR_N_LO) {
+        throw this.error(start, "only decimal bigint literals are supported");
+      }
       const text: string = this.source.slice(start, this.pos);
       this.tokens.push({ kind: "number", text: text, pos: start, end: this.pos });
       return;
     }
+    if (this.peek(0) === CHAR_0 && (this.peek(1) === CHAR_O_LO || this.peek(1) === (CHAR_O_LO - 32))) {
+      this.pos += 2;
+      const octStart: number = this.pos;
+      while (this.pos < this.source.length) {
+        const o: number = this.peek(0);
+        if (o < CHAR_0 || o > (CHAR_0 + 7)) break;
+        this.pos += 1;
+      }
+      if (this.pos === octStart) {
+        throw this.error(start, "invalid octal literal");
+      }
+      if (this.peek(0) === CHAR_N_LO) {
+        throw this.error(start, "only decimal bigint literals are supported");
+      }
+      throw this.error(start, "octal number literals are unsupported");
+    }
     while (this.pos < this.source.length && isDigit(this.peek(0))) {
       this.pos += 1;
+    }
+    if (this.peek(0) === CHAR_N_LO) {
+      this.pos += 1;
+      const text: string = this.source.slice(start, this.pos);
+      this.tokens.push({ kind: "bigint", text: text, pos: start, end: this.pos });
+      return;
     }
     if (this.peek(0) === CHAR_DOT && isDigit(this.peek(1))) {
       this.pos += 1;

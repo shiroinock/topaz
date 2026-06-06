@@ -71,6 +71,7 @@ let g_currentModule: SourceModule | undefined = undefined;
 // elem types match — sources (map_values vs set_values) don't affect identity.
 type TopazType =
   | { kind: "number" }
+  | { kind: "bigint" }
   | { kind: "boolean" }
   | { kind: "string" }
   | { kind: "undefined" }
@@ -113,6 +114,7 @@ type CheckedParseIntArgs = {
 };
 
 const T_NUMBER: TopazType = { kind: "number" };
+const T_BIGINT: TopazType = { kind: "bigint" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
 const T_UNDEFINED: TopazType = { kind: "undefined" };
@@ -262,6 +264,7 @@ function setOf(elem: TopazType): TopazType | undefined {
 // `===` directly on TopazType (objects compare by reference).
 function typeEq(a: TopazType, b: TopazType): boolean {
   if (a.kind === "number") return b.kind === "number";
+  if (a.kind === "bigint") return b.kind === "bigint";
   if (a.kind === "boolean") return b.kind === "boolean";
   if (a.kind === "string") return b.kind === "string";
   if (a.kind === "undefined") return b.kind === "undefined";
@@ -370,6 +373,9 @@ function makeUnion(variants: Array<TopazType>): TopazType {
 // any caller hits a clear error rather than producing garbage identifiers.
 function elemTag(t: TopazType): string {
   if (t.kind === "number") return "number";
+  if (t.kind === "bigint") {
+    throwInternalCodegenError("elemTag: bigint container monomorphs are deferred to 2.4c");
+  }
   if (t.kind === "boolean") return "boolean";
   if (t.kind === "string") return "string";
   if (t.kind === "class") return `class_${t.name}`;
@@ -442,6 +448,7 @@ function setShortName(t: TopazType): string {
 // for `T | undefined` collapses to T's representation in cTypeName).
 function typeIdent(t: TopazType): string {
   if (t.kind === "number") return "topaz_number";
+  if (t.kind === "bigint") return "topaz_bigint";
   if (t.kind === "boolean") return "topaz_boolean";
   if (t.kind === "string") return "topaz_string";
   if (t.kind === "undefined") return "topaz_undefined";
@@ -537,6 +544,20 @@ function emitNumberLiteralText(text: string, value: number): string {
   return hasDecimalOrExponent(cText) ? cText : `${cText}.0`;
 }
 
+function decimalBigIntDigits(text: string): string {
+  const end = text.length - 1;
+  if (end <= 0 || text.charCodeAt(end) !== 110) {
+    throwInternalCodegenError(`decimalBigIntDigits: expected trailing n in ${text}`);
+  }
+  for (let i = 0; i < end; i++) {
+    const ch = text.charCodeAt(i);
+    if (ch < 48 || ch > 57) {
+      throwInternalCodegenError(`decimalBigIntDigits: non-decimal bigint literal ${text}`);
+    }
+  }
+  return text.slice(0, end);
+}
+
 function isBuiltinName(name: string): boolean {
   // `undefined` lowers via emitUndefinedLiteral, never via a binding lookup.
   // `console` is a synthetic namespace handled directly in emitCall.
@@ -581,6 +602,9 @@ function cTypeName(t: TopazType): string {
   }
   if (t.kind === "string_literal") {
     return "topaz_string";
+  }
+  if (t.kind === "bigint") {
+    return "topaz_bigint *";
   }
   if (t.kind === "dunion") {
     return typeIdent(t);
@@ -3713,6 +3737,7 @@ class Emitter {
       // aliases / class names (matching the pre-migration keyword branches at
       // the top of this function).
       if (refName === "number") return T_NUMBER;
+      if (refName === "bigint") return T_BIGINT;
       if (refName === "boolean") return T_BOOLEAN;
       if (refName === "string") return T_STRING;
       if (refName === "undefined") return T_UNDEFINED;
@@ -4784,6 +4809,7 @@ class Emitter {
         if (!localSet.has(e.name) && !isBuiltinName(e.name)) onIdent(e.name);
         return;
       case "num_lit":
+      case "bigint_lit":
       case "str_lit":
       case "bool_lit":
       case "null_lit":
@@ -6417,6 +6443,7 @@ class Emitter {
     switch (e.kind) {
       case "ident":
       case "num_lit":
+      case "bigint_lit":
       case "str_lit":
       case "bool_lit":
       case "null_lit":
@@ -7731,6 +7758,9 @@ class Emitter {
     if (expr.kind === "num_lit") {
       return emitNumberLiteralText(expr.text, expr.value);
     }
+    if (expr.kind === "bigint_lit") {
+      return `topaz_bigint_from_decimal_cstr("${decimalBigIntDigits(expr.text)}")`;
+    }
     if (expr.kind === "bool_lit") return expr.value ? "true" : "false";
     if (expr.kind === "null_lit") {
       throw new CodegenError({ pos: expr.pos }, "unsupported expression (null_lit)");
@@ -8677,6 +8707,12 @@ class Emitter {
       if (t.kind === "string") return inner;
       if (t.kind === "number") return `topaz_number_to_string(${inner})`;
       if (t.kind === "boolean") return `topaz_boolean_to_string(${inner})`;
+      if (t.kind === "bigint") {
+        throw new CodegenError(
+          { pos: sub.pos },
+          "template literal bigint stringification is deferred to 2.4c",
+        );
+      }
       // inferType's TemplateLit branch already vets each span; this arm is
       // defensive in case stringify gets reused later.
       throw new CodegenError(
@@ -8782,6 +8818,12 @@ class Emitter {
       throw new CodegenError(
         { pos: arg.pos },
         `console.${method} on \`unknown\` is unsupported (narrow it with \`if (x instanceof ClassName)\` first)`,
+      );
+    }
+    if (t.kind === "bigint") {
+      throw new CodegenError(
+        { pos: arg.pos },
+        `console.${method} bigint stringification is deferred to 2.4c`,
       );
     }
     if (isReferenceType(t) || isInterfaceType(t)) {
@@ -10465,6 +10507,7 @@ class Emitter {
 
   private inferType(expr: Expr): TopazType {
     if (expr.kind === "num_lit") return T_NUMBER;
+    if (expr.kind === "bigint_lit") return T_BIGINT;
     if (expr.kind === "bool_lit") return T_BOOLEAN;
     if (expr.kind === "this_expr") {
       const currentClass = this.currentClass;
@@ -10496,6 +10539,12 @@ class Emitter {
       // no defined toString policy yet — surface the error at the substitution.
       for (const sub of expr.subs) {
         const t = this.inferType(sub.expr);
+        if (t.kind === "bigint") {
+          throw new CodegenError(
+            { pos: sub.expr.pos },
+            "template literal bigint stringification is deferred to 2.4c",
+          );
+        }
         if (t.kind !== "number" && t.kind !== "boolean" && t.kind !== "string") {
           throw new CodegenError(
             { pos: sub.expr.pos },
@@ -10729,6 +10778,12 @@ class Emitter {
       switch (expr.op) {
         case "-":
         case "+":
+          if (this.inferType(expr.operand).kind === "bigint") {
+            throw new CodegenError(
+              { pos: expr.pos },
+              "bigint unary operators are deferred to 2.4c",
+            );
+          }
           this.expectType(expr.operand, T_NUMBER);
           return T_NUMBER;
         case "!":
@@ -10809,6 +10864,28 @@ class Emitter {
       switch (kind) {
         case "+": {
           const lt = this.inferType(expr.lhs);
+          const rt = this.inferType(expr.rhs);
+          if (
+            (lt.kind === "string" && rt.kind === "bigint") ||
+            (lt.kind === "bigint" && rt.kind === "string")
+          ) {
+            throw new CodegenError(
+              { pos: expr.pos },
+              "bigint stringification is deferred to 2.4c",
+            );
+          }
+          if (lt.kind === "bigint" || rt.kind === "bigint") {
+            if (lt.kind === "bigint" && rt.kind === "bigint") {
+              throw new CodegenError(
+                { pos: expr.pos },
+                "bigint arithmetic operators are deferred to 2.4c",
+              );
+            }
+            throw new CodegenError(
+              { pos: expr.pos },
+              "mixed number/bigint operators are unsupported; bigint operators are deferred to 2.4c",
+            );
+          }
           if (lt.kind === "string") {
             this.expectType(expr.rhs, T_STRING);
             return T_STRING;
@@ -10820,21 +10897,63 @@ class Emitter {
         case "-":
         case "*":
         case "/":
-        case "%":
+        case "%": {
+          const lt = this.inferType(expr.lhs);
+          const rt = this.inferType(expr.rhs);
+          if (lt.kind === "bigint" || rt.kind === "bigint") {
+            if (lt.kind === "bigint" && rt.kind === "bigint") {
+              throw new CodegenError(
+                { pos: expr.pos },
+                "bigint arithmetic operators are deferred to 2.4c",
+              );
+            }
+            throw new CodegenError(
+              { pos: expr.pos },
+              "mixed number/bigint operators are unsupported; bigint operators are deferred to 2.4c",
+            );
+          }
           this.expectType(expr.lhs, T_NUMBER);
           this.expectType(expr.rhs, T_NUMBER);
           return T_NUMBER;
+        }
         case "<":
         case "<=":
         case ">":
-        case ">=":
+        case ">=": {
+          const lt = this.inferType(expr.lhs);
+          const rt = this.inferType(expr.rhs);
+          if (lt.kind === "bigint" || rt.kind === "bigint") {
+            if (lt.kind === "bigint" && rt.kind === "bigint") {
+              throw new CodegenError(
+                { pos: expr.pos },
+                "bigint comparison is deferred to 2.4c",
+              );
+            }
+            throw new CodegenError(
+              { pos: expr.pos },
+              "mixed number/bigint comparison is unsupported; bigint comparison is deferred to 2.4c",
+            );
+          }
           this.expectType(expr.lhs, T_NUMBER);
           this.expectType(expr.rhs, T_NUMBER);
           return T_BOOLEAN;
+        }
         case "===":
         case "!==": {
           const lt = this.inferType(expr.lhs);
           const rt = this.inferType(expr.rhs);
+          if (lt.kind === "bigint" || rt.kind === "bigint") {
+            if (lt.kind === "bigint" && rt.kind === "bigint") {
+              throw new CodegenError(
+                { pos: expr.pos },
+                "bigint equality is deferred to 2.4c",
+              );
+            }
+            throw new CodegenError(
+              { pos: expr.pos },
+              "mixed number/bigint equality is unsupported; bigint equality is deferred to 2.4c",
+            );
+          }
           if (!typesOverlap(lt, rt)) {
             throw new CodegenError(
               { pos: expr.pos },

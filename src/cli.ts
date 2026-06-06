@@ -151,6 +151,8 @@ function formatToken(t: Token): string {
       return `ident ${t.pos}-${t.end} ${dumpQuote(t.text)}`;
     case "number":
       return `number ${t.pos}-${t.end} ${dumpQuote(t.text)}`;
+    case "bigint":
+      return `bigint ${t.pos}-${t.end} ${dumpQuote(t.text)}`;
     case "string":
       return `string ${t.pos}-${t.end} ${dumpQuote(t.value)}`;
     case "template_head":

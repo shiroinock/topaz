@@ -80,6 +80,28 @@ typedef struct {
   size_t len;
 } topaz_string;
 
+// Phase 2.4b: minimal bigint value skeleton. Decimal literal bytes are copied
+// into immutable arena storage so the frontend can carry arbitrary precision
+// values without truncating through double/int64. Arithmetic/stringification
+// helpers are intentionally deferred.
+typedef struct {
+  const char *digits;
+  size_t len;
+  topaz_boolean negative;
+} topaz_bigint;
+
+static inline topaz_bigint *topaz_bigint_from_decimal_cstr(const char *digits) {
+  size_t len = strlen(digits);
+  char *buf = (char *)topaz_arena_alloc(len + 1);
+  if (len) memcpy(buf, digits, len);
+  buf[len] = '\0';
+  topaz_bigint *out = (topaz_bigint *)topaz_arena_alloc(sizeof(*out));
+  out->digits = buf;
+  out->len = len;
+  out->negative = false;
+  return out;
+}
+
 // Phase 1.5-3c: sentinel-struct optionals for scalar `T | undefined`. Reference
 // and interface T | undefined collapse to T's own C representation (NULL ptr /
 // .data == NULL), so only scalars need a struct. `_wrap_*` builds a present

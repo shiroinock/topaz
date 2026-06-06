@@ -207,6 +207,15 @@ run_case arena_stress $'1000\n0\n999\n1000\n42\n1200\n500\ntrue\n500'
 
 run_case template_literal $'hello, topaz!\ntopaz is 42\nflag=true\ntopaz\ntopaz/42\n42true\npi=3.14\nsum=0.30000000000000004\nbig=1e+21\ntiny=1e-7\ntwice(42)=84\nlen(topaz)=5\nn+1=43\nanswer=7\n?=7\n(3, 4)\nnorm=25\nq="topaz"\ntab\there\n[0][1][2][3][4]'
 
+run_case bigint_value_skeleton ""
+run_fail_case bigint_mixed_arithmetic_fail examples/bigint_mixed_arithmetic_fail.ts "mixed number/bigint operators are unsupported"
+run_fail_case bigint_arithmetic_deferred_fail examples/bigint_arithmetic_deferred_fail.ts "bigint arithmetic operators are deferred to 2.4c"
+run_fail_case bigint_equality_deferred_fail examples/bigint_equality_deferred_fail.ts "bigint equality is deferred to 2.4c"
+run_fail_case bigint_console_deferred_fail examples/bigint_console_deferred_fail.ts "console.log bigint stringification is deferred to 2.4c"
+run_fail_case bigint_template_deferred_fail examples/bigint_template_deferred_fail.ts "template literal bigint stringification is deferred to 2.4c"
+run_fail_case bigint_non_decimal_fail examples/bigint_non_decimal_fail.ts "only decimal bigint literals are supported"
+run_fail_case bigint_array_deferred_fail examples/bigint_array_deferred_fail.ts "no Array monomorph for element type topaz_bigint"
+
 run_case for_of_array $'15\n-7\n0\n2\n9\n3\nalpha\nbeta\ngamma\n102\n101\n103\nsquare\ncircle\n25\ntrue\n4'
 
 run_case for_of_set $'15\n15\n15\n0\n100\n14\n7\n60\n2\n387\n115'

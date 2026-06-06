@@ -62,6 +62,7 @@ import type {
   Expr,
   IdentExpr,
   NumLitExpr,
+  BigIntLitExpr,
   StrLitExpr,
   BoolLitExpr,
   NullLitExpr,
@@ -145,6 +146,16 @@ export function convertStmt(node: ts.Statement, sf: ts.SourceFile): Stmt {
 
 export function convertBlock(node: ts.Block, sf: ts.SourceFile): BlockStmt {
   return new Converter(sf).convertBlock(node);
+}
+
+function isDecimalBigIntText(text: string): boolean {
+  const end = text.length - 1;
+  if (end <= 0 || text.charCodeAt(end) !== 110) return false;
+  for (let i = 0; i < end; i++) {
+    const ch = text.charCodeAt(i);
+    if (ch < 48 || ch > 57) return false;
+  }
+  return true;
 }
 
 class Converter {
@@ -875,6 +886,7 @@ class Converter {
   convertExpr(e: ts.Expression): Expr {
     if (ts.isIdentifier(e)) return this.convertIdent(e);
     if (ts.isNumericLiteral(e)) return this.convertNumLit(e);
+    if (ts.isBigIntLiteral(e)) return this.convertBigIntLit(e);
     if (ts.isStringLiteral(e)) return this.convertStrLit(e);
     if (ts.isNoSubstitutionTemplateLiteral(e)) return this.convertNoSubTemplate(e);
     if (e.kind === ts.SyntaxKind.TrueKeyword) {
@@ -1002,6 +1014,18 @@ class Converter {
       kind: "num_lit",
       text,
       value: Number(e.text),
+      ...this.span(e),
+    };
+  }
+
+  convertBigIntLit(e: ts.BigIntLiteral): BigIntLitExpr {
+    const text = e.getText(this.sf);
+    if (!isDecimalBigIntText(text)) {
+      throw this.err(e, "only decimal bigint literals are supported");
+    }
+    return {
+      kind: "bigint_lit",
+      text,
       ...this.span(e),
     };
   }
@@ -1303,6 +1327,8 @@ class Converter {
     switch (t.kind) {
       case ts.SyntaxKind.NumberKeyword:
         return { kind: "type_ref", name: "number", typeArgs: [], ...this.span(t) };
+      case ts.SyntaxKind.BigIntKeyword:
+        return { kind: "type_ref", name: "bigint", typeArgs: [], ...this.span(t) };
       case ts.SyntaxKind.StringKeyword:
         return { kind: "type_ref", name: "string", typeArgs: [], ...this.span(t) };
       case ts.SyntaxKind.BooleanKeyword:

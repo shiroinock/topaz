@@ -10,6 +10,7 @@
 // `ModuleItem` and lets the caller decide.
 
 import {
+  BigIntToken,
   IdentToken,
   KeywordToken,
   PunctToken,
@@ -1412,6 +1413,11 @@ export class Parser {
       this.pos += 1;
       const v: number = parseNumberLiteral(t.text);
       return { kind: "num_lit", text: t.text, value: v, pos: t.pos, end: t.end };
+    }
+    if (t.kind === "bigint") {
+      this.pos += 1;
+      const bt: BigIntToken = t;
+      return { kind: "bigint_lit", text: bt.text, pos: bt.pos, end: bt.end };
     }
     if (t.kind === "string") {
       this.pos += 1;
