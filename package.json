@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc",
     "topaz": "node dist/cli.js",
-    "test": "bash tests/smoke.sh"
+    "test": "bash tests/smoke.sh",
+    "test:selfhost": "bash tests/selfhost_stage2.sh"
   },
   "dependencies": {
     "typescript": "^5.6.0"
