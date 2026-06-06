@@ -245,7 +245,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **2.4b bigint frontend/type skeleton** — `bigint` 型注釈、bigint literal AST node または等価表現、decimal `123n` literal を受理する。最初の pass で hex/bin/octal literal を入れない場合は、非 decimal bigint literal を clear diagnostic で reject する。ADR `0324`。
 - [x] **2.4c bigint arithmetic/comparison runtime** — binary `+` / `-` / `*`、unary `-`、`<` / `<=` / `>` / `>=`、`===` / `!==`、`console.log` と template literal stringification を最初の runtime/codegen surface とする。`/` / `%`、bitwise / shifts、`BigInt()`、`.toString()`、hex/bin/octal literal、Array/Map/Set 内 bigint、hashing、parse/format performance は後続設計へ回す。ADR `0325`。
 - [x] **2.4d regexp design** — 最初の surface は regexp literal `/pattern/`、`new RegExp("pattern")`、`RegExp.prototype.test(input: string): boolean` に絞り、flags / match 系 API / captures / unicode / containers は後続設計へ回す。ADR `0326`。
-- [ ] **2.4e async design** — Promise / async-await(Fiber ベース実装)を個別 ADR で設計する。
+- [x] **2.4e async design** — Promise / async-await(Fiber ベース実装)を個別 ADR `0327` で設計した。
 
 ### Phase 3 以降: エコシステム
 

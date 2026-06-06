@@ -76,6 +76,36 @@ run_fail_case() {
   echo "PASS [$label]"
 }
 
+run_tsc_bridge_fail_case() {
+  local label="$1"
+  local root="$2"
+  local expected_substring="$3"
+  local err
+  if err=$(node --input-type=module -e '
+import { parseFile } from "./dist/parser.js";
+import { convertFromTsc } from "./dist/convert_from_tsc.js";
+
+const file = process.argv[1];
+try {
+  convertFromTsc(parseFile(file));
+} catch (e) {
+  console.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+}
+' "$root" 2>&1); then
+    echo "FAIL [$label]: expected tsc-bridge convert error, got success" >&2
+    exit 1
+  fi
+  if [[ "$err" != *"$expected_substring"* ]]; then
+    echo "FAIL [$label]: error did not contain expected substring" >&2
+    echo "  expected substring: $expected_substring" >&2
+    echo "  got:" >&2
+    printf '%s\n' "$err" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [$label]"
+}
+
 # Phase 1.5-6 prep: assert the emitted C compiles clean under `-Wall -Wextra`.
 # The self-hosting pass criterion requires warning-free emission; this gate
 # defends specific constructs (e.g. equality conditions, which used to emit
@@ -226,6 +256,10 @@ run_fail_case bigint_set_deferred_fail examples/bigint_set_deferred_fail.ts "no 
 run_fail_case regexp_literal_deferred_fail examples/regexp_literal_deferred_fail.ts "expected expression"
 run_fail_case regexp_constructor_deferred_fail examples/regexp_constructor_deferred_fail.ts "\`new RegExp\` is unsupported"
 run_fail_case regexp_string_test_deferred_fail examples/regexp_string_test_deferred_fail.ts "unsupported method '.test' on topaz_string"
+run_tsc_bridge_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "async functions are unsupported"
+run_tsc_bridge_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "unsupported expression AwaitExpression"
+run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "unknown identifier 'Promise'"
+run_fail_case for_await_deferred_fail examples/for_await_deferred_fail.ts "expected '('"
 
 run_case for_of_array $'15\n-7\n0\n2\n9\n3\nalpha\nbeta\ngamma\n102\n101\n103\nsquare\ncircle\n25\ntrue\n4'
 
