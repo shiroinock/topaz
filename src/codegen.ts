@@ -35,6 +35,7 @@ import {
   ContinueStmt,
   ThrowStmt,
   TryStmt,
+  CatchClause,
   ForStmt,
 } from "./ast.js";
 
@@ -1206,12 +1207,12 @@ class Emitter {
   // boundary and resets the stack (save / clear / restore).
   private loopCtx: LoopCtxFrame | undefined = undefined;
   // Phase 1.5-X: number of `try` frames currently live on the C stack within
-  // the function being emitted (incremented only around a try *body*, not the
-  // catch body — topaz_throw / the normal-path pop already removed the frame by
-  // the time the catch body runs). A `return` inside a try body emits this many
-  // `topaz_try_pop()` calls before the C return so the frame stack stays
-  // balanced. Reset to 0 at every function boundary (nested fn/arrow returns
-  // don't cross the outer try).
+  // the function being emitted. Ordinary catch bodies run after the try frame
+  // has been popped, but catch+finally protects the catch body with a separate
+  // frame so catch-body throws can run finally before propagation. A `return`
+  // inside a live frame emits this many `topaz_try_pop()` calls before the C
+  // return so the frame stack stays balanced. Reset to 0 at every function
+  // boundary (nested fn/arrow returns don't cross the outer try).
   private liveTryFrames: number = 0;
   private finallyReturnContext: FinallyReturnContext | undefined = undefined;
   private switchCounter: number = 0;
@@ -5639,9 +5640,9 @@ class Emitter {
   // then pop the frame), nonzero after a longjmp from topaz_throw (frame is
   // already popped by topaz_throw; catch body just rebinds the global
   // throw_value to the annotated class type). No-catch `finally` is lowered as
-  // cleanup plus rethrow; catch+finally remains deferred. bare-binding catch is
-  // also deferred; break/continue inside the try body are rejected because they
-  // would skip the pop.
+  // cleanup plus rethrow/return dispatch. Catch+finally uses the same reason
+  // model for normal/throw paths, with the catch body protected by its own
+  // try frame so catch-body throws run finally before propagation.
   // Phase 1.5-X: a run of `topaz_try_pop()` calls (one per live try frame)
   // prepended to a `return` that escapes one or more try bodies.
   private popFrames(): string {
@@ -5657,11 +5658,7 @@ class Emitter {
     const finallyBlockMaybe = stmt.finallyBlock;
     if (finallyBlockMaybe !== undefined) {
       if (stmt.catchClause !== undefined) {
-        const finallyAnchor: { pos: number } = { pos: finallyBlockMaybe.pos };
-        throw new CodegenError(
-          finallyAnchor,
-          "`try/catch/finally` is unsupported; use either `try/catch` or no-catch `try/finally`",
-        );
+        return this.emitTryCatchFinallyStatement(stmt, finallyBlockMaybe, indent);
       }
       return this.emitTryFinallyStatement(stmt, finallyBlockMaybe, indent);
     }
@@ -5670,33 +5667,9 @@ class Emitter {
       const stmtAnchor: { pos: number } = { pos: stmt.pos };
       throw new CodegenError(stmtAnchor, "`try` without a `catch` clause is unsupported");
     }
-    const catchClause = catchClauseMaybe;
-    const catchAnchor: { pos: number } = { pos: catchClause.pos };
-    const bindingNameMaybe = catchClause.bindingName;
-    if (bindingNameMaybe === undefined) {
-      throw new CodegenError(
-        catchAnchor,
-        "`catch` clause requires a binding (e.g. `catch (e: ClassName)`)",
-      );
-    }
-    const eName = bindingNameMaybe;
-    // Phase 1.5-3f: missing annotation defaults to `unknown`, matching TS's
-    // strict-mode `catch (e)` type. `: unknown` is also accepted explicitly.
-    // The user must then narrow with `if (e instanceof ClassName)` before
-    // touching fields/methods.
-    let errType: TopazType = T_UNKNOWN;
-    const bindingTypeMaybe = catchClause.bindingType;
-    if (bindingTypeMaybe !== undefined) {
-      const bindingType = bindingTypeMaybe;
-      const bindingTypeAnchor: { pos: number } = { pos: bindingType.pos };
-      errType = this.typeFromAnnotation(bindingType, bindingTypeAnchor, g_currentModule!);
-      if (errType.kind !== "unknown" && !isClassType(errType)) {
-        throw new CodegenError(
-          bindingTypeAnchor,
-          `\`catch\` binding type must be a class or \`unknown\` (got ${typeIdent(errType)})`,
-        );
-      }
-    }
+    const { catchClause, catchAnchor, eName, errType } =
+      this.resolveCatchBinding(catchClauseMaybe);
+
     this.checkTryBodyNoEscape(stmt.tryBlock);
 
     const id = this.tmpCounter++;
@@ -5726,15 +5699,136 @@ class Emitter {
     if (tryBodyLines.length > 0) lines.push(tryBodyLines.join("\n"));
     lines.push(`${pad}    topaz_try_pop();`);
     lines.push(`${pad}  } else {`);
-    if (errType.kind === "unknown") {
-      lines.push(`${pad}    void *${eName} = topaz_throw_value;`);
-    } else {
-      const errClass = classNameOf(errType)!;
-      lines.push(
-        `${pad}    topaz_class_${errClass} *${eName} = (topaz_class_${errClass} *)topaz_throw_value;`,
+    lines.push(...this.emitCatchBindingLines(errType, eName, indent + 2));
+    if (catchBodyStr.length > 0) lines.push(catchBodyStr);
+    lines.push(`${pad}  }`);
+    lines.push(`${pad}}`);
+    return lines.join("\n");
+  }
+
+  private resolveCatchBinding(catchClause: CatchClause): {
+    catchClause: CatchClause;
+    catchAnchor: { pos: number };
+    eName: string;
+    errType: TopazType;
+  } {
+    const catchAnchor: { pos: number } = { pos: catchClause.pos };
+    const bindingNameMaybe = catchClause.bindingName;
+    if (bindingNameMaybe === undefined) {
+      throw new CodegenError(
+        catchAnchor,
+        "`catch` clause requires a binding (e.g. `catch (e: ClassName)`)",
       );
     }
-    if (catchBodyStr.length > 0) lines.push(catchBodyStr);
+    const eName = bindingNameMaybe;
+    // Phase 1.5-3f: missing annotation defaults to `unknown`, matching TS's
+    // strict-mode `catch (e)` type. `: unknown` is also accepted explicitly.
+    // The user must then narrow with `if (e instanceof ClassName)` before
+    // touching fields/methods.
+    let errType: TopazType = T_UNKNOWN;
+    const bindingTypeMaybe = catchClause.bindingType;
+    if (bindingTypeMaybe !== undefined) {
+      const bindingType = bindingTypeMaybe;
+      const bindingTypeAnchor: { pos: number } = { pos: bindingType.pos };
+      errType = this.typeFromAnnotation(bindingType, bindingTypeAnchor, g_currentModule!);
+      if (errType.kind !== "unknown" && !isClassType(errType)) {
+        throw new CodegenError(
+          bindingTypeAnchor,
+          `\`catch\` binding type must be a class or \`unknown\` (got ${typeIdent(errType)})`,
+        );
+      }
+    }
+    return { catchClause, catchAnchor, eName, errType };
+  }
+
+  private emitCatchBindingLines(
+    errType: TopazType,
+    eName: string,
+    indent: number,
+  ): Array<string> {
+    const pad = "  ".repeat(indent);
+    if (errType.kind === "unknown") {
+      return [`${pad}void *${eName} = topaz_throw_value;`];
+    }
+    const errClass = classNameOf(errType)!;
+    return [
+      `${pad}topaz_class_${errClass} *${eName} = (topaz_class_${errClass} *)topaz_throw_value;`,
+    ];
+  }
+
+  private emitTryCatchFinallyStatement(
+    stmt: TryStmt,
+    finallyBlock: BlockStmt,
+    indent: number,
+  ): string {
+    const pad = "  ".repeat(indent);
+    const catchClauseMaybe = stmt.catchClause;
+    if (catchClauseMaybe === undefined) {
+      throwInternalCodegenError("missing catch clause for try/catch/finally");
+    }
+    const { catchClause, catchAnchor, eName, errType } =
+      this.resolveCatchBinding(catchClauseMaybe);
+
+    this.checkTryFinallyNoEscape(
+      stmt.tryBlock,
+      "`try/catch/finally` try body",
+      /* allowReturn */ false,
+    );
+    this.checkTryFinallyNoEscape(
+      catchClause.body,
+      "`try/catch/finally` catch body",
+      /* allowReturn */ false,
+    );
+    this.checkTryFinallyNoEscape(finallyBlock, "`finally` block", /* allowReturn */ false);
+
+    const id = this.tmpCounter++;
+    const tryFrame = `__topaz_try_${id}`;
+    const catchFrame = `__topaz_catch_${id}`;
+    const reason = `__topaz_finally_reason_${id}`;
+
+    this.scope.push();
+    this.liveTryFrames++;
+    const tryBodyLines = stmt.tryBlock.stmts.map((s) => this.emitStatement(s, indent + 2));
+    this.liveTryFrames--;
+    this.scope.pop();
+
+    this.scope.push();
+    this.scope.declareBinding(eName, errType, /* isConst */ false, catchAnchor);
+    this.liveTryFrames++;
+    const catchBodyLines = catchClause.body.stmts.map((s) =>
+      this.emitStatement(s, indent + 3),
+    );
+    this.liveTryFrames--;
+    this.scope.pop();
+
+    this.scope.push();
+    const finallyBodyLines = finallyBlock.stmts.map((s) =>
+      this.emitStatement(s, indent + 1),
+    );
+    this.scope.pop();
+
+    const lines: string[] = [];
+    lines.push(`${pad}{`);
+    lines.push(`${pad}  int ${reason} = 0;`);
+    lines.push(`${pad}  topaz_try_frame ${tryFrame};`);
+    lines.push(`${pad}  topaz_try_push(&${tryFrame});`);
+    lines.push(`${pad}  if (setjmp(${tryFrame}.env) == 0) {`);
+    if (tryBodyLines.length > 0) lines.push(tryBodyLines.join("\n"));
+    lines.push(`${pad}    topaz_try_pop();`);
+    lines.push(`${pad}  } else {`);
+    lines.push(...this.emitCatchBindingLines(errType, eName, indent + 2));
+    lines.push(`${pad}    topaz_try_frame ${catchFrame};`);
+    lines.push(`${pad}    topaz_try_push(&${catchFrame});`);
+    lines.push(`${pad}    if (setjmp(${catchFrame}.env) == 0) {`);
+    if (catchBodyLines.length > 0) lines.push(catchBodyLines.join("\n"));
+    lines.push(`${pad}      topaz_try_pop();`);
+    lines.push(`${pad}    } else {`);
+    lines.push(`${pad}      ${reason} = 2;`);
+    lines.push(`${pad}    }`);
+    lines.push(`${pad}  }`);
+    if (finallyBodyLines.length > 0) lines.push(finallyBodyLines.join("\n"));
+    lines.push(`${pad}  if (${reason} == 2) {`);
+    lines.push(`${pad}    topaz_throw(topaz_throw_value);`);
     lines.push(`${pad}  }`);
     lines.push(`${pad}}`);
     return lines.join("\n");

@@ -179,10 +179,12 @@ run_case try_catch_basic $'boom\n1\nnegative\n42\n10\n7\n100\n9\nrewrapped\n2\n0
 run_case try_return $'10\n-1\n3\n99\n107\n10\nboom'
 run_case try_finally $'try-normal\nfinally-normal\nnormal\ntry-throw\nfinally-throw\nboom\ntry-override\nfinally-override\ncleanup'
 run_case try_finally_return $'try-value\nfinally-value\n5\ntry-void\nfinally-void\nfinally-ret-throw\nret-boom'
+run_case try_catch_finally $'try-normal\nfinally-normal\nnormal\nafter-normal\ntry-caught\ncatch-caught\ntry boom\nfinally-caught\nafter-caught\ntry-catch-throw\noriginal\nfinally-catch-throw\ncatch throw\ntry-callee-throw\nouter\nfinally-callee-throw\ncallee throw\ntry-finally-override\nhandled\nfinally-override\nfinally throw'
 run_fail_case try_break_fail examples/try_break_fail.ts "\`break\` inside a \`try\` body is unsupported"
 run_fail_case try_finally_return_in_finally_fail examples/try_finally_return_in_finally_fail.ts "\`return\` inside a \`finally\` block is unsupported"
 run_fail_case try_finally_nested_return_fail examples/try_finally_nested_return_fail.ts "nested return through multiple finally cleanup contexts is unsupported"
-run_fail_case try_catch_finally_fail examples/try_catch_finally_fail.ts "\`try/catch/finally\` is unsupported"
+run_fail_case try_catch_finally_return_fail examples/try_catch_finally_return_fail.ts "\`return\` inside a \`try/catch/finally\` try body is unsupported"
+run_fail_case try_catch_finally_catch_return_fail examples/try_catch_finally_catch_return_fail.ts "\`return\` inside a \`try/catch/finally\` catch body is unsupported"
 
 run_case optional_basic $'false\ntrue\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue'
 run_case optional_narrow $'10\n0\n10\n-1\n10\n0\n16\n7\n20\n99'

@@ -221,7 +221,7 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
     - [x] **1.5-6h** — cli Topaz 化。`src/cli.ts` は手書き argv parse(`-o` / `--output` / `--emit-c-only` / `--lex-only` / `--parse-only` / `-h`)、loader → codegen → cc 呼び出しに整理。self-hosted binary では JSON dump tooling を切り、native compiler path を優先。
     - [x] **1.5-6i** — stage2 bootstrap。stage1 (Node 製) で `src/cli.ts` を C に emit → native CLI 化し、その native CLI で再度 `src/cli.ts` を C に emit → stage2 native CLI 化する bootstrap ladder を `tests/selfhost_stage2.sh` / `pnpm run test:selfhost` に固定。stage2 native CLI が `examples/fib.ts` を native binary にして `5702887` を出力し、さらに `src/cli.ts` の C emit (`build/selfhost_cli_by_stage2.c`) に成功することを milestone gate とする。default `pnpm test` には入れず、日常 smoke と高コスト self-host gate を分離。
     - [x] **1.5-6j** — bit-for-bit fixed point。`pnpm run test:selfhost` が `build/selfhost_cli_by_selfhost.c`(stage2 compiler C) と `build/selfhost_cli_by_stage2.c`(stage3 compiler C) の `diff -u` を gate 化し、さらに stage2 C から `build/selfhost_cli_stage3_native` を生成して `examples/fib.ts` をビルド・実行し `5702887` を確認する。これで self-hosting 1.5-6 のクリティカルパスは完了。**Node 依存ゼロ宣言の範囲**は生成されたネイティブ AOT compiler binary と runtime path であり、source repo の development harness (`pnpm` / `tsc` / `tests`) は開発・stage1 用に残す。
-  - [ ] **1.5-X (post-selfhost backlog)** — no-catch `try/finally` は ADR `0292` で着地済み、try body 内 `return` の cleanup dispatch は ADR `0320` で着地済み。残りは `try/catch/finally` と、`return` from finally body / nested active finally return / `break` / `continue` を `finally` cleanup へ dispatch する lowering。self-hosting では不要だったため Phase 2.3c〜d へ持ち越す。
+  - [ ] **1.5-X (post-selfhost backlog)** — no-catch `try/finally` は ADR `0292` で着地済み、try body 内 `return` の cleanup dispatch は ADR `0320` で着地済み、`try/catch/finally` normal/throw dispatch は ADR `0321` で着地済み。残りは `return` from catch+finally / `return` from finally body / nested active finally return / `break` / `continue` を `finally` cleanup へ dispatch する lowering。self-hosting では不要だったため Phase 2.3c〜d へ持ち越す。
 
 順序はあくまで現時点の見立てで、self-hosting に必要な機能から逆算して入れ替える。新機能を入れる時は **「コンパイラが自分自身をコンパイルできる範囲」がサブセットの下限**(`§3.3`)であることを忘れない。
 
@@ -239,7 +239,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **2.3c generic method/interface design** — generic method / generic interface は ADR `0318` で staged に分割。2.3c-1 は direct class receiver の generic method monomorph、2.3c-2 は generic interface frontend / realized interface shape、2.3c-3 は realized interface vtable integration。generic interface methods と generic classes implementing interfaces は別設計へ残す。
 - [x] **2.3d try/finally cleanup dispatch design** — ADR `0319` で `normal` / `throw` / `return` / `break` / `continue` を明示的な cleanup reason として扱う dispatch model を固定。実装は no-catch `try/finally` return、`try/catch/finally` normal/throw、break/continue cleanup labels の順に分割する。
 - [x] **2.3d-1 return through no-catch try/finally** — no-catch `try/finally` の try body からの `return` を ADR `0320` の cleanup dispatch 経由で通す。finally body からの `return`、nested active finally return、`break` / `continue`、`try/catch/finally` は引き続き未対応として残す。
-- [ ] **2.3d-2 try/catch/finally normal/throw dispatch** — `try { ... } catch (...) { ... } finally { ... }` の normal completion と throw propagation を cleanup dispatch に接続する。catch body の throw も finally 実行後に伝播させる。
+- [x] **2.3d-2 try/catch/finally normal/throw dispatch** — `try { ... } catch (...) { ... } finally { ... }` の normal completion と throw propagation を ADR `0321` の cleanup dispatch に接続した。catch body の throw も finally 実行後に伝播する。`return` through catch+finally、finally body return、nested active finally return、`break` / `continue` cleanup labels は引き続き未対応として残す。
 - [ ] **2.3d-3 break/continue through cleanup labels** — loop/switch context に明示的な break/continue label target を持たせ、protected region からの `break` / `continue` を active cleanup context 経由で dispatch する。
 - [ ] **2.4 async / regexp / bigint** — Promise / async-await(Fiber ベース実装)、regexp 統合、bigint 統合(必要時のみリンク)は、2.0〜2.3 の足場ができてから個別 ADR で設計する。
 
@@ -284,7 +284,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **generic method/interface design** — 2.3c として、generic method / generic interface を direct generic methods、generic interface frontend / realization、realized interface vtables に分割し、generic interface methods と generic classes implementing interfaces は別設計へ残す。
 - [x] **try/finally cleanup dispatch design** — 2.3d として、ADR `0319` で cleanup reason / payload model と follow-up order を固定した。
 - [x] **try/finally return cleanup dispatch** — 2.3d-1 として、no-catch `try/finally` の try body `return` を cleanup dispatch 経由で解禁した。ADR `0320`。
-- [ ] **try/catch/finally normal/throw dispatch** — 2.3d-2 として、return / break / continue より前に `try/catch/finally` の normal/throw path を通す。
+- [x] **try/catch/finally normal/throw dispatch** — 2.3d-2 として、return / break / continue より前に `try/catch/finally` の normal/throw path を通した。ADR `0321`。
 - [ ] **break/continue cleanup labels** — 2.3d-3 として、protected region からの `break` / `continue` を cleanup label target へ dispatch する。
 
 ---
