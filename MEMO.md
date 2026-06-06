@@ -221,7 +221,7 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
     - [x] **1.5-6h** — cli Topaz 化。`src/cli.ts` は手書き argv parse(`-o` / `--output` / `--emit-c-only` / `--lex-only` / `--parse-only` / `-h`)、loader → codegen → cc 呼び出しに整理。self-hosted binary では JSON dump tooling を切り、native compiler path を優先。
     - [x] **1.5-6i** — stage2 bootstrap。stage1 (Node 製) で `src/cli.ts` を C に emit → native CLI 化し、その native CLI で再度 `src/cli.ts` を C に emit → stage2 native CLI 化する bootstrap ladder を `tests/selfhost_stage2.sh` / `pnpm run test:selfhost` に固定。stage2 native CLI が `examples/fib.ts` を native binary にして `5702887` を出力し、さらに `src/cli.ts` の C emit (`build/selfhost_cli_by_stage2.c`) に成功することを milestone gate とする。default `pnpm test` には入れず、日常 smoke と高コスト self-host gate を分離。
     - [x] **1.5-6j** — bit-for-bit fixed point。`pnpm run test:selfhost` が `build/selfhost_cli_by_selfhost.c`(stage2 compiler C) と `build/selfhost_cli_by_stage2.c`(stage3 compiler C) の `diff -u` を gate 化し、さらに stage2 C から `build/selfhost_cli_stage3_native` を生成して `examples/fib.ts` をビルド・実行し `5702887` を確認する。これで self-hosting 1.5-6 のクリティカルパスは完了。**Node 依存ゼロ宣言の範囲**は生成されたネイティブ AOT compiler binary と runtime path であり、source repo の development harness (`pnpm` / `tsc` / `tests`) は開発・stage1 用に残す。
-  - [ ] **1.5-X (post-selfhost backlog)** — `finally` 句および try body 内 return / break / continue 解禁。cleanup の lowering(`__cleanup__` attribute or 手書きの dispatch tree)とセット。self-hosting では不要だったため Phase 2 以降へ持ち越し。**try body 内 `return` は着手済み**(`liveTryFrames` カウンタで脱出時に `topaz_try_pop()` を出す、決定ログ `0014`)。残りは `finally` / try body 内 break / continue。
+  - [ ] **1.5-X (post-selfhost backlog)** — no-catch `try/finally` は ADR `0292` で着地済み。残りは `try/catch/finally` と、try body 内 `return` / `break` / `continue` を `finally` cleanup へ dispatch する lowering。self-hosting では不要だったため Phase 2.3c〜d へ持ち越す。
 
 順序はあくまで現時点の見立てで、self-hosting に必要な機能から逆算して入れ替える。新機能を入れる時は **「コンパイラが自分自身をコンパイルできる範囲」がサブセットの下限**(`§3.3`)であることを忘れない。
 
@@ -234,7 +234,10 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **2.2a stdlib surface design** — self-hosting 用の `node:*` shortcut は compiler 互換として残し、公開 Topaz stdlib の方向を `std/fs` / `std/path` / `std/process` に分ける方針として固定。`node:child_process` / `node:url` / `import.meta.url` は初期 public stdlib から外し、`std/process` の具体的 import 名は未決。決定ログは `docs/adr/0313-stdlib-surface-design.md`。
 - [x] **2.2b stdlib aliases** — `std/path` を `node:path` と同じ named import set(`dirname` / `resolve` / `basename` / `extname` / `join`)として loader allowlist に追加。codegen / runtime は既存 call-site shortcut を再利用し、既存 `node:*` import は self-host/compiler 互換として残す。決定ログは `docs/adr/0314-std-path-alias.md`。
 - [x] **2.2c process stdlib design** — `std/process` の public API 名を named import の `argv` / `exit` / `writeStdout` / `writeStderr` / `writeError` として固定。既存の `process.argv` / `process.exit` / `process.stdout.write` / `process.stderr.write` / `console.error` は self-host/compiler 互換の synthetic/global support として残す。決定ログは `docs/adr/0315-std-process-api-names.md`。
-- [ ] **2.3 post-selfhost language backlog** — generic method / generic interface、generic function の `Array<T>` monomorph 収集、`finally` / try body 内 break / continue を棚卸しし、実用サンプルで必要になった順に解禁する。
+- [x] **2.3a post-selfhost backlog audit** — self-host probe は `node dist/cli.js src/cli.ts --emit-c-only -o build/selfhost_cli_probe` で通っており、緊急 blocker ではなく再現可能な実用 gap 順に進める。no-catch `try/finally` は ADR `0292` で着地済みのため、残りを 2.3b〜d に分割。決定ログは `docs/adr/0316-post-selfhost-backlog-audit.md`。
+- [ ] **2.3b generic function Array<T> monomorph sample** — generic 関数が `Array<T>` を返す経路で、generic / non-generic の monomorph slot 収集に concrete な positive/fail gap があるかを先にサンプルで再現する。gap が再現できなければ既存 coverage として記録し、コード変更しない。
+- [ ] **2.3c generic method/interface design** — generic method(`class C { f<U>(...) {} }`) / generic interface は、method type parameter と class/interface monomorph storage・vtable shape に跨るため設計専用フェーズで境界を切る。
+- [ ] **2.3d try/finally cleanup dispatch design** — `try/catch/finally` と try body 内 `return` / `break` / `continue` を `finally` cleanup へ流す dispatch lowering を設計専用フェーズで固定する。
 - [ ] **2.4 async / regexp / bigint** — Promise / async-await(Fiber ベース実装)、regexp 統合、bigint 統合(必要時のみリンク)は、2.0〜2.3 の足場ができてから個別 ADR で設計する。
 
 ### Phase 3 以降: エコシステム
@@ -273,9 +276,10 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 
 ## 9. 直近のアクション(未完了)
 
-- [ ] **generic backlog audit** — generic method / generic interface、`class Box<T> implements I`、type parameter constraint / default type parameter、generic class を Map / Set key にする方向を棚卸しする。self-hosting では踏まなかったので、実用サンプル側から必要性を決める。
-- [ ] **generic function Array<T> monomorph path** — generic 関数の戻り値が `Array<T>` の場合の monomorph 収集を、generic 関数経路と非 generic 経路で確実に同じ slot へ流すパスをドキュメント化する。
-- [ ] **try/finally backlog** — `finally` / try body 内 break / continue を実用サンプルで必要になるまで post-selfhost backlog に置く。try body 内 `return` は ADR `0014` の範囲で着手済み。
+- [x] **generic backlog audit** — Phase 2.3 を ADR `0316` で分割し、generic method / generic interface は 2.3c の設計専用フェーズへ降ろした。
+- [ ] **generic function Array<T> monomorph sample** — 2.3b として、generic 関数の戻り値が `Array<T>` の場合の concrete gap を positive/fail sample で先に再現する。再現できなければ既存 coverage として記録する。
+- [ ] **generic method/interface design** — 2.3c として、method type parameter と generic interface の monomorph storage / vtable shape を設計する。
+- [ ] **try/finally cleanup dispatch design** — 2.3d として、`try/catch/finally` と try body 内 `return` / `break` / `continue` の cleanup dispatch を設計する。no-catch `try/finally` は ADR `0292` で実装済み。
 
 ---
 
