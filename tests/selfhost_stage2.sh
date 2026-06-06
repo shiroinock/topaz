@@ -35,4 +35,20 @@ echo "SELFHOST [stage2 native CLI emits compiler C]"
 ./build/selfhost_cli_by_selfhost_native src/cli.ts --emit-c-only -o build/selfhost_cli_by_stage2 > /dev/null
 test -s build/selfhost_cli_by_stage2.c
 
+echo "SELFHOST [stage2/stage3 compiler C fixed point]"
+diff -u build/selfhost_cli_by_selfhost.c build/selfhost_cli_by_stage2.c
+
+echo "SELFHOST [compile stage3 native CLI]"
+cc -O2 -Iruntime -Wall -Wextra build/selfhost_cli_by_stage2.c -o build/selfhost_cli_stage3_native
+
+echo "SELFHOST [stage3 native CLI builds fib]"
+./build/selfhost_cli_stage3_native examples/fib.ts -o build/selfhost3_fib_native > /dev/null
+fib_out=$(./build/selfhost3_fib_native)
+if [[ "$fib_out" != "5702887" ]]; then
+  echo "FAIL [selfhost3_fib_native]:" >&2
+  echo "  expected: 5702887" >&2
+  echo "  got: $fib_out" >&2
+  exit 1
+fi
+
 echo "PASS [selfhost_stage2]"
