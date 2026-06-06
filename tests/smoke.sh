@@ -442,6 +442,9 @@ run_case node_path_join $'.\n.\nfoo/bar\n/foo/bar\n/bar\n../b\na/b/c/\na\n/\n.\n
 run_fail_case node_path_join_type_fail examples/node_path_join_type_fail.ts "join segment argument must be string"
 run_fail_case node_path_join_as_value_fail examples/node_path_join_as_value_fail.ts "unknown identifier 'join'"
 
+run_case std_path_basic $'/pkg/src\n/pkg/dist/main.ts\nindex\n.ts\n/pkg/src/parser.ts\n/pkg/src/cli'
+run_fail_case std_path_unknown_named_import_fail examples/std_path_unknown_named_import_fail.ts "unsupported named import 'relative' from stdlib specifier 'std/path'"
+
 run_case node_child_process_exec $'hello from child\nparent line\none two\n\nx=2'
 run_fail_case node_child_process_exec_arity_fail examples/node_child_process_exec_arity_fail.ts "execFileSync expects exactly three arguments"
 run_fail_case node_child_process_exec_cmd_type_fail examples/node_child_process_exec_cmd_type_fail.ts "execFileSync cmd argument must be string"
