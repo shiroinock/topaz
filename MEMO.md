@@ -230,7 +230,7 @@ TS の構造的部分型は Ruby のダックタイピングとも Java/C# の�
 Phase 2 は「self-hosting できる」から「実用的に配れる / 測れる」へ進む段階。大きな runtime 機能へ入る前に、固定点 gate を壊さず性能・警告・配布単位を観測できる足場を先に置く。
 
 - [x] **2.0 baseline hygiene** — `pnpm run build` / `pnpm test` / `pnpm run test:selfhost` を Phase 2 の開始基準として再確認。fixed-point gate は通過し、generated full-compiler C の warning inventory は stage1/stage2/stage3 で同一(46 `-Wreturn-type` / 38 `-Wunused-parameter` / 1 `-Wunused-variable` / 1 `-Wunused-function`)。決定ログは `docs/adr/0311-phase2-baseline-hygiene.md`。
-- [ ] **2.1 benchmark suite** — compiler 自体(`src/cli.ts` emit/compile)、代表 examples、runtime hot paths(number/string/container)の最小ベンチを追加。`topaz_emit_number_shortest` の Ryu 差し替えは、ここで測定軸を置いてから着手する。
+- [x] **2.1 benchmark suite** — `pnpm bench` を追加し、compiler 自体(`src/cli.ts` emit/compile)、`examples/fib.ts` build/run、runtime hot paths(number/string/container)を best/median ms で測る最小ベンチを固定。`TOPAZ_BENCH_RUNS` で run 数を変更可能。決定ログは `docs/adr/0312-minimal-benchmark-suite.md`。
 - [ ] **2.2 stdlib surface** — self-hosting 用の `node:*` shortcut から、Topaz 用 `std/fs` / `std/path` / `std/process` / 将来 `std/net` へ分離する。npm 互換ではなく明示 stdlib として設計する。
 - [ ] **2.3 post-selfhost language backlog** — generic method / generic interface、generic function の `Array<T>` monomorph 収集、`finally` / try body 内 break / continue を棚卸しし、実用サンプルで必要になった順に解禁する。
 - [ ] **2.4 async / regexp / bigint** — Promise / async-await(Fiber ベース実装)、regexp 統合、bigint 統合(必要時のみリンク)は、2.0〜2.3 の足場ができてから個別 ADR で設計する。
@@ -271,7 +271,6 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 
 ## 9. 直近のアクション(未完了)
 
-- [ ] **benchmark suite の最小形** — `src/cli.ts` emit、`examples/fib.ts` build/run、number/string/container runtime の小さい benchmark を追加し、Phase 2 の性能変更を測れるようにする。
 - [ ] **generic backlog audit** — generic method / generic interface、`class Box<T> implements I`、type parameter constraint / default type parameter、generic class を Map / Set key にする方向を棚卸しする。self-hosting では踏まなかったので、実用サンプル側から必要性を決める。
 - [ ] **generic function Array<T> monomorph path** — generic 関数の戻り値が `Array<T>` の場合の monomorph 収集を、generic 関数経路と非 generic 経路で確実に同じ slot へ流すパスをドキュメント化する。
 - [ ] **try/finally backlog** — `finally` / try body 内 break / continue を実用サンプルで必要になるまで post-selfhost backlog に置く。try body 内 `return` は ADR `0014` の範囲で着手済み。
