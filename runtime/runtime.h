@@ -80,25 +80,255 @@ typedef struct {
   size_t len;
 } topaz_string;
 
-// Phase 2.4b: minimal bigint value skeleton. Decimal literal bytes are copied
-// into immutable arena storage so the frontend can carry arbitrary precision
-// values without truncating through double/int64. Arithmetic/stringification
-// helpers are intentionally deferred.
+// Phase 2.4c: immutable arbitrary-precision bigint. Generated code only sees
+// `topaz_bigint *`; helpers allocate fresh arena objects for every result.
+// Limbs are little-endian base 2^32. `sign == 0` canonicalizes zero.
 typedef struct {
-  const char *digits;
+  uint32_t *limbs;
   size_t len;
-  topaz_boolean negative;
+  int sign;
 } topaz_bigint;
 
-static inline topaz_bigint *topaz_bigint_from_decimal_cstr(const char *digits) {
-  size_t len = strlen(digits);
-  char *buf = (char *)topaz_arena_alloc(len + 1);
-  if (len) memcpy(buf, digits, len);
-  buf[len] = '\0';
+static inline topaz_bigint *topaz_bigint_alloc(size_t len) {
   topaz_bigint *out = (topaz_bigint *)topaz_arena_alloc(sizeof(*out));
-  out->digits = buf;
+  out->limbs = len ? (uint32_t *)topaz_arena_calloc(len, sizeof(uint32_t)) : NULL;
   out->len = len;
-  out->negative = false;
+  out->sign = 0;
+  return out;
+}
+
+static inline topaz_bigint *topaz_bigint_zero(void) {
+  return topaz_bigint_alloc(0);
+}
+
+static inline void topaz_bigint_normalize(topaz_bigint *x) {
+  while (x->len > 0 && x->limbs[x->len - 1] == 0) x->len--;
+  if (x->len == 0) {
+    x->limbs = NULL;
+    x->sign = 0;
+  }
+}
+
+static inline topaz_bigint *topaz_bigint_copy_abs(const topaz_bigint *x, int sign) {
+  topaz_bigint *out = topaz_bigint_alloc(x->len);
+  if (x->len) memcpy(out->limbs, x->limbs, x->len * sizeof(uint32_t));
+  out->sign = x->len == 0 ? 0 : sign;
+  topaz_bigint_normalize(out);
+  return out;
+}
+
+static inline int topaz_bigint_cmp_abs(const topaz_bigint *a, const topaz_bigint *b) {
+  if (a->len < b->len) return -1;
+  if (a->len > b->len) return 1;
+  size_t i = a->len;
+  while (i > 0) {
+    i--;
+    if (a->limbs[i] < b->limbs[i]) return -1;
+    if (a->limbs[i] > b->limbs[i]) return 1;
+  }
+  return 0;
+}
+
+static inline void topaz_bigint_mul_small_in_place(topaz_bigint *x, uint32_t m) {
+  if (x->len == 0 || m == 1) return;
+  if (m == 0) {
+    x->len = 0;
+    x->limbs = NULL;
+    x->sign = 0;
+    return;
+  }
+  uint64_t carry = 0;
+  for (size_t i = 0; i < x->len; i++) {
+    uint64_t cur = (uint64_t)x->limbs[i] * (uint64_t)m + carry;
+    x->limbs[i] = (uint32_t)cur;
+    carry = cur >> 32;
+  }
+  if (carry) {
+    x->limbs[x->len] = (uint32_t)carry;
+    x->len++;
+  }
+}
+
+static inline void topaz_bigint_add_small_in_place(topaz_bigint *x, uint32_t v) {
+  if (v == 0) return;
+  if (x->len == 0) {
+    x->limbs[0] = v;
+    x->len = 1;
+    x->sign = 1;
+    return;
+  }
+  uint64_t carry = v;
+  size_t i = 0;
+  while (carry) {
+    uint64_t cur = (uint64_t)x->limbs[i] + carry;
+    x->limbs[i] = (uint32_t)cur;
+    carry = cur >> 32;
+    i++;
+  }
+}
+
+static inline topaz_bigint *topaz_bigint_from_decimal_cstr(const char *digits) {
+  size_t digits_len = strlen(digits);
+  topaz_bigint *out = (topaz_bigint *)topaz_arena_alloc(sizeof(*out));
+  out->limbs = digits_len ? (uint32_t *)topaz_arena_calloc(digits_len + 1, sizeof(uint32_t)) : NULL;
+  out->len = 0;
+  out->sign = 0;
+  for (size_t i = 0; i < digits_len; i++) {
+    char c = digits[i];
+    if (c < '0' || c > '9') {
+      fputs("topaz: invalid bigint literal\n", stderr);
+      abort();
+    }
+    topaz_bigint_mul_small_in_place(out, 10);
+    topaz_bigint_add_small_in_place(out, (uint32_t)(c - '0'));
+  }
+  topaz_bigint_normalize(out);
+  return out;
+}
+
+static inline topaz_bigint *topaz_bigint_neg(const topaz_bigint *x) {
+  if (x->sign == 0) return topaz_bigint_zero();
+  return topaz_bigint_copy_abs(x, -x->sign);
+}
+
+static inline topaz_bigint *topaz_bigint_add_abs(const topaz_bigint *a, const topaz_bigint *b, int sign) {
+  size_t max = a->len > b->len ? a->len : b->len;
+  topaz_bigint *out = topaz_bigint_alloc(max + 1);
+  uint64_t carry = 0;
+  for (size_t i = 0; i < max; i++) {
+    uint64_t av = i < a->len ? a->limbs[i] : 0;
+    uint64_t bv = i < b->len ? b->limbs[i] : 0;
+    uint64_t cur = av + bv + carry;
+    out->limbs[i] = (uint32_t)cur;
+    carry = cur >> 32;
+  }
+  if (carry) out->limbs[max] = (uint32_t)carry;
+  out->len = max + (carry ? 1 : 0);
+  out->sign = sign;
+  topaz_bigint_normalize(out);
+  return out;
+}
+
+static inline topaz_bigint *topaz_bigint_sub_abs(const topaz_bigint *a, const topaz_bigint *b, int sign) {
+  topaz_bigint *out = topaz_bigint_alloc(a->len);
+  uint64_t borrow = 0;
+  for (size_t i = 0; i < a->len; i++) {
+    uint64_t av = a->limbs[i];
+    uint64_t bv = i < b->len ? b->limbs[i] : 0;
+    uint64_t need = bv + borrow;
+    if (av < need) {
+      out->limbs[i] = (uint32_t)((UINT64_C(1) << 32) + av - need);
+      borrow = 1;
+    } else {
+      out->limbs[i] = (uint32_t)(av - need);
+      borrow = 0;
+    }
+  }
+  out->len = a->len;
+  out->sign = sign;
+  topaz_bigint_normalize(out);
+  return out;
+}
+
+static inline topaz_bigint *topaz_bigint_add(const topaz_bigint *a, const topaz_bigint *b) {
+  if (a->sign == 0) return topaz_bigint_copy_abs(b, b->sign);
+  if (b->sign == 0) return topaz_bigint_copy_abs(a, a->sign);
+  if (a->sign == b->sign) return topaz_bigint_add_abs(a, b, a->sign);
+  int cmp = topaz_bigint_cmp_abs(a, b);
+  if (cmp == 0) return topaz_bigint_zero();
+  if (cmp > 0) return topaz_bigint_sub_abs(a, b, a->sign);
+  return topaz_bigint_sub_abs(b, a, b->sign);
+}
+
+static inline topaz_bigint *topaz_bigint_sub(const topaz_bigint *a, const topaz_bigint *b) {
+  topaz_bigint *nb = topaz_bigint_neg(b);
+  return topaz_bigint_add(a, nb);
+}
+
+static inline topaz_bigint *topaz_bigint_mul(const topaz_bigint *a, const topaz_bigint *b) {
+  if (a->sign == 0 || b->sign == 0) return topaz_bigint_zero();
+  topaz_bigint *out = topaz_bigint_alloc(a->len + b->len + 1);
+  for (size_t i = 0; i < a->len; i++) {
+    uint64_t carry = 0;
+    for (size_t j = 0; j < b->len; j++) {
+      uint64_t cur = (uint64_t)out->limbs[i + j] + (uint64_t)a->limbs[i] * (uint64_t)b->limbs[j] + carry;
+      out->limbs[i + j] = (uint32_t)cur;
+      carry = cur >> 32;
+    }
+    size_t k = i + b->len;
+    while (carry) {
+      uint64_t cur = (uint64_t)out->limbs[k] + carry;
+      out->limbs[k] = (uint32_t)cur;
+      carry = cur >> 32;
+      k++;
+    }
+  }
+  out->len = a->len + b->len + 1;
+  out->sign = a->sign == b->sign ? 1 : -1;
+  topaz_bigint_normalize(out);
+  return out;
+}
+
+static inline int topaz_bigint_cmp(const topaz_bigint *a, const topaz_bigint *b) {
+  if (a->sign < b->sign) return -1;
+  if (a->sign > b->sign) return 1;
+  if (a->sign == 0) return 0;
+  int cmp = topaz_bigint_cmp_abs(a, b);
+  return a->sign > 0 ? cmp : -cmp;
+}
+
+static inline topaz_boolean topaz_bigint_eq(const topaz_bigint *a, const topaz_bigint *b) {
+  return topaz_bigint_cmp(a, b) == 0;
+}
+
+static inline topaz_string topaz_bigint_to_string(const topaz_bigint *x) {
+  if (x->sign == 0 || x->len == 0) {
+    topaz_string z = { "0", 1 };
+    return z;
+  }
+
+  uint32_t *tmp = (uint32_t *)topaz_arena_alloc(x->len * sizeof(uint32_t));
+  memcpy(tmp, x->limbs, x->len * sizeof(uint32_t));
+  size_t tmp_len = x->len;
+  uint32_t *groups = (uint32_t *)topaz_arena_alloc((x->len * 2 + 1) * sizeof(uint32_t));
+  size_t group_len = 0;
+  const uint64_t base = 1000000000u;
+
+  while (tmp_len > 0) {
+    uint64_t rem = 0;
+    size_t i = tmp_len;
+    while (i > 0) {
+      i--;
+      uint64_t cur = (rem << 32) | tmp[i];
+      tmp[i] = (uint32_t)(cur / base);
+      rem = cur % base;
+    }
+    groups[group_len++] = (uint32_t)rem;
+    while (tmp_len > 0 && tmp[tmp_len - 1] == 0) tmp_len--;
+  }
+
+  size_t cap = (x->sign < 0 ? 1 : 0) + group_len * 9 + 1;
+  char *buf = (char *)topaz_arena_alloc(cap);
+  size_t pos = 0;
+  if (x->sign < 0) buf[pos++] = '-';
+  int n = snprintf(buf + pos, cap - pos, "%u", groups[group_len - 1]);
+  if (n < 0) {
+    fputs("topaz: bigint format failed\n", stderr);
+    abort();
+  }
+  pos += (size_t)n;
+  size_t gi = group_len - 1;
+  while (gi > 0) {
+    gi--;
+    n = snprintf(buf + pos, cap - pos, "%09u", groups[gi]);
+    if (n < 0) {
+      fputs("topaz: bigint format failed\n", stderr);
+      abort();
+    }
+    pos += (size_t)n;
+  }
+  buf[pos] = '\0';
+  topaz_string out = { buf, pos };
   return out;
 }
 
@@ -223,6 +453,10 @@ static inline void topaz_console_log_string(topaz_string s) {
 static inline void topaz_console_error_string(topaz_string s) {
   if (s.len) fwrite(s.data, 1, s.len, stderr);
   putc('\n', stderr);
+}
+
+static inline void topaz_console_warn_string(topaz_string s) {
+  topaz_console_error_string(s);
 }
 
 // JS `%` is IEEE-754 remainder with truncated quotient = fmod.
@@ -771,6 +1005,10 @@ static inline void topaz_console_error_boolean(topaz_boolean b) {
   fputs(b ? "true\n" : "false\n", stderr);
 }
 
+static inline void topaz_console_warn_boolean(topaz_boolean b) {
+  topaz_console_error_boolean(b);
+}
+
 // Phase 1.5-3.5: boolean → string. Returns a `topaz_string` pointing into a
 // `static const` literal; no arena alloc, immutable byte string.
 static inline topaz_string topaz_boolean_to_string(topaz_boolean b) {
@@ -890,6 +1128,26 @@ static inline void topaz_console_error_number(topaz_number n) {
   topaz_string s = topaz_number_to_string(n);
   if (s.len) fwrite(s.data, 1, s.len, stderr);
   putc('\n', stderr);
+}
+
+static inline void topaz_console_warn_number(topaz_number n) {
+  topaz_console_error_number(n);
+}
+
+static inline void topaz_console_log_bigint(topaz_bigint *n) {
+  topaz_string s = topaz_bigint_to_string(n);
+  if (s.len) fwrite(s.data, 1, s.len, stdout);
+  putchar('\n');
+}
+
+static inline void topaz_console_error_bigint(topaz_bigint *n) {
+  topaz_string s = topaz_bigint_to_string(n);
+  if (s.len) fwrite(s.data, 1, s.len, stderr);
+  putc('\n', stderr);
+}
+
+static inline void topaz_console_warn_bigint(topaz_bigint *n) {
+  topaz_console_error_bigint(n);
 }
 
 // Phase 1.3: monomorphized growable arrays. Reference semantics — variables
