@@ -235,7 +235,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **2.2b stdlib aliases** — `std/path` を `node:path` と同じ named import set(`dirname` / `resolve` / `basename` / `extname` / `join`)として loader allowlist に追加。codegen / runtime は既存 call-site shortcut を再利用し、既存 `node:*` import は self-host/compiler 互換として残す。決定ログは `docs/adr/0314-std-path-alias.md`。
 - [x] **2.2c process stdlib design** — `std/process` の public API 名を named import の `argv` / `exit` / `writeStdout` / `writeStderr` / `writeError` として固定。既存の `process.argv` / `process.exit` / `process.stdout.write` / `process.stderr.write` / `console.error` は self-host/compiler 互換の synthetic/global support として残す。決定ログは `docs/adr/0315-std-process-api-names.md`。
 - [x] **2.3a post-selfhost backlog audit** — self-host probe は `node dist/cli.js src/cli.ts --emit-c-only -o build/selfhost_cli_probe` で通っており、緊急 blocker ではなく再現可能な実用 gap 順に進める。no-catch `try/finally` は ADR `0292` で着地済みのため、残りを 2.3b〜d に分割。決定ログは `docs/adr/0316-post-selfhost-backlog-audit.md`。
-- [ ] **2.3b generic function Array<T> monomorph sample** — generic 関数が `Array<T>` を返す経路で、generic / non-generic の monomorph slot 収集に concrete な positive/fail gap があるかを先にサンプルで再現する。gap が再現できなければ既存 coverage として記録し、コード変更しない。
+- [x] **2.3b generic function Array<T> monomorph sample** — flat `Array<T>` は既存 coverage で通っていたが、generic 関数が `Array<Array<T>>` を返す経路で nested array element tag / monomorph が欠けていたため、array element array だけを解禁。`Array<Array<number>>` と `Array<Array<Cell>>` の回帰は `examples/array_nested.ts` / ADR `0317`。
 - [ ] **2.3c generic method/interface design** — generic method(`class C { f<U>(...) {} }`) / generic interface は、method type parameter と class/interface monomorph storage・vtable shape に跨るため設計専用フェーズで境界を切る。
 - [ ] **2.3d try/finally cleanup dispatch design** — `try/catch/finally` と try body 内 `return` / `break` / `continue` を `finally` cleanup へ流す dispatch lowering を設計専用フェーズで固定する。
 - [ ] **2.4 async / regexp / bigint** — Promise / async-await(Fiber ベース実装)、regexp 統合、bigint 統合(必要時のみリンク)は、2.0〜2.3 の足場ができてから個別 ADR で設計する。
@@ -277,7 +277,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 ## 9. 直近のアクション(未完了)
 
 - [x] **generic backlog audit** — Phase 2.3 を ADR `0316` で分割し、generic method / generic interface は 2.3c の設計専用フェーズへ降ろした。
-- [ ] **generic function Array<T> monomorph sample** — 2.3b として、generic 関数の戻り値が `Array<T>` の場合の concrete gap を positive/fail sample で先に再現する。再現できなければ既存 coverage として記録する。
+- [x] **generic function Array<T> monomorph sample** — 2.3b として、flat `Array<T>` は既存 coverage、missing path は generic 関数が返す `Array<Array<T>>` と確認。array element array の monomorph 登録を追加し、`examples/array_nested.ts` で scalar / class inner arrays を固定。
 - [ ] **generic method/interface design** — 2.3c として、method type parameter と generic interface の monomorph storage / vtable shape を設計する。
 - [ ] **try/finally cleanup dispatch design** — 2.3d として、`try/catch/finally` と try body 内 `return` / `break` / `continue` の cleanup dispatch を設計する。no-catch `try/finally` は ADR `0292` で実装済み。
 

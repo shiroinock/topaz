@@ -166,6 +166,7 @@ run_fail_case switch_case_block_fallthrough_fail examples/switch_case_block_fall
 run_case number_format $'3.14\n0.30000000000000004\n1.5\n-1.5\n1e+21\n1e-7\n0.000001\n100000000000000000'
 run_case string_basic $'hello, topaz!\n13\nabcdef\ntrue\ntrue\nwoof'
 run_case array_basic $'3\n10\n30\n5\n40\n50\n99\n50\n4\n189\ntrue\nfalse\nalpha\ngamma\n3\n1\n7'
+run_case array_nested $'1\n7\n2\n9\n2\n7\n1\n42\n2\n100'
 run_case map_set_basic $'3\n2\ntrue\nfalse\n10\ntrue\n2\nfalse\n3\ntrue\nfalse\ntrue\n2\nfalse\nyes\nno\n2\ntrue\nfalse\ntrue\n50\n250\n490\n7'
 run_case set_constructor_iterable $'3\ntrue\nfalse\n3\nfalse\ntrue\n4\ntrue\n2\ntrue\n1\ntrue'
 run_case class_basic $'3\n4\n7\n30\n40\n99\n100\n555\n101\n557\n110\n575\nhello, topaz\nhello, topaz\n2'

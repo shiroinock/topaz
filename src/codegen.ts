@@ -224,7 +224,7 @@ function arrayOf(elem: TopazType): TopazType | undefined {
   // variants are guaranteed to be concrete classes.
   if (
     !isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)
-    && elem.kind !== "fn" && elem.kind !== "dunion"
+    && elem.kind !== "fn" && elem.kind !== "dunion" && elem.kind !== "array"
   ) return undefined;
   return { kind: "array", elem };
 }
@@ -395,13 +395,16 @@ function elemTag(t: TopazType): string {
     // Map / Set still reject fn at mapOf / setOf (eq / hash undefined).
     return typeIdent(t).slice("topaz_".length);
   }
+  if (t.kind === "array") {
+    return `array_${arrayShortName(t)}`;
+  }
   if (t.kind === "iter") {
     // Phase 1.5-3.5g-iterator: Iterator<T> values are single-pass and own
     // arena-allocated state — storing them in Array / Map / Set would need
     // ownership semantics we don't model. Always reject at container site.
     throwInternalCodegenError(`elemTag: iterator type ${typeIdent(t)} cannot be a container element (1.5-3.5g)`);
   }
-  throwInternalCodegenError("elemTag: unsupported container element kind (no nested containers yet)");
+  throwInternalCodegenError("elemTag: unsupported container element kind");
 }
 
 function scalarTag(t: TopazType): string {
@@ -1290,6 +1293,9 @@ class Emitter {
     if (!isArrayType(t)) return;
     const elem = arrayElem(t)!;
     if (isScalarType(elem)) return; // runtime.h preexpands these
+    if (elem.kind === "array") {
+      this.recordArrayMonomorph(elem);
+    }
     if (elem.kind === "fn") {
       // Phase 1.5-3.5g-array-fn: defer to the post-fn-typedef slot. The
       // underlying fn typedef must also be emitted so the macro expansion
@@ -2815,21 +2821,15 @@ class Emitter {
   private emitArrayMonomorphMacro(t: TopazType): string {
     const tag = arrayShortName(t);
     const elem = arrayElem(t)!;
-    let cElem: string = "";
-    if (isClassType(elem)) {
-      cElem = `topaz_class_${classNameOf(elem)!} *`;
-    } else if (isInterfaceType(elem)) {
-      cElem = `topaz_iface_${interfaceNameOf(elem)!}`;
-    } else if (elem.kind === "dunion") {
-      // Phase 1.5-6 prep #8: Array<dunion> stores the fat `{ kind, void *data }`
-      // struct as a value. Each element costs 16 bytes (two pointers on LP64)
-      // — same as topaz_iface_<I>. push / [i] = / for-of all see the dunion
-      // value directly; variant narrowing happens via switch on `.kind` or
-      // `instanceof` against `.data`.
-      cElem = typeIdent(elem);
-    } else {
+    if (
+      !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion"
+      && elem.kind !== "array"
+    ) {
       throwInternalCodegenError(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
+    // Array<dunion> stores the fat `{ kind, void *data }` value directly;
+    // Array<Array<T>> stores the inner array pointer.
+    const cElem = this.cElemTypeForContainer(elem);
     return `TOPAZ_ARRAY_DEFINE(${tag}, ${cElem})`;
   }
 
@@ -2966,6 +2966,7 @@ class Emitter {
     // value directly. The typedef is already emitted (emitDunionTypedef) ahead
     // of the container macros (see emit() containerMonomorphSlot order).
     if (elem.kind === "dunion") return typeIdent(elem);
+    if (elem.kind === "array") return cTypeName(elem);
     throwInternalCodegenError(`unexpected container element type ${typeIdent(elem)}`);
   }
 
