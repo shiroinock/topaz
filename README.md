@@ -62,6 +62,9 @@ to one native binary with no required config file. Relative imports, the public
 stdlib modules above, minimal package-root lookup, and clear diagnostics for
 unsupported syntax/module/package shapes are in scope.
 
+See [docs/mvp.md](docs/mvp.md) for the full MVP snapshot and black-box usage
+checklist.
+
 Post-MVP work includes capabilities, manifest generation, `doctor`, `check`,
 `explain`, async/await, regexp, richer package support, and runtime sandboxing.
 
