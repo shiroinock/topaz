@@ -31,6 +31,10 @@ function stdPathExplanation(): string {
   return "public path helper backed by the Topaz path builtin";
 }
 
+function stdFsExplanation(): string {
+  return "public filesystem helper backed by the Topaz filesystem builtin";
+}
+
 export function builtinImportDescriptors(): Array<BuiltinImportDescriptor> {
   return [
     {
@@ -68,6 +72,42 @@ export function builtinImportDescriptors(): Array<BuiltinImportDescriptor> {
       status: "compat",
       effects: ["fs.write"],
       explanation: "compatibility filesystem directory creation helper",
+    },
+    {
+      kind: "import",
+      specifier: "std/fs",
+      importedName: "readFileSync",
+      semanticName: "fs.readFileSync",
+      status: "public",
+      effects: ["fs.read"],
+      explanation: stdFsExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/fs",
+      importedName: "existsSync",
+      semanticName: "fs.existsSync",
+      status: "public",
+      effects: ["fs.metadata"],
+      explanation: stdFsExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/fs",
+      importedName: "writeFileSync",
+      semanticName: "fs.writeFileSync",
+      status: "public",
+      effects: ["fs.write"],
+      explanation: stdFsExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/fs",
+      importedName: "mkdirSync",
+      semanticName: "fs.mkdirSync",
+      status: "public",
+      effects: ["fs.write"],
+      explanation: stdFsExplanation(),
     },
     {
       kind: "import",

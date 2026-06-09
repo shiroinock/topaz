@@ -481,6 +481,10 @@ run_fail_case node_fs_mkdir_opts_recursive_false_fail examples/node_fs_mkdir_opt
 run_fail_case node_fs_mkdir_opts_extra_prop_fail examples/node_fs_mkdir_opts_extra_prop_fail.ts "options literal must contain exactly one property"
 run_fail_case node_fs_mkdir_as_value_fail examples/node_fs_mkdir_as_value_fail.ts "mkdirSync returns void and cannot be used as a value"
 
+rm -rf /tmp/topaz_std_fs_test 2>/dev/null || true
+run_case std_fs_basic $'true\nfalse\ntrue\nhello std fs\n\nagain\n5'
+run_fail_case std_fs_unknown_named_import_fail examples/std_fs_unknown_named_import_fail.ts "unsupported named import 'unlinkSync' from stdlib specifier 'std/fs'"
+
 run_case node_path_basic $'/foo/bar\n/foo\nfoo\n.\n/\n/\n/foo/bar\n/a/c\n/a/b/d\n/foo/bar/baz\n/bar\n/x/w\n/a/b/util.ts\n/pkg/src\ntrue'
 run_fail_case node_path_dirname_arity_fail examples/node_path_dirname_arity_fail.ts "dirname expects exactly one argument"
 run_fail_case node_path_dirname_type_fail examples/node_path_dirname_type_fail.ts "dirname path argument must be string"
