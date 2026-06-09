@@ -5583,8 +5583,11 @@ class Emitter {
         }
         const finallyReturnContextMaybe = this.finallyReturnContext;
         if (finallyReturnContextMaybe !== undefined) {
-          const popCount = this.liveTryFrames - finallyReturnContextMaybe.outerLiveTryFrames;
-          return `${pad}{ ${finallyReturnContextMaybe.reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${finallyReturnContextMaybe.cleanupLabel}; }`;
+          const finallyReturnContext: FinallyReturnContext = finallyReturnContextMaybe;
+          const reasonVar = finallyReturnContext.reasonVar;
+          const cleanupLabel = finallyReturnContext.cleanupLabel;
+          const popCount = this.liveTryFrames - finallyReturnContext.outerLiveTryFrames;
+          return `${pad}{ ${reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${cleanupLabel}; }`;
         }
         if (this.liveTryFrames > 0) {
           return `${pad}{ ${this.popFrames()}return; }`;
@@ -5601,12 +5604,16 @@ class Emitter {
       const retExpr = this.emitWithExpected(returnValue, currentReturnType);
       const finallyReturnContextMaybe = this.finallyReturnContext;
       if (finallyReturnContextMaybe !== undefined) {
-        const returnVarMaybe = finallyReturnContextMaybe.returnVar;
-        if (returnVarMaybe === undefined) {
-          throwInternalCodegenError("missing try/finally return temporary for non-void return");
+        const finallyReturnContext: FinallyReturnContext = finallyReturnContextMaybe;
+        const returnVarMaybe = finallyReturnContext.returnVar;
+        if (returnVarMaybe !== undefined) {
+          const returnVar: string = returnVarMaybe;
+          const reasonVar = finallyReturnContext.reasonVar;
+          const cleanupLabel = finallyReturnContext.cleanupLabel;
+          const popCount = this.liveTryFrames - finallyReturnContext.outerLiveTryFrames;
+          return `${pad}{ ${returnVar} = ${retExpr}; ${reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${cleanupLabel}; }`;
         }
-        const popCount = this.liveTryFrames - finallyReturnContextMaybe.outerLiveTryFrames;
-        return `${pad}{ ${returnVarMaybe} = ${retExpr}; ${finallyReturnContextMaybe.reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${finallyReturnContextMaybe.cleanupLabel}; }`;
+        throwInternalCodegenError("missing try/finally return temporary for non-void return");
       }
       if (this.liveTryFrames > 0) {
         // Phase 1.5-X: evaluate the value into a temp while the frame is still
