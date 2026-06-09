@@ -42,6 +42,7 @@ build/Release
 
 # topaz cc output
 /build/
+/dist-release/
 
 # stray --emit-c-only outputs when -o is omitted next to a src/ entry
 /src/*.c

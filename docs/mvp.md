@@ -13,9 +13,10 @@ language. The MVP promise is:
 Topaz-subset TypeScript source graph -> one native executable
 ```
 
-The compiled program is a native binary. The compiler command in this checkout
-is still a Node.js CLI (`node dist/cli.js` or `pnpm run topaz`), so the MVP does
-not yet mean "the Topaz compiler itself is distributed as one native binary".
+The compiled program is a native binary. A repository checkout can also build a
+self-hosted native compiler artifact with `pnpm run build:release`. The Node.js
+CLI (`node dist/cli.js` or `pnpm run topaz`) remains the development/bootstrap
+entry path, while the release artifact is the Node-free compiler binary.
 
 ## If You Only Received A Generated Binary
 
@@ -34,6 +35,19 @@ hello from topaz
 This runtime-only check does not require Node.js, `pnpm`, or a repository
 checkout.
 
+## If You Received A Topaz Compiler Binary
+
+Run the compiler binary directly:
+
+```sh
+./topaz-darwin-arm64 hello.ts -o hello
+./hello
+```
+
+The compiler binary itself does not require Node.js or `pnpm`. It still invokes
+the platform C compiler (`cc`) when producing a native output binary. Use
+`--emit-c-only` to stop after generated C.
+
 ## Build The Compiler From A Repository Checkout
 
 From the repository checkout:
@@ -49,6 +63,14 @@ Then invoke the compiler through either command:
 pnpm run topaz <entry.ts> -o build/app
 node dist/cli.js <entry.ts> -o build/app
 ```
+
+To build the native compiler release artifact from a checkout:
+
+```sh
+pnpm run build:release
+```
+
+This writes `dist-release/topaz-<os>-<arch>` and `dist-release/SHA256SUMS`.
 
 ## Compile And Run A Program From A Repository Checkout
 
@@ -182,8 +204,11 @@ emulate JavaScript behavior.
 For an external validation run, give the tester only:
 
 - This document.
-- A Topaz-generated native binary for runtime-only validation, or a repository
-  checkout plus `pnpm` if they need to compile new source.
+- A Topaz-generated native binary for runtime-only validation.
+- A `topaz-<os>-<arch>` compiler binary if they need to compile new source
+  without Node.js.
+- A repository checkout plus `pnpm` only if they need to rebuild the compiler
+  artifact or run development gates.
 
 Ask them to verify:
 
@@ -192,8 +217,8 @@ Ask them to verify:
   `hello.ts`.
 - `std/process` can print output.
 - Unsupported package shapes fail clearly when attempted.
-- The documentation does not imply the compiler itself is already shipped as one
-  native binary.
+- The documentation distinguishes the Node-based development/bootstrap CLI from
+  the native compiler release artifact.
 
 ## Post-MVP
 
@@ -205,4 +230,4 @@ The following are intentionally after the MVP:
 - Regexp execution.
 - Richer package support, package subpaths, `exports`, CommonJS, and npm
   compatibility.
-- Shipping the Topaz compiler itself as a standalone native binary.
+- Automated GitHub Release publication, signing, and notarization.

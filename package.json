@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "build:release": "bash scripts/build-release.sh",
     "bench": "node scripts/bench.mjs",
     "topaz": "node dist/cli.js",
     "test": "bash tests/smoke.sh",

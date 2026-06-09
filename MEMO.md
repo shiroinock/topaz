@@ -261,6 +261,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.7 public std/process** — `std/process` の `argv` / `exit` / stdio write helper を公開 import surface として実装し、synthetic process-console compatibility path と意味を揃える。決定ログは `docs/adr/0335-public-std-process.md`。
 - [x] **3.8 minimal bare package source lookup** — source package graph を最小限 lookup し、未対応 package shape は clear reject する。npm 互換・install・lifecycle script・CommonJS / Node emulation は MVP 外。決定ログは `docs/adr/0336-minimal-bare-package-lookup.md`。
 - [x] **3.9 MVP release/UX gate** — zero-config single-binary path、public stdlib、package-shape reject、diagnostic wording、README/CLI usage を MVP として通す。CLI help smoke を MVP gate に追加し、決定ログは `docs/adr/0337-single-binary-mvp-ux-gate.md`。
+- [x] **3.10 native compiler release artifact builder** — `pnpm run build:release` で self-host fixed-point gate を通したあと、最終 native compiler `build/topaz` を platform-qualified artifact (`dist-release/topaz-<os>-<arch>`) と `SHA256SUMS` にまとめる。Apple Silicon macOS では `topaz-darwin-arm64`。決定ログは `docs/adr/0350-release-artifact-builder.md`。
 
 Post-MVP ecosystem items:
 

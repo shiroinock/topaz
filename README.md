@@ -30,6 +30,27 @@ Use `--emit-c-only` when you want to inspect the generated C without invoking
 pnpm run topaz examples/fib.ts -o build/fib --emit-c-only
 ```
 
+## Native Compiler Artifact
+
+The self-hosted compiler can be built as a native binary:
+
+```sh
+pnpm run build:release
+```
+
+This runs the self-host fixed-point gate, then writes:
+
+- `dist-release/topaz-darwin-arm64` on Apple Silicon macOS.
+- `dist-release/SHA256SUMS`.
+
+The release artifact is the native compiler. It can compile a Topaz-subset
+source graph without Node.js:
+
+```sh
+./dist-release/topaz-darwin-arm64 examples/fib.ts -o build/fib
+./build/fib
+```
+
 ## Public Stdlib
 
 Public user code should import supported helpers from:
