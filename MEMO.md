@@ -252,7 +252,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 ここから先は「Effect-TS の延長線」的な発展:
 
 - [x] **3.0 capability / effect 型追跡 design** — 関数は return type と effect set を持つものとして扱い、`throw<E>` / `fs.read` / `fs.write` / `fs.metadata` / `process.argv` / `process.exit` / `io.stdout` / `io.stderr` / `async.schedule` を最初の effect atom family とする。capability は package / host 境界で effect を discharge する権限であり、`!{ fs.read, throw<E> }` 的シグネチャは当面は例示表記に留める。決定ログは `docs/adr/0328-capability-effect-tracking-design.md`。
-- strict パッケージマニフェスト(npm 互換、`strict-ts.json` で宣言)
+- [x] **3.1 zero-config package/module resolution design** — `topaz <entry.ts>` を primary entry experience として維持し、bare import / `node_modules` は将来の source lookup 対象として扱うが、npm 互換・package install・lifecycle script・CommonJS / Node emulation は約束しない。`strict-ts.json` は multi-entry / target / import allowlist / capability grant 用の optional policy file として位置付ける。決定ログは `docs/adr/0329-zero-config-package-resolution-design.md`。
 - LLM 駆動マイグレーションツール(既存 TS → strict 化)
 - stdlib 整備
 - Wasm バックエンド(WASI Preview 2/3)
