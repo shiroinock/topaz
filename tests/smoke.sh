@@ -254,6 +254,7 @@ run_case compound_carry_narrow $'(\n<mismatch>\n<mismatch>\nparen-(\n<other>\n<o
 run_case dunion_init_narrow $'foo@3\n42@7\nident foo\nnum 42'
 run_case dunion_widen $'12\n9\n12\n9'
 run_case dunion_optional_object_literal $'ident x\npair a,b\nnone'
+run_case string_literal_union $'stop\nskip\nstop'
 
 run_case catch_unknown $'kaboom\n42\nfizz\nrethrow\ntrue\n99\nfalse'
 
@@ -335,6 +336,7 @@ run_fail_case dunion_common_field_write_fail examples/dunion_common_field_write_
 run_fail_case dunion_init_narrow_let_fail examples/dunion_init_narrow_let_fail.ts "cannot access '.text' on discriminated union"
 run_fail_case dunion_widen_fail examples/dunion_widen_fail.ts "is not a variant of"
 run_fail_case dunion_optional_object_literal_fail examples/dunion_optional_object_literal_fail.ts 'has kind="bogus"'
+run_fail_case string_literal_union_mismatch_fail examples/string_literal_union_mismatch_fail.ts 'expected topaz_union_string_literal_break_or_string_literal_continue, got string literal "return"'
 run_fail_case compound_narrow_no_left_fail examples/compound_narrow_no_left_fail.ts "has no member 'op'"
 run_fail_case compound_carry_indeterminate_fail examples/compound_carry_indeterminate_fail.ts "cannot access '.op' on discriminated union"
 run_fail_case catch_unknown_unnarrowed_fail examples/catch_unknown_unnarrowed_fail.ts "cannot access '.msg' on \`unknown\`"

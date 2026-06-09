@@ -139,6 +139,26 @@ function isClassType(t: TopazType): boolean { return t.kind === "class"; }
 function isInterfaceType(t: TopazType): boolean { return t.kind === "iface"; }
 function isUndefinedType(t: TopazType): boolean { return t.kind === "undefined"; }
 
+function isStringLiteralUnion(t: TopazType): boolean {
+  if (t.kind !== "union") return false;
+  for (const v of t.variants) {
+    if (v.kind !== "string_literal") return false;
+  }
+  return true;
+}
+
+function stringLiteralUnionContains(t: TopazType, value: string): boolean {
+  if (t.kind !== "union") return false;
+  for (const v of t.variants) {
+    if (v.kind === "string_literal" && v.value === value) return true;
+  }
+  return false;
+}
+
+function hasStringValueRepresentation(t: TopazType): boolean {
+  return t.kind === "string" || t.kind === "string_literal" || isStringLiteralUnion(t);
+}
+
 function classNameOf(t: TopazType): string | undefined {
   return t.kind === "class" ? t.name : undefined;
 }
@@ -200,6 +220,12 @@ function withoutUndefined(t: TopazType): TopazType | undefined {
 // `Point | undefined` and `Circle` do not.
 function typesOverlap(a: TopazType, b: TopazType): boolean {
   if (typeEq(a, b)) return true;
+  if (
+    (a.kind === "string" && b.kind === "string_literal") ||
+    (a.kind === "string_literal" && b.kind === "string")
+  ) {
+    return true;
+  }
   if (a.kind === "union") {
     for (const v of a.variants) {
       if (typesOverlap(v, b)) return true;
@@ -610,6 +636,9 @@ function cTypeName(t: TopazType): string {
     return typeIdent(t);
   }
   if (t.kind === "union") {
+    if (isStringLiteralUnion(t)) {
+      return "topaz_string";
+    }
     const nonUndef = t.variants.filter((v) => v.kind !== "undefined");
     if (nonUndef.length !== 1) {
       throwInternalCodegenError(`cTypeName: union ${typeIdent(t)} is not \`T | undefined\` (1.5-3b only supports T | undefined)`);
@@ -8167,7 +8196,8 @@ class Emitter {
       }
       if (
         (tok === "===" || tok === "!==") &&
-        this.inferType(expr.lhs).kind === "string"
+        hasStringValueRepresentation(this.inferType(expr.lhs)) &&
+        hasStringValueRepresentation(this.inferType(expr.rhs))
       ) {
         const inner = `topaz_string_eq(${this.emitExpression(expr.lhs)}, ${this.emitExpression(expr.rhs)})`;
         return tok === "===" ? inner : `(!${inner})`;
@@ -11570,6 +11600,12 @@ class Emitter {
         return;
       }
     }
+    if (isStringLiteralUnion(expected)) {
+      const lit = stringLitText(expr);
+      if (lit !== undefined && stringLiteralUnionContains(expected, lit)) {
+        return;
+      }
+    }
     // Phase 1.5-3.5g-array-fn: arrows without annotations need the expected fn
     // type to type-check (the unannotated `inferType` would throw). Mirror the
     // contextual path in emitWithExpected so `=` / `[i] = ` / `.push(arrow)`
@@ -11681,6 +11717,18 @@ class Emitter {
       const lit = stringLitText(expr);
       if (lit !== undefined) {
         if (lit !== expected.value) {
+          throw new CodegenError(
+            { pos: expr.pos },
+            `type mismatch: expected ${typeIdent(expected)}, got string literal "${lit}"`,
+          );
+        }
+        return this.emitStringLiteralText(lit, { pos: expr.pos });
+      }
+    }
+    if (isStringLiteralUnion(expected)) {
+      const lit = stringLitText(expr);
+      if (lit !== undefined) {
+        if (!stringLiteralUnionContains(expected, lit)) {
           throw new CodegenError(
             { pos: expr.pos },
             `type mismatch: expected ${typeIdent(expected)}, got string literal "${lit}"`,
@@ -12040,6 +12088,9 @@ class Emitter {
     // Phase 1.5-3e: string_literal "X" widens to plain string (the literal
     // already has the right C representation, so no transformation needed).
     if (actual.kind === "string_literal" && expected.kind === "string") {
+      return raw;
+    }
+    if (isStringLiteralUnion(actual) && expected.kind === "string") {
       return raw;
     }
     throw new CodegenError(anchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
