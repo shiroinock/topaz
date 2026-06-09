@@ -9116,6 +9116,9 @@ class Emitter {
       if (baseType.kind === "string") {
         return this.emitStringMethodCall(expr, prop);
       }
+      if (baseType.kind === "number") {
+        return this.emitNumberMethodCall(expr, prop);
+      }
       if (isClassType(baseType)) {
         return this.emitClassMethodCall(expr, prop, baseType);
       }
@@ -9669,6 +9672,20 @@ class Emitter {
       );
     }
     return this.emitWithExpected(sepArg, T_STRING);
+  }
+
+  private emitNumberMethodCall(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+  ): string {
+    const method = callee.name;
+    if (method === "toString") {
+      if (expr.args.length !== 0) {
+        throw new CodegenError({ pos: expr.pos }, "Number.toString expects no arguments");
+      }
+      return `topaz_number_to_string(${this.emitExpression(callee.receiver)})`;
+    }
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_number`);
   }
 
   // Phase 1.5-6 prep #10/#6f/#6i: String.prototype.charCodeAt / .slice /
@@ -10439,6 +10456,20 @@ class Emitter {
       return T_BOOLEAN;
     }
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_string`);
+  }
+
+  private inferNumberMethodReturn(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+  ): TopazType {
+    const method = callee.name;
+    if (method === "toString") {
+      if (expr.args.length !== 0) {
+        throw new CodegenError({ pos: expr.pos }, "Number.toString expects no arguments");
+      }
+      return T_STRING;
+    }
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_number`);
   }
 
   private emitMapMethodCall(
@@ -11557,6 +11588,9 @@ class Emitter {
         }
         if (baseType.kind === "string") {
           return this.inferStringMethodReturn(expr, prop);
+        }
+        if (baseType.kind === "number") {
+          return this.inferNumberMethodReturn(expr, prop);
         }
         if (isClassType(baseType)) {
           const cls = this.classes.get(classNameOf(baseType)!)!;

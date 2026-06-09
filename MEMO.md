@@ -264,7 +264,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 Post-MVP ecosystem items:
 
-- restore current self-host fixed-point gate (old blocker `src/codegen.ts:7843:15` cleanup target frame walk cleared by ADR `0347`; next blocker: `src/codegen.ts:9612:24` `Array.push` spread lowering calls `fixedTmps.length.toString()`, but Topaz does not support `number.toString()`)
+- restore current self-host fixed-point gate (old blocker `src/codegen.ts:7843:15` cleanup target frame walk cleared by ADR `0347`; `src/codegen.ts:9612:24` `fixedTmps.length.toString()` cleared by ADR `0348`; `pnpm run test:selfhost` now reaches `PASS [selfhost_stage2]`)
 - effect inference / capabilities / manifest / doctor / check / explain
 - async implementation
 - regexp implementation

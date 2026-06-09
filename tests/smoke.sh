@@ -218,6 +218,9 @@ run_case switch_check $'1699\n22'
 run_case switch_case_block_exit $'10\n30\n99'
 run_fail_case switch_case_block_fallthrough_fail examples/switch_case_block_fallthrough_fail.ts "case body must end with"
 run_case number_format $'3.14\n0.30000000000000004\n1.5\n-1.5\n1e+21\n1e-7\n0.000001\n100000000000000000'
+run_case number_to_string $'123\n0\n-12\n1e+21\n3.14\n0.30000000000000004\n42\nn=42\n4\n3'
+run_fail_case number_to_string_arity_fail examples/number_to_string_arity_fail.ts "Number.toString expects no arguments"
+run_fail_case number_unsupported_method_fail examples/number_unsupported_method_fail.ts "unsupported method '.toFixed' on topaz_number"
 run_case string_basic $'hello, topaz!\n13\nabcdef\ntrue\ntrue\nwoof'
 run_case array_basic $'3\n10\n30\n5\n40\n50\n99\n50\n4\n189\ntrue\nfalse\nalpha\ngamma\n3\n1\n7'
 run_case array_nested $'1\n7\n2\n9\n2\n7\n1\n42\n2\n100'
