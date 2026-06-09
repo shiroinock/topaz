@@ -247,18 +247,30 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 - [x] **2.4d regexp design** — 最初の surface は regexp literal `/pattern/`、`new RegExp("pattern")`、`RegExp.prototype.test(input: string): boolean` に絞り、flags / match 系 API / captures / unicode / containers は後続設計へ回す。ADR `0326`。
 - [x] **2.4e async design** — Promise / async-await(Fiber ベース実装)を個別 ADR `0327` で設計した。
 
-### Phase 3 以降: エコシステム
+### 3.MVP / Phase 3: Single-binary MVP
 
-ここから先は「Effect-TS の延長線」的な発展:
+MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイル必須なしで 1 つの native binary にする**こと。公開 surface は `std/fs` / `std/path` / `std/process` と、未対応 package shape への clear reject までに絞る。capability / manifest / doctor / explain などの ecosystem work はこの MVP の後ろへ回す。
 
 - [x] **3.0 capability / effect 型追跡 design** — 関数は return type と effect set を持つものとして扱い、`throw<E>` / `fs.read` / `fs.write` / `fs.metadata` / `process.argv` / `process.exit` / `io.stdout` / `io.stderr` / `async.schedule` を最初の effect atom family とする。capability は package / host 境界で effect を discharge する権限であり、`!{ fs.read, throw<E> }` 的シグネチャは当面は例示表記に留める。決定ログは `docs/adr/0328-capability-effect-tracking-design.md`。
 - [x] **3.1 zero-config package/module resolution design** — `topaz <entry.ts>` を primary entry experience として維持し、bare import / `node_modules` は将来の source lookup 対象として扱うが、npm 互換・package install・lifecycle script・CommonJS / Node emulation は約束しない。`strict-ts.json` は multi-entry / target / import allowlist / capability grant 用の optional policy file として位置付ける。決定ログは `docs/adr/0329-zero-config-package-resolution-design.md`。
 - [x] **3.2 manifest doctor / capability guidance design** — zero-config build と optional manifest policy を分離したまま、`topaz doctor <entry.ts>` / `topaz manifest init <entry.ts>` / `topaz check <entry.ts>` / `topaz explain ...` で effect/capability 要求を file:line provenance 付きに説明し、1 問ずつ manifest 生成を支援する UX 方針を固定。依存 source graph / 将来の `node_modules` lookup も compiled graph なら capability inference に参加する。決定ログは `docs/adr/0330-manifest-doctor-capability-guidance-design.md`。
 - [x] **3.3 stdlib capability metadata design** — future effect inference / `doctor` / `manifest init` / `check` / `explain` が semantic builtin descriptor 上の metadata を共有し、public `std/*` と compatibility `node:*` / synthetic globals が同じ挙動なら同一 descriptor を指せる方針として固定。`std/path` / `node:path` / `node:url.fileURLToPath` / `import.meta.url` は pure、`std/fs` / `node:fs` と `std/process` / synthetic process-console surface は対応する effect atom に mapping し、`node:child_process.execFileSync` 用に compatibility-only `process.spawn` atom を追加する。決定ログは `docs/adr/0331-stdlib-capability-metadata-design.md`。
 - [x] **3.4 builtin descriptor metadata skeleton** — ADR `0331` の semantic builtin descriptor 方針を最初の実装に落とし、`src/builtin_descriptors.ts` に import / synthetic global descriptor と effect metadata を集約した。loader の stdlib specifier / named import allowlist は descriptor helper 参照へ移し、codegen lowering・受理 import surface・capability enforcement は変えない。決定ログは `docs/adr/0332-builtin-descriptor-metadata-skeleton.md`。
-- LLM 駆動マイグレーションツール(既存 TS → strict 化)
-- stdlib 整備
-- Wasm バックエンド(WASI Preview 2/3)
+- [x] **3.5 self-host-compatible descriptor metadata** — Phase 20 の descriptor metadata は維持しつつ、native self-host parser が未対応の top-level `export const` descriptor arrays を exported function へ戻した。ロードマップは single-binary MVP と post-MVP ecosystem work を分離。決定ログは `docs/adr/0333-single-binary-mvp-roadmap.md`。
+- [ ] **3.6 public std/fs** — `std/fs` の read / metadata / write helper を公開 import surface として実装し、`node:fs` compatibility path と意味を揃える。
+- [ ] **3.7 public std/process** — `std/process` の `argv` / `exit` / stdio write helper を公開 import surface として実装し、synthetic process-console compatibility path と意味を揃える。
+- [ ] **3.8 minimal bare package source lookup** — source package graph を最小限 lookup し、未対応 package shape は clear reject する。npm 互換・install・lifecycle script・CommonJS / Node emulation は MVP 外。
+- [ ] **3.9 MVP release/UX gate** — zero-config single-binary path、public stdlib、package-shape reject、diagnostic wording、README/CLI usage を MVP として通す。
+
+Post-MVP ecosystem items:
+
+- effect inference / capabilities / manifest / doctor / check / explain
+- async implementation
+- regexp implementation
+- generic method/interface implementation
+- remaining bigint surface
+- LLM migration tool
+- Wasm/WASI backend
 
 ---
 
