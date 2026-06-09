@@ -8392,7 +8392,7 @@ class Emitter {
     expected: TopazType | undefined,
   ): string {
     // Phase 1.5-3.5h-spread: spread (`...x`) is allowed when the source is an
-    // Array<T> whose elem type matches the destination's elem type EXACTLY.
+    // Array<T> whose elem type can flow into the destination elem type.
     // Set / Iterator sources stay rejected here (tracked in future sub-steps).
     // Holes in array literals are rejected in convert.
     let hasSpread = false;
@@ -8421,6 +8421,7 @@ class Emitter {
       // Snapshot every spread source first so the reserve sum / push loop see
       // a stable .len and .data, and each source expression evaluates once.
       const spreadTmps: string[] = [];
+      const spreadElemTypes: TopazType[] = [];
       const fixedCount = expr.elems.filter((e) => e.kind !== "spread").length;
       for (const e of expr.elems) {
         if (e.kind !== "spread") continue;
@@ -8432,7 +8433,7 @@ class Emitter {
           );
         }
         const srcElem = arrayElem(srcType)!;
-        if (!typeEq(srcElem, elemType)) {
+        if (!typeEq(srcElem, elemType) && !this.isAssignableTo(srcElem, elemType)) {
           throw new CodegenError(
             { pos: e.expr.pos },
             `spread element type ${typeIdent(srcElem)} does not match destination element type ${typeIdent(elemType)}`,
@@ -8443,6 +8444,7 @@ class Emitter {
         const spName = arrayShortName(srcType);
         parts.push(`topaz_array_${spName} *${spTmp} = ${this.emitExpression(e.expr)};`);
         spreadTmps.push(spTmp);
+        spreadElemTypes.push(srcElem);
       }
       const reserveSum = [`${fixedCount}`, ...spreadTmps.map((t) => `${t}->len`)].join(" + ");
       parts.push(`topaz_array_${name}_reserve(${tmp}, ${reserveSum});`);
@@ -8450,10 +8452,12 @@ class Emitter {
       for (const e of expr.elems) {
         if (e.kind === "spread") {
           const spTmp = spreadTmps[spIdx++];
+          const srcElem = spreadElemTypes[spIdx - 1];
           const iterId = this.tmpCounter++;
           const iVar = `__topaz_si_${iterId}`;
+          const elemStr = this.applyCoercion(`${spTmp}->data[${iVar}]`, srcElem, elemType, { pos: e.expr.pos });
           parts.push(
-            `for (size_t ${iVar} = 0; ${iVar} < ${spTmp}->len; ${iVar}++) topaz_array_${name}_push(${tmp}, ${spTmp}->data[${iVar}]);`,
+            `for (size_t ${iVar} = 0; ${iVar} < ${spTmp}->len; ${iVar}++) topaz_array_${name}_push(${tmp}, ${elemStr});`,
           );
         } else {
           parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e.expr, elemType)});`);
@@ -8495,8 +8499,8 @@ class Emitter {
     if (expected !== undefined) {
       if (isArrayType(expected)) {
         // With a known expected Array<T>, use T as the element type so each
-        // fixed element can coerce to it (class -> interface). Spread sources
-        // still require EXACT elem match (no per-element coercion through spread).
+        // fixed element can coerce to it. Spread sources are copied element by
+        // element through the same assignability/coercion path.
         return expected;
       }
     }

@@ -442,7 +442,7 @@ run_fail_case object_destructuring_method_fail examples/object_destructuring_met
 run_fail_case object_destructuring_non_class_fail examples/object_destructuring_non_class_fail.ts "object destructuring requires a class or interface receiver"
 run_fail_case object_destructuring_empty_fail examples/object_destructuring_empty_fail.ts "empty object destructuring pattern"
 
-run_case array_of_dunion $'3\n31\n21\n3\n3\n4\n6\nsquare\n6\n99\n2\ntrue\nfalse\n1\n1\ntrue\nfalse'
+run_case array_of_dunion $'3\n31\n21\n3\n3\n4\n6\nsquare\n6\n99\n2\ntrue\nfalse\n1\n1\ntrue\nfalse\n3\n187'
 
 run_case module_const_hoist $'true\nfalse\ntrue\nfalse\ntrue\ntrue\n51\n-1\n42\n70\n3\n5\n100\n11\n4\n2\n1500'
 run_fail_case module_const_hoist_let_fail examples/module_const_hoist_let_fail.ts "unknown identifier 'counter'"

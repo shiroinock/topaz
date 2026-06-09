@@ -115,3 +115,13 @@ console.log(set.size);
 console.log(set.has(c2));
 const c3: Circle = new Circle(4);
 console.log(set.has(c3));
+
+// (10) Array spread from a concrete variant Array into an Array<dunion>.
+const circles: Array<Circle> = [new Circle(5), new Circle(6)];
+const spreadShapes: Array<Shape> = [...circles, new Square(2)];
+console.log(spreadShapes.length);
+let spreadTotal: number = 0;
+for (const shape of spreadShapes) {
+  spreadTotal = spreadTotal + area(shape);
+}
+console.log(spreadTotal);

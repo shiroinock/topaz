@@ -1,6 +1,6 @@
 // Phase 1.5-3.5h-spread: spread (`...x`) inside an array literal.
-// Source must be `Array<T>` whose elem type matches the destination
-// exactly. Set / Iterator sources and call-arg spread stay rejected.
+// Source must be `Array<T>` whose elem type can flow into the destination
+// element type. Set / Iterator sources and call-arg spread stay rejected.
 
 interface Named {
   name(): string;
@@ -106,11 +106,10 @@ let gsum: number = 0;
 for (const s of grown) gsum = gsum + s.length;
 console.log(gsum);                       // 3+3+3 = 9
 
-// (12) Annotated dst type drives fixed-element coercion; spread still
-//      requires EXACT elem match, so we pre-coerce class -> iface by
-//      pushing into a Named Array first.
-const seed: Array<Named> = [new Tag("p"), new Tag("qq")];
-const wider: Array<Named> = [new Tag("zero"), ...seed];
+// (12) Annotated dst type drives fixed-element coercion; spread sources flow
+//      through the same assignability/coercion path.
+const seedTags: Array<Tag> = [new Tag("p"), new Tag("qq")];
+const wider: Array<Named> = [new Tag("zero"), ...seedTags];
 let wTotal: number = 0;
 for (const n of wider) wTotal = wTotal + n.name().length;
 console.log(wTotal);                     // 4+1+2 = 7

@@ -264,7 +264,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 Post-MVP ecosystem items:
 
-- restore current self-host fixed-point gate (next blocker: `src/builtin_descriptors.ts` spread class element into dunion array)
+- restore current self-host fixed-point gate (next blocker: `src/codegen.ts` template literal substitution of `string | undefined`)
 - effect inference / capabilities / manifest / doctor / check / explain
 - async implementation
 - regexp implementation
