@@ -145,6 +145,30 @@ run_cli_fail_case() {
 }
 
 run_cli_smoke() {
+  local help
+  help=$(node dist/cli.js --help)
+  if [[ "$help" != *"usage: topaz <input.ts>"* ]]; then
+    echo "FAIL [cli_help]: missing usage" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$help" != *"--emit-c-only"* ]]; then
+    echo "FAIL [cli_help]: missing --emit-c-only" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$help" != *"--parse-only"*"unsupported/reserved"* ]]; then
+    echo "FAIL [cli_help]: --parse-only is not described as unsupported/reserved" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$help" == *"dump AST as JSON"* ]]; then
+    echo "FAIL [cli_help]: --parse-only still promises a JSON AST dump" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_help]"
+
   node dist/cli.js examples/fib.ts --emit-c-only -o build/cli_emit_probe > /dev/null
   if [[ ! -f build/cli_emit_probe.c ]]; then
     echo "FAIL [cli_emit_c_only]: expected build/cli_emit_probe.c" >&2

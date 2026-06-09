@@ -16,7 +16,7 @@ options:
   -o, --output <path>   output binary path (default: <input> with .ts stripped)
   --emit-c-only         emit the generated .c next to output and exit (skip cc)
   --lex-only            run only the Topaz lexer and dump tokens (skip parse/codegen/cc)
-  --parse-only          run lexer + parser and dump AST as JSON (skip codegen/cc)
+  --parse-only          unsupported/reserved in the self-host subset
   -h, --help            show this help`;
 }
 
