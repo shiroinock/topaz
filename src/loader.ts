@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { ImportDecl, ImportSpecifier, SourceModule } from "./ast.js";
+import { allowedBuiltinImportNames, isAllowedBuiltinImport, isBuiltinImportSpecifier } from "./builtin_descriptors.js";
 import { parseFile } from "./topaz_parser.js";
 
 // Phase 1.5-6g-1: production loading now uses the native Topaz parser. The
@@ -63,7 +64,7 @@ class LoaderState {
       const decl = item.decl;
       if (decl.kind !== "import_decl") continue;
       const specText = decl.modulePath;
-      if (isStdlibSpecifier(specText)) {
+      if (isBuiltinImportSpecifier(specText)) {
         validateStdlibImport(absPath, mod, decl, specText);
         continue;
       }
@@ -146,60 +147,6 @@ function validateImportSpecifier(filePath: string, module: SourceModule, el: Imp
   }
 }
 
-// Phase 1.5-6 prep #13: stdlib specifier。loader は visit を skip し、import
-// 経由で取り込んだ識別子は codegen 側で syntactic shortcut として処理する。
-// 現状は `node:fs` から `readFileSync` / `existsSync` (1.5-6 prep #17) /
-// `writeFileSync` (1.5-6 prep #19) / `mkdirSync` (1.5-6 prep #20)、
-// `node:path` / `std/path` から `dirname` / `resolve` (1.5-6 prep #18) /
-// `basename` (1.5-6 prep #21) / `extname` (1.5-6 prep #22) /
-// `join` (1.5-6 prep #23)、
-// `node:child_process` から `execFileSync` (1.5-6 prep #24)、
-// `node:url` から `fileURLToPath` (1.5-6 prep #25) を受理。
-function isStdlibSpecifier(spec: string): boolean {
-  if (spec === "node:fs") return true;
-  if (spec === "node:path") return true;
-  if (spec === "std/path") return true;
-  if (spec === "node:child_process") return true;
-  if (spec === "node:url") return true;
-  return false;
-}
-
-function isAllowedStdlibImport(spec: string, name: string): boolean {
-  if (spec === "node:fs") {
-    if (name === "readFileSync") return true;
-    if (name === "existsSync") return true;
-    if (name === "writeFileSync") return true;
-    if (name === "mkdirSync") return true;
-    return false;
-  }
-  if (spec === "node:path" || spec === "std/path") {
-    if (name === "dirname") return true;
-    if (name === "resolve") return true;
-    if (name === "basename") return true;
-    if (name === "extname") return true;
-    if (name === "join") return true;
-    return false;
-  }
-  if (spec === "node:child_process") {
-    if (name === "execFileSync") return true;
-    return false;
-  }
-  if (spec === "node:url") {
-    if (name === "fileURLToPath") return true;
-    return false;
-  }
-  return false;
-}
-
-function allowedStdlibNames(spec: string): string {
-  if (spec === "node:fs") return "readFileSync, existsSync, writeFileSync, mkdirSync";
-  if (spec === "node:path") return "dirname, resolve, basename, extname, join";
-  if (spec === "std/path") return "dirname, resolve, basename, extname, join";
-  if (spec === "node:child_process") return "execFileSync";
-  if (spec === "node:url") return "fileURLToPath";
-  return "";
-}
-
 function validateStdlibImport(filePath: string, module: SourceModule, stmt: ImportDecl, spec: string): void {
   if (stmt.specifiers.length === 0 && stmt.defaultName === undefined && stmt.namespaceName === undefined) {
     throw loaderErrorAt(
@@ -233,12 +180,12 @@ function validateStdlibImport(filePath: string, module: SourceModule, stmt: Impo
   }
   for (const el of stmt.specifiers) {
     validateImportSpecifier(filePath, module, el);
-    if (!isAllowedStdlibImport(spec, el.importedName)) {
+    if (!isAllowedBuiltinImport(spec, el.importedName)) {
       throw loaderErrorAt(
         filePath,
         module,
         el.pos,
-        `unsupported named import '${el.importedName}' from stdlib specifier '${spec}' (allowed: ${allowedStdlibNames(spec)})`,
+        `unsupported named import '${el.importedName}' from stdlib specifier '${spec}' (allowed: ${allowedBuiltinImportNames(spec)})`,
       );
     }
   }
