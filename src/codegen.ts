@@ -6308,7 +6308,14 @@ class Emitter {
         return false;
       case "if_stmt":
         if (this.stmtNeedsCleanupLabelForCurrent(s.thenBranch, want)) return true;
-        return s.elseBranch !== undefined && this.stmtNeedsCleanupLabelForCurrent(s.elseBranch, want);
+        {
+          const elseBranchMaybe = s.elseBranch;
+          if (elseBranchMaybe !== undefined) {
+            const elseBranch: Stmt = elseBranchMaybe;
+            return this.stmtNeedsCleanupLabelForCurrent(elseBranch, want);
+          }
+        }
+        return false;
       default:
         return false;
     }
@@ -6339,7 +6346,14 @@ class Emitter {
         return this.blockHasTargetedExit(s, want, depth);
       case "if_stmt":
         if (this.stmtHasTargetedExit(s.thenBranch, want, depth)) return true;
-        return s.elseBranch !== undefined && this.stmtHasTargetedExit(s.elseBranch, want, depth);
+        {
+          const elseBranchMaybe = s.elseBranch;
+          if (elseBranchMaybe !== undefined) {
+            const elseBranch: Stmt = elseBranchMaybe;
+            return this.stmtHasTargetedExit(elseBranch, want, depth);
+          }
+        }
+        return false;
       case "while_stmt":
       case "do_while_stmt":
       case "for_stmt":
@@ -6355,8 +6369,21 @@ class Emitter {
         return false;
       case "try_stmt":
         if (this.blockHasTargetedExit(s.tryBlock, want, depth)) return true;
-        if (s.catchClause !== undefined && this.blockHasTargetedExit(s.catchClause.body, want, depth)) return true;
-        return s.finallyBlock !== undefined && this.blockHasTargetedExit(s.finallyBlock, want, depth);
+        {
+          const catchClauseMaybe = s.catchClause;
+          if (catchClauseMaybe !== undefined) {
+            const catchClause: CatchClause = catchClauseMaybe;
+            if (this.blockHasTargetedExit(catchClause.body, want, depth)) return true;
+          }
+        }
+        {
+          const finallyBlockMaybe = s.finallyBlock;
+          if (finallyBlockMaybe !== undefined) {
+            const finallyBlock: BlockStmt = finallyBlockMaybe;
+            return this.blockHasTargetedExit(finallyBlock, want, depth);
+          }
+        }
+        return false;
       default:
         return false;
     }
@@ -6377,10 +6404,15 @@ class Emitter {
       case "block_stmt":
         return this.blockHasBreakOrContinue(s);
       case "if_stmt":
-        return (
-          this.stmtHasBreakOrContinue(s.thenBranch) ||
-          (s.elseBranch !== undefined && this.stmtHasBreakOrContinue(s.elseBranch))
-        );
+        if (this.stmtHasBreakOrContinue(s.thenBranch)) return true;
+        {
+          const elseBranchMaybe = s.elseBranch;
+          if (elseBranchMaybe !== undefined) {
+            const elseBranch: Stmt = elseBranchMaybe;
+            return this.stmtHasBreakOrContinue(elseBranch);
+          }
+        }
+        return false;
       case "while_stmt":
       case "do_while_stmt":
         return this.stmtHasBreakOrContinue(s.body);
@@ -6397,8 +6429,20 @@ class Emitter {
         return false;
       case "try_stmt":
         if (this.blockHasBreakOrContinue(s.tryBlock)) return true;
-        if (s.catchClause !== undefined && this.blockHasBreakOrContinue(s.catchClause.body)) return true;
-        if (s.finallyBlock !== undefined && this.blockHasBreakOrContinue(s.finallyBlock)) return true;
+        {
+          const catchClauseMaybe = s.catchClause;
+          if (catchClauseMaybe !== undefined) {
+            const catchClause: CatchClause = catchClauseMaybe;
+            if (this.blockHasBreakOrContinue(catchClause.body)) return true;
+          }
+        }
+        {
+          const finallyBlockMaybe = s.finallyBlock;
+          if (finallyBlockMaybe !== undefined) {
+            const finallyBlock: BlockStmt = finallyBlockMaybe;
+            if (this.blockHasBreakOrContinue(finallyBlock)) return true;
+          }
+        }
         return false;
       default:
         return false;
@@ -6412,10 +6456,15 @@ class Emitter {
       case "block_stmt":
         return this.blockHasReturn(s);
       case "if_stmt":
-        return (
-          this.stmtHasReturn(s.thenBranch) ||
-          (s.elseBranch !== undefined && this.stmtHasReturn(s.elseBranch))
-        );
+        if (this.stmtHasReturn(s.thenBranch)) return true;
+        {
+          const elseBranchMaybe = s.elseBranch;
+          if (elseBranchMaybe !== undefined) {
+            const elseBranch: Stmt = elseBranchMaybe;
+            return this.stmtHasReturn(elseBranch);
+          }
+        }
+        return false;
       case "while_stmt":
       case "do_while_stmt":
         return this.stmtHasReturn(s.body);
@@ -6432,8 +6481,20 @@ class Emitter {
         return false;
       case "try_stmt":
         if (this.blockHasReturn(s.tryBlock)) return true;
-        if (s.catchClause !== undefined && this.blockHasReturn(s.catchClause.body)) return true;
-        if (s.finallyBlock !== undefined && this.blockHasReturn(s.finallyBlock)) return true;
+        {
+          const catchClauseMaybe = s.catchClause;
+          if (catchClauseMaybe !== undefined) {
+            const catchClause: CatchClause = catchClauseMaybe;
+            if (this.blockHasReturn(catchClause.body)) return true;
+          }
+        }
+        {
+          const finallyBlockMaybe = s.finallyBlock;
+          if (finallyBlockMaybe !== undefined) {
+            const finallyBlock: BlockStmt = finallyBlockMaybe;
+            if (this.blockHasReturn(finallyBlock)) return true;
+          }
+        }
         return false;
       default:
         return false;

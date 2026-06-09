@@ -264,7 +264,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 Post-MVP ecosystem items:
 
-- restore current self-host fixed-point gate (old blocker `src/codegen.ts:6064:39` finally return temp type cleared by ADR `0344`; next blocker: `src/codegen.ts:6311:83` `stmtNeedsCleanupLabelForCurrent(s.elseBranch, want)` still sees `elseBranch` as `Stmt | undefined`)
+- restore current self-host fixed-point gate (old blocker `src/codegen.ts:6311:83` cleanup helper elseBranch cleared by ADR `0345`; next blocker: `src/codegen.ts:6361:41` `stmtHasTargetedExit` grouped loop cases still leave `s.body` as an unnarrowed discriminated union)
 - effect inference / capabilities / manifest / doctor / check / explain
 - async implementation
 - regexp implementation
