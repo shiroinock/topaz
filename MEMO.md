@@ -264,7 +264,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 Post-MVP ecosystem items:
 
-- restore current self-host fixed-point gate (old blocker `src/codegen.ts:6311:83` cleanup helper elseBranch cleared by ADR `0345`; next blocker: `src/codegen.ts:6361:41` `stmtHasTargetedExit` grouped loop cases still leave `s.body` as an unnarrowed discriminated union)
+- restore current self-host fixed-point gate (old blocker `src/codegen.ts:6361:41` grouped loop body query cleared by ADR `0346`; next blocker: `src/codegen.ts:7843:15` `targetEscapesCleanupContext` still reads `frame.prev` after a `while (frame !== undefined)` guard, which Topaz does not carry across the loop variable assignment)
 - effect inference / capabilities / manifest / doctor / check / explain
 - async implementation
 - regexp implementation

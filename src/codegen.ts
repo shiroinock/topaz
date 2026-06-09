@@ -6355,8 +6355,11 @@ class Emitter {
         }
         return false;
       case "while_stmt":
+        return this.stmtHasTargetedExit(s.body, want, depth + 1);
       case "do_while_stmt":
+        return this.stmtHasTargetedExit(s.body, want, depth + 1);
       case "for_stmt":
+        return this.stmtHasTargetedExit(s.body, want, depth + 1);
       case "for_of_stmt":
         return this.stmtHasTargetedExit(s.body, want, depth + 1);
       case "switch_stmt":
@@ -6414,6 +6417,7 @@ class Emitter {
         }
         return false;
       case "while_stmt":
+        return this.stmtHasBreakOrContinue(s.body);
       case "do_while_stmt":
         return this.stmtHasBreakOrContinue(s.body);
       case "for_stmt":
@@ -6466,6 +6470,7 @@ class Emitter {
         }
         return false;
       case "while_stmt":
+        return this.stmtHasReturn(s.body);
       case "do_while_stmt":
         return this.stmtHasReturn(s.body);
       case "for_stmt":
