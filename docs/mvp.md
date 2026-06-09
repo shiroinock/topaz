@@ -40,13 +40,14 @@ checkout.
 Run the compiler binary directly:
 
 ```sh
+chmod +x ./topaz-darwin-arm64
 ./topaz-darwin-arm64 hello.ts -o hello
 ./hello
 ```
 
-The compiler binary itself does not require Node.js or `pnpm`. It still invokes
-the platform C compiler (`cc`) when producing a native output binary. Use
-`--emit-c-only` to stop after generated C.
+The compiler binary itself does not require Node.js, `pnpm`, or a checked-out
+`runtime/` directory. It still invokes the platform C compiler (`cc`) when
+producing a native output binary. Use `--emit-c-only` to stop after generated C.
 
 ## Build The Compiler From A Repository Checkout
 

@@ -24,6 +24,13 @@ esac
 artifact="topaz-${os}-${arch}"
 release_dir="dist-release"
 release_path="${release_dir}/${artifact}"
+tmp_dir=""
+cleanup_tmp() {
+  if [[ -n "${tmp_dir}" ]]; then
+    rm -rf "${tmp_dir}"
+  fi
+}
+trap cleanup_tmp EXIT
 
 echo "RELEASE [self-host fixed point]"
 pnpm run test:selfhost
@@ -41,6 +48,19 @@ echo "RELEASE [smoke ${artifact}]"
 fib_out=$(./build/release_fib)
 if [[ "${fib_out}" != "5702887" ]]; then
   echo "FAIL [release_fib]:" >&2
+  echo "  expected: 5702887" >&2
+  echo "  got: ${fib_out}" >&2
+  exit 1
+fi
+
+echo "RELEASE [smoke ${artifact} binary-only]"
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/topaz-release.XXXXXX")
+cp "${release_path}" "${tmp_dir}/${artifact}"
+chmod 0755 "${tmp_dir}/${artifact}"
+"${tmp_dir}/${artifact}" examples/fib.ts -o "${tmp_dir}/release_fib" > /dev/null
+fib_out=$("${tmp_dir}/release_fib")
+if [[ "${fib_out}" != "5702887" ]]; then
+  echo "FAIL [release_fib binary-only]:" >&2
   echo "  expected: 5702887" >&2
   echo "  got: ${fib_out}" >&2
   exit 1

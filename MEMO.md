@@ -264,6 +264,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.10 native compiler release artifact builder** — `pnpm run build:release` で self-host fixed-point gate を通したあと、最終 native compiler `build/topaz` を platform-qualified artifact (`dist-release/topaz-<os>-<arch>`) と `SHA256SUMS` にまとめる。Apple Silicon macOS では `topaz-darwin-arm64`。決定ログは `docs/adr/0350-release-artifact-builder.md`。
 - [x] **3.11 GitHub Actions release artifact automation** — `release artifact` workflow で GitHub-hosted macOS arm64 runner 上の `pnpm run build:release` を実行し、manual run は workflow artifact、`v*` tag push は draft GitHub Release asset として `topaz-darwin-arm64` と `SHA256SUMS` をアップロードする。決定ログは `docs/adr/0351-github-actions-release-artifact.md`。
 - [x] **3.12 release versioning / runbook skill** — `0.x.y` SemVer、`v0.1.0 = single-binary MVP`、`v0.x.y-rc.N` release candidate、tag-triggered draft Release を方針として固定し、公開手順を `.agents/skills/topaz-release/SKILL.md` に skill 化した。決定ログは `docs/adr/0352-release-versioning-and-skill.md`。
+- [x] **3.13 embedded runtime header for release compiler** — RC1 black-box check で release compiler binary を repo 外へ置くと `runtime.h` が見つからない blocker を検出したため、生成 C に `runtime/runtime.h` 本文を埋め込み、`runtime/` directory なしで `cc` まで通る single-binary compiler artifact にした。決定ログは `docs/adr/0353-embedded-runtime-header.md`。
 
 Release/version allocation:
 

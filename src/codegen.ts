@@ -39,6 +39,7 @@ import {
   CatchClause,
   ForStmt,
 } from "./ast.js";
+import { runtimeHeaderSource } from "./runtime_header.js";
 
 // Phase 1.5-6e-2: ambient SourceFile for the migrated emit/infer SCC. Topaz
 // `Expr` / `Stmt` nodes carry a `pos` but not their SourceFile, so `CodegenError`
@@ -2276,7 +2277,14 @@ class Emitter {
     }
 
     const out: string[] = [];
-    out.push('#include "runtime.h"');
+    out.push("#if defined(__clang__) || defined(__GNUC__)");
+    out.push("#pragma GCC diagnostic push");
+    out.push("#pragma GCC diagnostic ignored \"-Wunused-function\"");
+    out.push("#endif");
+    out.push(runtimeHeaderSource());
+    out.push("#if defined(__clang__) || defined(__GNUC__)");
+    out.push("#pragma GCC diagnostic pop");
+    out.push("#endif");
     out.push("");
 
     // Forward-declare class structs and interface vtable structs so any
