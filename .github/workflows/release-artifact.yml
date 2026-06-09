@@ -1,0 +1,69 @@
+name: release artifact
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  darwin-arm64:
+    name: topaz-darwin-arm64
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build release artifact
+        run: pnpm run build:release
+
+      - name: Verify checksum
+        run: |
+          cd dist-release
+          shasum -a 256 -c SHA256SUMS
+
+      - name: Inspect artifact
+        run: |
+          file dist-release/topaz-darwin-arm64
+          otool -L dist-release/topaz-darwin-arm64
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: topaz-darwin-arm64
+          path: |
+            dist-release/topaz-darwin-arm64
+            dist-release/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Create draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh --version
+          gh release view "${tag}" >/dev/null 2>&1 || \
+            gh release create "${tag}" \
+              --draft \
+              --title "Topaz ${tag}" \
+              --notes "Draft native compiler artifact release for ${tag}."
+          gh release upload "${tag}" \
+            dist-release/topaz-darwin-arm64 \
+            dist-release/SHA256SUMS \
+            --clobber

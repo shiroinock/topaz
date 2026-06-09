@@ -262,6 +262,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.8 minimal bare package source lookup** — source package graph を最小限 lookup し、未対応 package shape は clear reject する。npm 互換・install・lifecycle script・CommonJS / Node emulation は MVP 外。決定ログは `docs/adr/0336-minimal-bare-package-lookup.md`。
 - [x] **3.9 MVP release/UX gate** — zero-config single-binary path、public stdlib、package-shape reject、diagnostic wording、README/CLI usage を MVP として通す。CLI help smoke を MVP gate に追加し、決定ログは `docs/adr/0337-single-binary-mvp-ux-gate.md`。
 - [x] **3.10 native compiler release artifact builder** — `pnpm run build:release` で self-host fixed-point gate を通したあと、最終 native compiler `build/topaz` を platform-qualified artifact (`dist-release/topaz-<os>-<arch>`) と `SHA256SUMS` にまとめる。Apple Silicon macOS では `topaz-darwin-arm64`。決定ログは `docs/adr/0350-release-artifact-builder.md`。
+- [x] **3.11 GitHub Actions release artifact automation** — `release artifact` workflow で GitHub-hosted macOS arm64 runner 上の `pnpm run build:release` を実行し、manual run は workflow artifact、`v*` tag push は draft GitHub Release asset として `topaz-darwin-arm64` と `SHA256SUMS` をアップロードする。決定ログは `docs/adr/0351-github-actions-release-artifact.md`。
 
 Post-MVP ecosystem items:
 

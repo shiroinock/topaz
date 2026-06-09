@@ -51,6 +51,11 @@ source graph without Node.js:
 ./build/fib
 ```
 
+The same artifact can be built by GitHub Actions with the `release artifact`
+workflow. Manual runs upload `topaz-darwin-arm64` and `SHA256SUMS` as workflow
+artifacts; `v*` tag pushes also create or update a draft GitHub Release with
+those assets.
+
 ## Public Stdlib
 
 Public user code should import supported helpers from:

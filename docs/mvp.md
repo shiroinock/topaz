@@ -71,6 +71,9 @@ pnpm run build:release
 ```
 
 This writes `dist-release/topaz-<os>-<arch>` and `dist-release/SHA256SUMS`.
+The same release gate is available as the GitHub Actions `release artifact`
+workflow. Manual runs upload the artifact and checksum as workflow artifacts;
+`v*` tag pushes also create or update a draft GitHub Release.
 
 ## Compile And Run A Program From A Repository Checkout
 
@@ -230,4 +233,4 @@ The following are intentionally after the MVP:
 - Regexp execution.
 - Richer package support, package subpaths, `exports`, CommonJS, and npm
   compatibility.
-- Automated GitHub Release publication, signing, and notarization.
+- Published non-draft GitHub Releases, signing, and notarization.
