@@ -7,8 +7,8 @@
 ## Context
 
 [0310](./0310-fixed-point-gate.md) completed the Phase 1.5 self-hosting path:
-the opt-in self-host gate reaches a stage2/stage3 emitted-C fixed point and a
-stage3 native CLI can build `examples/fib.ts`. Before starting larger Phase 2
+the opt-in self-host gate reaches a self-host/fixed-point emitted-C fixed point
+and a final native CLI can build `examples/fib.ts`. Before starting larger Phase 2
 work, the repository needs a current baseline for the normal development gate,
 the expensive self-host gate, and the generated full-compiler C warning shape.
 
@@ -31,8 +31,9 @@ changes in this pass.
 - `pnpm run build` passes with `tsc`.
 - `pnpm test` passes, including the existing warning-free targeted cases in
   `tests/smoke.sh`.
-- `pnpm run test:selfhost` passes through `tests/selfhost_stage2.sh`, including
-  stage2/stage3 emitted-C diff and stage3-native `examples/fib.ts`.
+- `pnpm run test:selfhost` passes through `tests/selfhost_fixed_point.sh`,
+  including self-host/fixed-point emitted-C diff and final `build/topaz`
+  building `examples/fib.ts`.
 - Re-running `cc -O2 -Iruntime -Wall -Wextra -fsyntax-only` on each full
   compiler C artifact produced the same warning inventory:
   `46 [-Wreturn-type]`, `38 [-Wunused-parameter]`, `1 [-Wunused-variable]`,
@@ -50,6 +51,6 @@ changes in this pass.
 - **Rejected**: warning-free full compiler C is not yet required by
   `pnpm run test:selfhost`.
 - **Regression**: no new sample is added; the durable regression remains the
-  existing smoke suite plus `tests/selfhost_stage2.sh`.
+  existing smoke suite plus `tests/selfhost_fixed_point.sh`.
 - **Scope out**: benchmark harness, warning elimination, stdlib surface design,
   generic backlog, and try/finally backlog remain follow-up Phase 2 work.

@@ -17,7 +17,7 @@
     "bench": "node scripts/bench.mjs",
     "topaz": "node dist/cli.js",
     "test": "bash tests/smoke.sh",
-    "test:selfhost": "bash tests/selfhost_stage2.sh"
+    "test:selfhost": "bash tests/selfhost_fixed_point.sh"
   },
   "dependencies": {
     "typescript": "^5.6.0"

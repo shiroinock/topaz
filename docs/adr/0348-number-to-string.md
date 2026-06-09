@@ -49,4 +49,4 @@ stringification remain separate design work.
   `examples/number_unsupported_method_fail.ts`. `tests/smoke.sh` currently
   registers 346 cases.
 - **Current blocker**: none observed in this phase; `pnpm run test:selfhost`
-  reaches `PASS [selfhost_stage2]`.
+  reaches `PASS [selfhost_fixed_point]`.
