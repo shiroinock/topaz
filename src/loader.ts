@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { ImportDecl, ImportSpecifier, SourceModule } from "./ast.js";
@@ -192,14 +192,13 @@ function validateStdlibImport(filePath: string, module: SourceModule, stmt: Impo
 }
 
 function resolveSpecifier(fromFile: string, module: SourceModule, stmt: ImportDecl, spec: string): string {
-  if (!spec.startsWith("./") && !spec.startsWith("../")) {
-    throw loaderErrorAt(
-      fromFile,
-      module,
-      stmt.modulePathPos,
-      `non-relative module specifier '${spec}' is unsupported (only './foo' / '../foo' allowed in Phase 1.5-2)`,
-    );
+  if (spec.startsWith("./") || spec.startsWith("../")) {
+    return resolveRelativeSpecifier(fromFile, spec);
   }
+  return resolveBarePackageSpecifier(fromFile, module, stmt, spec);
+}
+
+function resolveRelativeSpecifier(fromFile: string, spec: string): string {
   const fromDir = dirname(fromFile);
   if (spec.endsWith(".js")) {
     return resolve(fromDir, spec.slice(0, -3) + ".ts");
@@ -208,4 +207,274 @@ function resolveSpecifier(fromFile: string, module: SourceModule, stmt: ImportDe
     return resolve(fromDir, spec);
   }
   return resolve(fromDir, spec + ".ts");
+}
+
+class TopazPackageEntry {
+  kind: string;
+  value: string;
+  reason: string;
+
+  constructor(kind: string, value: string, reason: string) {
+    this.kind = kind;
+    this.value = value;
+    this.reason = reason;
+  }
+}
+
+class JsonStringResult {
+  ok: boolean;
+  value: string;
+  next: number;
+  reason: string;
+
+  constructor(ok: boolean, value: string, next: number, reason: string) {
+    this.ok = ok;
+    this.value = value;
+    this.next = next;
+    this.reason = reason;
+  }
+}
+
+function resolveBarePackageSpecifier(fromFile: string, module: SourceModule, stmt: ImportDecl, spec: string): string {
+  const packageName = packageNameFromSpecifier(fromFile, module, stmt, spec);
+  let dir = dirname(fromFile);
+  while (true) {
+    const packageDir = resolve(dir, "node_modules", packageName);
+    if (existsSync(packageDir)) {
+      return resolvePackageEntry(fromFile, module, stmt, packageName, packageDir);
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw loaderErrorAt(
+    fromFile,
+    module,
+    stmt.modulePathPos,
+    `cannot resolve package '${packageName}' from '${fromFile}' (looked in ancestor node_modules directories)`,
+  );
+}
+
+function packageNameFromSpecifier(filePath: string, module: SourceModule, stmt: ImportDecl, spec: string): string {
+  if (spec.length === 0) {
+    throw loaderErrorAt(filePath, module, stmt.modulePathPos, "empty package specifier is unsupported");
+  }
+  if (spec.startsWith("/")) {
+    throw loaderErrorAt(filePath, module, stmt.modulePathPos, `absolute module specifier '${spec}' is unsupported`);
+  }
+  const badSegment = firstInvalidSegment(spec);
+  if (badSegment !== "") {
+    throw loaderErrorAt(
+      filePath,
+      module,
+      stmt.modulePathPos,
+      `unsupported package specifier '${spec}': segment '${badSegment}' is not allowed`,
+    );
+  }
+  const slash = firstSlash(spec, 0);
+  if (spec.startsWith("@")) {
+    if (slash < 0) {
+      throw loaderErrorAt(
+        filePath,
+        module,
+        stmt.modulePathPos,
+        `unsupported scoped package specifier '${spec}' (expected '@scope/pkg')`,
+      );
+    }
+    const secondSlash = firstSlash(spec, slash + 1);
+    if (secondSlash >= 0) {
+      throw loaderErrorAt(
+        filePath,
+        module,
+        stmt.modulePathPos,
+        `package subpath import '${spec}' is unsupported`,
+      );
+    }
+    return spec;
+  }
+  if (slash >= 0) {
+    throw loaderErrorAt(filePath, module, stmt.modulePathPos, `package subpath import '${spec}' is unsupported`);
+  }
+  return spec;
+}
+
+function resolvePackageEntry(
+  fromFile: string,
+  module: SourceModule,
+  stmt: ImportDecl,
+  packageName: string,
+  packageDir: string,
+): string {
+  const packageJson = resolve(packageDir, "package.json");
+  if (existsSync(packageJson)) {
+    const entry = extractTopazPackageEntry(readFileSync(packageJson, "utf8"));
+    if (entry.kind === "invalid") {
+      throw loaderErrorAt(
+        fromFile,
+        module,
+        stmt.modulePathPos,
+        `unsupported topaz package entry for '${packageName}': ${entry.reason}`,
+      );
+    }
+    if (entry.kind === "value") {
+      return resolveTopazPackageEntry(fromFile, module, stmt, packageName, packageDir, entry.value);
+    }
+  }
+
+  const indexPath = resolve(packageDir, "index.ts");
+  if (existsSync(indexPath)) return indexPath;
+
+  throw loaderErrorAt(
+    fromFile,
+    module,
+    stmt.modulePathPos,
+    `package '${packageName}' has no supported Topaz source entry (expected package.json topaz string or index.ts; main/exports are unsupported)`,
+  );
+}
+
+function resolveTopazPackageEntry(
+  fromFile: string,
+  module: SourceModule,
+  stmt: ImportDecl,
+  packageName: string,
+  packageDir: string,
+  entry: string,
+): string {
+  const reason = validateTopazEntryPath(entry);
+  if (reason !== "") {
+    throw loaderErrorAt(
+      fromFile,
+      module,
+      stmt.modulePathPos,
+      `unsupported topaz package entry for '${packageName}': ${reason}`,
+    );
+  }
+  let sourceEntry = entry;
+  if (entry.endsWith(".js")) {
+    sourceEntry = entry.slice(0, entry.length - 3) + ".ts";
+  }
+  const selected = resolve(packageDir, sourceEntry);
+  if (!existsSync(selected)) {
+    throw loaderErrorAt(
+      fromFile,
+      module,
+      stmt.modulePathPos,
+      `package '${packageName}' topaz entry '${sourceEntry}' does not exist (looked for '${selected}')`,
+    );
+  }
+  return selected;
+}
+
+function validateTopazEntryPath(entry: string): string {
+  if (!entry.startsWith("./")) return `entry '${entry}' must start with './'`;
+  if (entry.endsWith(".d.ts")) return `entry '${entry}' uses unsupported .d.ts output`;
+  if (!entry.endsWith(".ts") && !entry.endsWith(".js")) {
+    return `entry '${entry}' must end in .ts or .js`;
+  }
+  const rest = entry.slice(2);
+  const badSegment = firstInvalidSegment(rest);
+  if (badSegment !== "") {
+    return `entry '${entry}' contains unsupported segment '${badSegment}'`;
+  }
+  return "";
+}
+
+function extractTopazPackageEntry(text: string): TopazPackageEntry {
+  let i = 0;
+  let depth = 0;
+  while (i < text.length) {
+    const ch = text.charCodeAt(i);
+    if (ch === 34) {
+      const parsed = readJsonString(text, i);
+      if (!parsed.ok) return new TopazPackageEntry("invalid", "", parsed.reason);
+      if (depth === 1) {
+        let afterKey = skipJsonWhitespace(text, parsed.next);
+        if (afterKey < text.length && text.charCodeAt(afterKey) === 58) {
+          if (parsed.value === "topaz") {
+            afterKey = skipJsonWhitespace(text, afterKey + 1);
+            if (afterKey >= text.length || text.charCodeAt(afterKey) !== 34) {
+              return new TopazPackageEntry("invalid", "", "`topaz` must be a JSON string");
+            }
+            const value = readJsonString(text, afterKey);
+            if (!value.ok) return new TopazPackageEntry("invalid", "", value.reason);
+            return new TopazPackageEntry("value", value.value, "");
+          }
+        }
+      }
+      i = parsed.next;
+    } else if (ch === 123 || ch === 91) {
+      depth = depth + 1;
+      i = i + 1;
+    } else if (ch === 125 || ch === 93) {
+      depth = depth - 1;
+      i = i + 1;
+    } else {
+      i = i + 1;
+    }
+  }
+  return new TopazPackageEntry("missing", "", "");
+}
+
+function readJsonString(text: string, start: number): JsonStringResult {
+  let out = "";
+  let i = start + 1;
+  while (i < text.length) {
+    const ch = text.charCodeAt(i);
+    if (ch === 34) return new JsonStringResult(true, out, i + 1, "");
+    if (ch < 32) return new JsonStringResult(false, "", i, "control character in package.json string");
+    if (ch === 92) {
+      if (i + 1 >= text.length) return new JsonStringResult(false, "", i, "unterminated JSON string escape");
+      const esc = text.charCodeAt(i + 1);
+      if (esc === 34) {
+        out = out + "\"";
+      } else if (esc === 92) {
+        out = out + "\\";
+      } else if (esc === 47) {
+        out = out + "/";
+      } else if (esc === 98 || esc === 102 || esc === 110 || esc === 114 || esc === 116 || esc === 117) {
+        return new JsonStringResult(false, "", i, "non-path JSON escapes in package.json strings are unsupported");
+      } else {
+        return new JsonStringResult(false, "", i, "unsupported JSON string escape in package.json");
+      }
+      i = i + 2;
+    } else {
+      out = out + String.fromCharCode(ch);
+      i = i + 1;
+    }
+  }
+  return new JsonStringResult(false, "", i, "unterminated JSON string");
+}
+
+function skipJsonWhitespace(text: string, start: number): number {
+  let i = start;
+  while (i < text.length) {
+    const ch = text.charCodeAt(i);
+    if (ch !== 32 && ch !== 10 && ch !== 13 && ch !== 9) return i;
+    i = i + 1;
+  }
+  return i;
+}
+
+function firstSlash(text: string, start: number): number {
+  let i = start;
+  while (i < text.length) {
+    if (text.charCodeAt(i) === 47) return i;
+    i = i + 1;
+  }
+  return -1;
+}
+
+function firstInvalidSegment(text: string): string {
+  let start = 0;
+  let i = 0;
+  while (i <= text.length) {
+    if (i === text.length || text.charCodeAt(i) === 47) {
+      const segment = text.slice(start, i);
+      if (segment === "") return "<empty>";
+      if (segment === "." || segment === "..") return segment;
+      start = i + 1;
+    }
+    i = i + 1;
+  }
+  return "";
 }

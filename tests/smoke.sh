@@ -295,6 +295,13 @@ run_fail_case module_function_duplicate_fail examples/module_function_duplicate_
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
 run_fail_case module_cycle examples/module_cycle_a.ts "circular import detected"
+run_module_case package_lookup_basic examples/fixtures/package_lookup/basic.ts $'14\n27\n31'
+run_module_case package_lookup_ancestor examples/fixtures/package_lookup/app/src/main.ts "114"
+run_fail_case package_lookup_missing examples/fixtures/package_lookup/missing_package_fail.ts "cannot resolve package 'missing-pkg'"
+run_fail_case package_lookup_subpath examples/fixtures/package_lookup/subpath_fail.ts "package subpath import 'topaz-pkg/subpath' is unsupported"
+run_fail_case package_lookup_topaz_escape examples/fixtures/package_lookup/topaz_escape_fail.ts "entry '../escape.ts' must start with './'"
+run_fail_case package_lookup_topaz_cjs examples/fixtures/package_lookup/topaz_cjs_fail.ts "entry './dist/index.cjs' must end in .ts or .js"
+run_fail_case package_lookup_main_exports_only examples/fixtures/package_lookup/main_exports_only_fail.ts "main/exports are unsupported"
 run_fail_case import_type_clause_fail examples/import_type_clause_fail.ts "\`import type\` is unsupported"
 run_fail_case import_type_specifier_fail examples/import_type_specifier_fail.ts "\`import type\` is unsupported"
 run_fail_case strict_field_init_fail examples/strict_field_init_fail.ts "is not definitely assigned in the constructor"
