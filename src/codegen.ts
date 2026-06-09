@@ -8921,28 +8921,27 @@ class Emitter {
   private emitCall(expr: CallExpr): string {
     const callee = expr.callee;
 
-    // Phase 1.5-3.5d: optional method call `a?.b()`. The `?.` sits on the inner
-    // property access; the call itself is regular. `a?.()` (optional call) is
-    // rejected separately below.
-    if (callee.kind === "prop_access" && callee.optional) {
-      return this.emitOptionalMethodCall(expr, callee);
-    }
     if (expr.optional) {
       throw new CodegenError(
         { pos: expr.pos },
         "optional call `f?.()` is unsupported (only `a?.b`, `a?.b()`, and `a?.[i]` are supported)",
       );
     }
-    // Phase 1.5-3.5h-spread: spread in call arguments is rejected up-front so
-    // every downstream callee can iterate `expr.args` positionally. Spread in
-    // array literals is supported separately by emitArrayLiteral.
-    for (const a of expr.args) {
-      if (a.kind === "spread_expr") {
-        throw new CodegenError(
-          { pos: a.pos },
-          "spread in call arguments is unsupported (rewrite as a loop, e.g. `for (const x of xs) f(x)`)",
-        );
-      }
+    // Phase 3.14: call-argument spread stays rejected except for the dedicated
+    // Array.push lowering below. Every other callee keeps the positional-args
+    // invariant from Phase 1.5-3.5h-spread.
+    const firstSpread = this.firstSpreadArg(expr.args);
+    if (firstSpread !== undefined && !this.isArrayPushSpreadCall(expr)) {
+      throw new CodegenError(
+        { pos: firstSpread.pos },
+        "spread in call arguments is unsupported (rewrite as a loop, e.g. `for (const x of xs) f(x)`)",
+      );
+    }
+    // Phase 1.5-3.5d: optional method call `a?.b()`. The `?.` sits on the inner
+    // property access; the call itself is regular. `a?.()` (optional call) is
+    // rejected separately above.
+    if (callee.kind === "prop_access" && callee.optional) {
+      return this.emitOptionalMethodCall(expr, callee);
     }
 
     if (callee.kind === "prop_access") {
@@ -9131,6 +9130,21 @@ class Emitter {
     unsupported({ kind: callee.kind, pos: callee.pos }, "call target");
   }
 
+  private firstSpreadArg(args: Array<Expr>): Expr | undefined {
+    for (const a of args) {
+      if (a.kind === "spread_expr") return a;
+    }
+    return undefined;
+  }
+
+  private isArrayPushSpreadCall(expr: CallExpr): boolean {
+    const callee = expr.callee;
+    if (callee.kind !== "prop_access") return false;
+    if (callee.optional) return false;
+    if (callee.name !== "push") return false;
+    return isArrayType(this.inferType(callee.receiver));
+  }
+
   // Phase 1.5-3.5e: lower a call `f(args)` where `f` types as a fn fat
   // pointer. The dispatch is `({ <fn type> __t = f; __t.fn(__t.env, args); })`
   // so the callee is evaluated once even when it's a complex expression.
@@ -9221,14 +9235,10 @@ class Emitter {
     const name = arrayShortName(baseType);
     const elem = arrayElem(baseType)!;
     const method = callee.name;
-    const base = this.emitExpression(callee.receiver);
     if (method === "push") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "Array.push expects exactly one argument");
-      }
-      const arg = expr.args[0];
-      return `topaz_array_${name}_push(${base}, ${this.emitWithExpected(arg, elem)})`;
+      return this.emitArrayPushCall(expr, callee, baseType);
     }
+    const base = this.emitExpression(callee.receiver);
     if (method === "pop") {
       if (expr.args.length !== 0) {
         throw new CodegenError({ pos: expr.pos }, "Array.pop expects no arguments");
@@ -9430,6 +9440,82 @@ class Emitter {
       return `topaz_array_${name}_join(${base}, ${sepStr})`;
     }
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+  }
+
+  private emitArrayPushCall(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+    baseType: TopazType,
+  ): string {
+    if (expr.args.length === 0) {
+      throw new CodegenError({ pos: expr.pos }, "Array.push expects at least one argument");
+    }
+    const elem = arrayElem(baseType)!;
+    const dstShort = arrayShortName(baseType);
+    const parts: string[] = [];
+    const argKinds: string[] = [];
+    const fixedTmps: string[] = [];
+    const spreadTmps: string[] = [];
+    const spreadLens: string[] = [];
+    const spreadElemTypes: TopazType[] = [];
+    const arrTmp = `__topaz_push_arr_${this.tmpCounter++}`;
+    parts.push(`${cTypeName(baseType)} ${arrTmp} = ${this.emitExpression(callee.receiver)};`);
+
+    for (const arg of expr.args) {
+      if (arg.kind === "spread_expr") {
+        const src = arg.operand;
+        const srcType = this.inferType(src);
+        if (!isArrayType(srcType)) {
+          throw new CodegenError(
+            { pos: src.pos },
+            `spread argument to Array.push must be an Array<T>, got ${typeIdent(srcType)}`,
+          );
+        }
+        const srcElem = arrayElem(srcType)!;
+        if (!typeEq(srcElem, elem) && !this.isAssignableTo(srcElem, elem)) {
+          throw new CodegenError(
+            { pos: src.pos },
+            `spread argument element type ${typeIdent(srcElem)} does not match Array.push element type ${typeIdent(elem)}`,
+          );
+        }
+        const spTmp = `__topaz_push_sp_${this.tmpCounter++}`;
+        const lenTmp = `__topaz_push_len_${this.tmpCounter++}`;
+        parts.push(`${cTypeName(srcType)} ${spTmp} = ${this.emitExpression(src)};`);
+        parts.push(`size_t ${lenTmp} = ${spTmp}->len;`);
+        argKinds.push("spread");
+        spreadTmps.push(spTmp);
+        spreadLens.push(lenTmp);
+        spreadElemTypes.push(srcElem);
+      } else {
+        const fixedTmp = `__topaz_push_val_${this.tmpCounter++}`;
+        parts.push(`${cTypeName(elem)} ${fixedTmp} = ${this.emitWithExpected(arg, elem)};`);
+        argKinds.push("fixed");
+        fixedTmps.push(fixedTmp);
+      }
+    }
+
+    const fixedCount = fixedTmps.length.toString();
+    const reserveExtra = spreadLens.length === 0 ? fixedCount : [fixedCount, ...spreadLens].join(" + ");
+    parts.push(`topaz_array_${dstShort}_reserve(${arrTmp}, ${arrTmp}->len + ${reserveExtra});`);
+    let fixedIdx = 0;
+    let spreadIdx = 0;
+    for (const kind of argKinds) {
+      if (kind === "spread") {
+        const spTmp = spreadTmps[spreadIdx];
+        const lenTmp = spreadLens[spreadIdx];
+        const srcElem = spreadElemTypes[spreadIdx];
+        const iVar = `__topaz_push_i_${this.tmpCounter++}`;
+        const elemStr = this.applyCoercion(`${spTmp}->data[${iVar}]`, srcElem, elem, { pos: expr.pos });
+        parts.push(
+          `for (size_t ${iVar} = 0; ${iVar} < ${lenTmp}; ${iVar}++) topaz_array_${dstShort}_push(${arrTmp}, ${elemStr});`,
+        );
+        spreadIdx++;
+      } else {
+        const fixedTmp = fixedTmps[fixedIdx++];
+        parts.push(`topaz_array_${dstShort}_push(${arrTmp}, ${fixedTmp});`);
+      }
+    }
+    return `({ ${parts.join(" ")} })`;
   }
 
   private arrayIncludesEqExpr(

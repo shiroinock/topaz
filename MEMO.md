@@ -264,7 +264,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 Post-MVP ecosystem items:
 
-- restore current self-host fixed-point gate (next blocker: `src/codegen.ts:5817:16` call-argument spread in `lines.push(...this.emitCatchBindingLines(...))`)
+- restore current self-host fixed-point gate (next blocker: `src/codegen.ts:5885:32` `resolveCatchBinding(catchClauseMaybe)` still sees `catchClauseMaybe` as `topaz_class_anon_47 | undefined`)
 - effect inference / capabilities / manifest / doctor / check / explain
 - async implementation
 - regexp implementation
