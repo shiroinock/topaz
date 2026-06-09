@@ -6017,10 +6017,15 @@ class Emitter {
     const continueTarget = `__topaz_finally_continue_target_${id}`;
     const cleanupLabel = `__topaz_finally_cleanup_${id}`;
     const currentReturnTypeMaybe = this.currentReturnType;
-    const returnVar =
-      currentReturnTypeMaybe !== undefined && currentReturnTypeMaybe.kind !== "void"
-        ? `__topaz_finally_ret_${id}`
-        : undefined;
+    let returnVarMaybe: string | undefined = undefined;
+    let returnTypeForVarMaybe: TopazType | undefined = undefined;
+    if (currentReturnTypeMaybe !== undefined) {
+      const currentReturnType: TopazType = currentReturnTypeMaybe;
+      if (currentReturnType.kind !== "void") {
+        returnVarMaybe = `__topaz_finally_ret_${id}`;
+        returnTypeForVarMaybe = currentReturnType;
+      }
+    }
     const outerLiveTryFrames = this.liveTryFrames;
 
     this.scope.push();
@@ -6032,7 +6037,7 @@ class Emitter {
       continueTargetVar: continueTarget,
       breakTargets: [],
       continueTargets: [],
-      returnVar,
+      returnVar: returnVarMaybe,
       returnType: currentReturnTypeMaybe,
       outerLiveTryFrames,
       loopBoundary: this.loopCtx,
@@ -6060,8 +6065,13 @@ class Emitter {
     if (cleanupContext.continueTargets.length > 0) {
       lines.push(`${pad}  int ${continueTarget} = 0;`);
     }
-    if (returnVar !== undefined && currentReturnTypeMaybe !== undefined) {
-      lines.push(`${pad}  ${cTypeName(currentReturnTypeMaybe)} ${returnVar};`);
+    if (returnVarMaybe !== undefined) {
+      const returnVar: string = returnVarMaybe;
+      if (returnTypeForVarMaybe === undefined) {
+        throwInternalCodegenError("finally return temp missing return type");
+      }
+      const returnTypeForVar: TopazType = returnTypeForVarMaybe;
+      lines.push(`${pad}  ${cTypeName(returnTypeForVar)} ${returnVar};`);
     }
     lines.push(`${pad}  topaz_try_frame ${frame};`);
     lines.push(`${pad}  topaz_try_push(&${frame});`);
@@ -6074,10 +6084,14 @@ class Emitter {
     if (tryBlockHasCleanupExit) lines.push(`${pad}${cleanupLabel}:`);
     if (finallyBodyStr.length > 0) lines.push(finallyBodyStr);
     lines.push(`${pad}  if (${reason} == 1) {`);
-    if (currentReturnTypeMaybe !== undefined && currentReturnTypeMaybe.kind === "void") {
-      lines.push(`${pad}    ${this.popFrameCount(outerLiveTryFrames)}return;`);
-    } else if (returnVar !== undefined) {
-      lines.push(`${pad}    ${this.popFrameCount(outerLiveTryFrames)}return ${returnVar};`);
+    if (currentReturnTypeMaybe !== undefined) {
+      const currentReturnType: TopazType = currentReturnTypeMaybe;
+      if (currentReturnType.kind === "void") {
+        lines.push(`${pad}    ${this.popFrameCount(outerLiveTryFrames)}return;`);
+      } else if (returnVarMaybe !== undefined) {
+        const returnVar: string = returnVarMaybe;
+        lines.push(`${pad}    ${this.popFrameCount(outerLiveTryFrames)}return ${returnVar};`);
+      }
     }
     lines.push(`${pad}  }`);
     lines.push(`${pad}  if (${reason} == 2) {`);
