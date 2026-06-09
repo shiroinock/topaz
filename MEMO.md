@@ -263,6 +263,18 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.9 MVP release/UX gate** — zero-config single-binary path、public stdlib、package-shape reject、diagnostic wording、README/CLI usage を MVP として通す。CLI help smoke を MVP gate に追加し、決定ログは `docs/adr/0337-single-binary-mvp-ux-gate.md`。
 - [x] **3.10 native compiler release artifact builder** — `pnpm run build:release` で self-host fixed-point gate を通したあと、最終 native compiler `build/topaz` を platform-qualified artifact (`dist-release/topaz-<os>-<arch>`) と `SHA256SUMS` にまとめる。Apple Silicon macOS では `topaz-darwin-arm64`。決定ログは `docs/adr/0350-release-artifact-builder.md`。
 - [x] **3.11 GitHub Actions release artifact automation** — `release artifact` workflow で GitHub-hosted macOS arm64 runner 上の `pnpm run build:release` を実行し、manual run は workflow artifact、`v*` tag push は draft GitHub Release asset として `topaz-darwin-arm64` と `SHA256SUMS` をアップロードする。決定ログは `docs/adr/0351-github-actions-release-artifact.md`。
+- [x] **3.12 release versioning / runbook skill** — `0.x.y` SemVer、`v0.1.0 = single-binary MVP`、`v0.x.y-rc.N` release candidate、tag-triggered draft Release を方針として固定し、公開手順を `.agents/skills/topaz-release/SKILL.md` に skill 化した。決定ログは `docs/adr/0352-release-versioning-and-skill.md`。
+
+Release/version allocation:
+
+- `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
+- `v0.1.y` — MVP-preserving patch。crash fix、diagnostic/doc/workflow 修正、self-host/release gate 安定化。言語 surface や runtime semantics の拡張はしない。
+- `v0.2.0` — capability/effect inference、manifest generation、`doctor` / `check` / `explain`。optional policy file と zero-config build の関係を実装へ進める。
+- `v0.3.0` — async/await / Promise execution。ADR `0327` の fiber-based design を実装 track に移す。
+- `v0.4.0` — RegExp execution。ADR `0326` の minimal regexp surface を実装する。
+- `v0.5.0` — generic method/interface support。Phase 2.3c で設計した staged surface を実装する。
+- `v0.6.0` — remaining BigInt surface。division/modulo、containers、format/parse/performance などを段階的に広げる。
+- `v0.7.0+` — LLM migration tool、Wasm/WASI backend、multi-platform artifacts、signing/notarization/attestation など、配布・移行・target 拡張の大きい track。
 
 Post-MVP ecosystem items:
 
