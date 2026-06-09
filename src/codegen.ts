@@ -7837,12 +7837,22 @@ class Emitter {
     context: FinallyReturnContext,
     target: LoopCtxFrame,
   ): boolean {
-    let frame = context.loopBoundary;
-    while (frame !== undefined) {
-      if (frame === target) return true;
-      frame = frame.prev;
+    let frameMaybe: LoopCtxFrame | undefined = context.loopBoundary;
+    while (true) {
+      let nextFrameMaybe: LoopCtxFrame | undefined = undefined;
+      let exhausted = false;
+      let matched = false;
+      if (frameMaybe === undefined) {
+        exhausted = true;
+      } else {
+        const frame = frameMaybe;
+        matched = frame === target;
+        nextFrameMaybe = frame.prev;
+      }
+      if (exhausted) return false;
+      if (matched) return true;
+      frameMaybe = nextFrameMaybe;
     }
-    return false;
   }
 
   private checkBreakAllowed(stmt: BreakStmt): LoopCtxFrame {
