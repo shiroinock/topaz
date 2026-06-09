@@ -398,6 +398,8 @@ run_fail_case void_array_fail examples/void_array_fail.ts "\`void\` is only allo
 run_fail_case void_fn_type_fail examples/void_fn_type_fail.ts "used in fn-type parameter"
 run_fail_case void_fn_expr_body_fail examples/void_fn_expr_body_fail.ts "void-returning arrows require block bodies"
 run_fail_case void_fn_call_value_fail examples/void_fn_call_value_fail.ts "cannot use a \`void\` value"
+run_case never_call_carry_narrow $'7\n11\n13'
+run_fail_case never_call_carry_narrow_void_fail examples/never_call_carry_narrow_void_fail.ts "cannot access '.value' on union type"
 run_fail_case never_call_value_fail examples/never_call_value_fail.ts "cannot use a \`void\` value"
 run_fail_case array_map_void_callback_fail examples/array_map_void_callback_fail.ts "Array.map callback cannot return \`void\`"
 

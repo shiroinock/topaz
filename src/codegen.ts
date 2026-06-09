@@ -1022,7 +1022,15 @@ type TopLevelFunctionSig = {
   cName: string;
   params: ParamInfo[];
   returnType: TopazType;
+  returnsNever: boolean;
 };
+
+function typeNodeIsNever(node: TypeNode | undefined): boolean {
+  if (node === undefined) return false;
+  if (node.kind !== "type_ref") return false;
+  if (node.name !== "never") return false;
+  return node.typeArgs.length === 0;
+}
 
 // Phase 1.4c-2: generic top-level functions. Type parameters live in the AST
 // only; we don't resolve param/return types until a call site supplies concrete
@@ -2262,6 +2270,7 @@ class Emitter {
         cName: this.functionCName(sf, fname),
         params,
         returnType: ret,
+        returnsNever: typeNodeIsNever(fn.returnType),
       });
       });
     }
@@ -5361,6 +5370,7 @@ class Emitter {
     if (stmt.kind === "throw_stmt") return true;
     if (stmt.kind === "break_stmt") return true;
     if (stmt.kind === "continue_stmt") return true;
+    if (stmt.kind === "expr_stmt") return this.expressionStatementAlwaysExits(stmt.expr);
     if (stmt.kind === "block_stmt") {
       if (stmt.stmts.length === 0) return false;
       const lastIndex = stmt.stmts.length - 1;
@@ -5375,6 +5385,21 @@ class Emitter {
       if (elseBranchMaybe !== undefined) {
         return this.alwaysExits(stmt.thenBranch) && this.alwaysExits(elseBranchMaybe);
       }
+    }
+    return false;
+  }
+
+  private expressionStatementAlwaysExits(expr: Expr): boolean {
+    if (expr.kind !== "call_expr") return false;
+    if (expr.optional) return false;
+    const callee = expr.callee;
+    if (callee.kind === "ident") {
+      const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
+      return sig !== undefined && sig.returnsNever;
+    }
+    if (callee.kind === "prop_access" && callee.optional === false) {
+      const receiver = callee.receiver;
+      return receiver.kind === "ident" && receiver.name === "process" && callee.name === "exit";
     }
     return false;
   }
