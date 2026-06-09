@@ -539,6 +539,13 @@ run_fail_case process_stdout_write_as_value_fail examples/process_stdout_write_a
 run_fail_case process_member_value_fail examples/process_member_value_fail.ts "unsupported \`process.pid\` as a value"
 run_fail_case console_error_arity_fail examples/console_error_arity_fail.ts "console.error expects exactly one argument"
 
+run_case std_process_basic $'1\nstd_process_basic\nab\n1\nlocal\nbefore exit'
+run_fail_case std_process_unknown_named_import_fail examples/std_process_unknown_named_import_fail.ts "unsupported named import 'env' from stdlib specifier 'std/process'"
+run_fail_case std_process_exit_type_fail examples/std_process_exit_type_fail.ts "process.exit code must be number"
+run_fail_case std_process_write_stdout_type_fail examples/std_process_write_stdout_type_fail.ts "process.stdout.write argument must be string"
+run_fail_case std_process_write_error_type_fail examples/std_process_write_error_type_fail.ts "writeError argument must be string"
+run_fail_case std_process_write_error_as_value_fail examples/std_process_write_error_as_value_fail.ts "console.error returns void and cannot be used as a value"
+
 run_case number_literal_bases $'34\n16\n10\n3\n63\n160\ntrue\ntrue'
 run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
 run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"

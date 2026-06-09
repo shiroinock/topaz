@@ -258,7 +258,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.4 builtin descriptor metadata skeleton** — ADR `0331` の semantic builtin descriptor 方針を最初の実装に落とし、`src/builtin_descriptors.ts` に import / synthetic global descriptor と effect metadata を集約した。loader の stdlib specifier / named import allowlist は descriptor helper 参照へ移し、codegen lowering・受理 import surface・capability enforcement は変えない。決定ログは `docs/adr/0332-builtin-descriptor-metadata-skeleton.md`。
 - [x] **3.5 self-host-compatible descriptor metadata** — Phase 20 の descriptor metadata は維持しつつ、native self-host parser が未対応の top-level `export const` descriptor arrays を exported function へ戻した。ロードマップは single-binary MVP と post-MVP ecosystem work を分離。決定ログは `docs/adr/0333-single-binary-mvp-roadmap.md`。
 - [x] **3.6 public std/fs** — `std/fs` の read / metadata / write helper を公開 import surface として実装し、`node:fs` compatibility path と意味を揃える。決定ログは `docs/adr/0334-public-std-fs.md`。
-- [ ] **3.7 public std/process** — `std/process` の `argv` / `exit` / stdio write helper を公開 import surface として実装し、synthetic process-console compatibility path と意味を揃える。
+- [x] **3.7 public std/process** — `std/process` の `argv` / `exit` / stdio write helper を公開 import surface として実装し、synthetic process-console compatibility path と意味を揃える。決定ログは `docs/adr/0335-public-std-process.md`。
 - [ ] **3.8 minimal bare package source lookup** — source package graph を最小限 lookup し、未対応 package shape は clear reject する。npm 互換・install・lifecycle script・CommonJS / Node emulation は MVP 外。
 - [ ] **3.9 MVP release/UX gate** — zero-config single-binary path、public stdlib、package-shape reject、diagnostic wording、README/CLI usage を MVP として通す。
 

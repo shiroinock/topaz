@@ -4115,6 +4115,22 @@ class Emitter {
       return this.tryInferVoidPropCallExpression(expr, callee);
     }
     if (callee.kind === "ident") {
+      if (callee.name === "exit") {
+        this.checkProcessExitArgs(expr);
+        return T_VOID;
+      }
+      if (callee.name === "writeStdout") {
+        this.checkProcessStreamWriteArgs(expr, "stdout");
+        return T_VOID;
+      }
+      if (callee.name === "writeStderr") {
+        this.checkProcessStreamWriteArgs(expr, "stderr");
+        return T_VOID;
+      }
+      if (callee.name === "writeError") {
+        this.checkStdProcessWriteErrorArgs(expr);
+        return T_VOID;
+      }
       if (callee.name === "writeFileSync") {
         this.checkNodeFsWriteFileSyncArgs(expr);
         return T_VOID;
@@ -7808,6 +7824,7 @@ class Emitter {
       if (b === undefined) {
         const sig = this.resolveFunctionSig(expr.name, { pos: expr.pos });
         if (sig !== undefined) return this.emitTopLevelFunctionValue(sig);
+        if (expr.name === "argv") return `topaz_process_argv()`;
         throw new CodegenError({ pos: expr.pos }, `unknown identifier '${expr.name}'`);
       }
       // Phase 1.5-3c: when the binding's C representation is the scalar opt
@@ -8845,6 +8862,21 @@ class Emitter {
     return arg;
   }
 
+  private emitConsoleCall(expr: CallExpr, method: string): string {
+    const arg = this.checkConsoleCallArgs(expr, method);
+    const t = this.inferType(arg);
+    const family =
+      method === "log" ? "log"
+      : method === "warn" ? "warn"
+      : "error";
+    const fn =
+      t.kind === "boolean" ? `topaz_console_${family}_boolean`
+      : t.kind === "string" ? `topaz_console_${family}_string`
+      : t.kind === "bigint" ? `topaz_console_${family}_bigint`
+      : `topaz_console_${family}_number`;
+    return `${fn}(${this.emitExpression(arg)})`;
+  }
+
   private emitCall(expr: CallExpr): string {
     const callee = expr.callee;
 
@@ -8882,19 +8914,7 @@ class Emitter {
           // scalar lowering, differing only in the runtime stream (stderr).
           (prop.name === "log" || prop.name === "error" || prop.name === "warn")
         ) {
-          const method = prop.name;
-          const arg = this.checkConsoleCallArgs(expr, method);
-          const t = this.inferType(arg);
-          const family =
-            method === "log" ? "log"
-            : method === "warn" ? "warn"
-            : "error";
-          const fn =
-            t.kind === "boolean" ? `topaz_console_${family}_boolean`
-            : t.kind === "string" ? `topaz_console_${family}_string`
-            : t.kind === "bigint" ? `topaz_console_${family}_bigint`
-            : `topaz_console_${family}_number`;
-          return `${fn}(${this.emitExpression(arg)})`;
+          return this.emitConsoleCall(expr, prop.name);
         }
 
         // Phase 1.5-6 prep #26: process.exit(code?) -> never. Lowered to the
@@ -9007,6 +9027,20 @@ class Emitter {
       // `file://...` URL を local path に変換するだけの 1 引数 string 関数。
       if (callee.name === "fileURLToPath") {
         return this.emitNodeUrlFileURLToPath(expr);
+      }
+      // Phase 3.7: public std/process uses flat named helpers that lower to
+      // the existing synthetic process / console runtime entries.
+      if (callee.name === "exit") {
+        return this.emitProcessExit(expr);
+      }
+      if (callee.name === "writeStdout") {
+        return this.emitProcessStreamWrite(expr, "stdout");
+      }
+      if (callee.name === "writeStderr") {
+        return this.emitProcessStreamWrite(expr, "stderr");
+      }
+      if (callee.name === "writeError") {
+        return this.emitStdProcessWriteError(expr);
       }
       // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
       // String.fromCharCode / readFileSync these are recognized only at the
@@ -9860,6 +9894,23 @@ class Emitter {
     return `${fn}(${this.emitWithExpected(arg, T_STRING)})`;
   }
 
+  private checkStdProcessWriteErrorArgs(expr: CallExpr): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, "writeError expects exactly one argument: (s: string)");
+    }
+    const arg = expr.args[0];
+    const t = this.inferType(arg);
+    if (t.kind !== "string") {
+      throw new CodegenError({ pos: arg.pos }, `writeError argument must be string, got ${typeIdent(t)}`);
+    }
+    return arg;
+  }
+
+  private emitStdProcessWriteError(expr: CallExpr): string {
+    const arg = this.checkStdProcessWriteErrorArgs(expr);
+    return `topaz_console_error_string(${this.emitWithExpected(arg, T_STRING)})`;
+  }
+
   // Phase 1.5-6e-2: `import.meta.url` validation / bare-meta rejection now live
   // in convert (`convertImportMetaUrl` / `rejectBareMetaProperty`); the SCC
   // consumes the `import_meta_url` leaf directly.
@@ -10607,6 +10658,7 @@ class Emitter {
         this.recordFnMonomorph(fnType);
         return fnType;
       }
+      if (expr.name === "argv") return arrayOf(T_STRING)!;
       throw new CodegenError({ pos: expr.pos }, `unknown identifier '${expr.name}'`);
     }
     if (expr.kind === "prop_access" && expr.optional) {
@@ -11341,6 +11393,32 @@ class Emitter {
         if (callee.name === "fileURLToPath") {
           this.checkNodeUrlFileURLToPathArgs(expr);
           return T_STRING;
+        }
+        // Phase 3.7: public std/process helpers are call-site shortcuts, not
+        // first-class function values.
+        if (callee.name === "exit") {
+          throw new CodegenError(
+            { pos: expr.pos },
+            "process.exit returns `never` and cannot be used as a value",
+          );
+        }
+        if (callee.name === "writeStdout") {
+          throw new CodegenError(
+            { pos: expr.pos },
+            "process.stdout.write returns void and cannot be used as a value",
+          );
+        }
+        if (callee.name === "writeStderr") {
+          throw new CodegenError(
+            { pos: expr.pos },
+            "process.stderr.write returns void and cannot be used as a value",
+          );
+        }
+        if (callee.name === "writeError") {
+          throw new CodegenError(
+            { pos: expr.pos },
+            "console.error returns void and cannot be used as a value",
+          );
         }
         // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
         if (callee.name === "parseInt") {

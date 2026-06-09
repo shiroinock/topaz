@@ -35,6 +35,10 @@ function stdFsExplanation(): string {
   return "public filesystem helper backed by the Topaz filesystem builtin";
 }
 
+function stdProcessExplanation(): string {
+  return "public process/stdio helper backed by the Topaz process builtin";
+}
+
 export function builtinImportDescriptors(): Array<BuiltinImportDescriptor> {
   return [
     {
@@ -108,6 +112,51 @@ export function builtinImportDescriptors(): Array<BuiltinImportDescriptor> {
       status: "public",
       effects: ["fs.write"],
       explanation: stdFsExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/process",
+      importedName: "argv",
+      semanticName: "process.argv",
+      status: "public",
+      effects: ["process.argv"],
+      explanation: stdProcessExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/process",
+      importedName: "exit",
+      semanticName: "process.exit",
+      status: "public",
+      effects: ["process.exit"],
+      explanation: stdProcessExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/process",
+      importedName: "writeStdout",
+      semanticName: "process.stdout.write",
+      status: "public",
+      effects: ["io.stdout"],
+      explanation: stdProcessExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/process",
+      importedName: "writeStderr",
+      semanticName: "process.stderr.write",
+      status: "public",
+      effects: ["io.stderr"],
+      explanation: stdProcessExplanation(),
+    },
+    {
+      kind: "import",
+      specifier: "std/process",
+      importedName: "writeError",
+      semanticName: "console.error",
+      status: "public",
+      effects: ["io.stderr"],
+      explanation: stdProcessExplanation(),
     },
     {
       kind: "import",
