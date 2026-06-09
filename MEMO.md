@@ -251,7 +251,7 @@ Phase 2 は「self-hosting できる」から「実用的に配れる / 測れ�
 
 ここから先は「Effect-TS の延長線」的な発展:
 
-- capability / effect 型追跡(`!{ fs.read, throw<E> }` 的シグネチャ)
+- [x] **3.0 capability / effect 型追跡 design** — 関数は return type と effect set を持つものとして扱い、`throw<E>` / `fs.read` / `fs.write` / `fs.metadata` / `process.argv` / `process.exit` / `io.stdout` / `io.stderr` / `async.schedule` を最初の effect atom family とする。capability は package / host 境界で effect を discharge する権限であり、`!{ fs.read, throw<E> }` 的シグネチャは当面は例示表記に留める。決定ログは `docs/adr/0328-capability-effect-tracking-design.md`。
 - strict パッケージマニフェスト(npm 互換、`strict-ts.json` で宣言)
 - LLM 駆動マイグレーションツール(既存 TS → strict 化)
 - stdlib 整備
