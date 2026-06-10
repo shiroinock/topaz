@@ -873,8 +873,29 @@ TOPAZ
     echo "FAIL [runtime_prelude_file_url]: missing stable fileURLToPath prelude symbol" >&2
     exit 1
   fi
-  if ! grep -q "topaz_string_from_byte_codes" build/runtime_prelude_file_url.c; then
-    echo "FAIL [runtime_prelude_file_url]: missing byte-code string substrate" >&2
+  local file_url_body
+  file_url_body=$(awk '
+    /topaz_fn_runtime_prelude___topaz_url_file_url_to_path\(topaz_string url\)/ { in_fn = 1; depth = 0 }
+    in_fn {
+      print
+      for (i = 1; i <= length($0); i++) {
+        ch = substr($0, i, 1)
+        if (ch == "{") depth++
+        else if (ch == "}") depth--
+      }
+      if (depth == 0 && $0 ~ /}/) in_fn = 0
+    }
+  ' build/runtime_prelude_file_url.c)
+  if [[ -z "$file_url_body" ]]; then
+    echo "FAIL [runtime_prelude_file_url]: could not extract generated fileURLToPath body" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_string_buffer_" <<<"$file_url_body"; then
+    echo "FAIL [runtime_prelude_file_url]: generated fileURLToPath body does not use StringBuffer" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_from_byte_codes\s*\(" <<<"$file_url_body"; then
+    echo "FAIL [runtime_prelude_file_url]: generated fileURLToPath body still materializes byte codes" >&2
     exit 1
   fi
   if grep -Eq "\btopaz_url_file_url_to_path\s*\(" build/runtime_prelude_file_url.c; then

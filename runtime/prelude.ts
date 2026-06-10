@@ -490,7 +490,7 @@ function __topaz_url_file_url_to_path(url: string): string {
     return "";
   }
 
-  const bytes: Array<number> = [];
+  const buffer: StringBuffer = __topaz_string_buffer_new(url.length);
   while (cur < url.length) {
     const code: number = url.charCodeAt(cur);
     if (code === 37) {
@@ -504,12 +504,12 @@ function __topaz_url_file_url_to_path(url: string): string {
         __topaz_panic("topaz: fileURLToPath: invalid percent-encoding");
         return "";
       }
-      bytes.push(high * 16 + low);
+      __topaz_string_buffer_push_byte(buffer, high * 16 + low);
       cur = cur + 3;
       continue;
     }
-    bytes.push(code);
+    __topaz_string_buffer_push_byte(buffer, code);
     cur = cur + 1;
   }
-  return __topaz_string_from_byte_codes(bytes);
+  return __topaz_string_buffer_to_string(buffer);
 }

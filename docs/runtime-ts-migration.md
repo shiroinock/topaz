@@ -88,9 +88,11 @@ one buffer and repeatedly appends the immutable source string. Both materialize
 the result through `__topaz_string_buffer_to_string`. `__topaz_string_slice`
 now also allocates one buffer for the normalized byte range, pushes each source
 byte, and materializes through `__topaz_string_buffer_to_string`. The remaining
-replacement order is: the rest of the string byte materialization clients first
-(`__topaz_url_file_url_to_path`), raw byte reads second
-(`__topaz_string_char_code_at`), then removal or reclassification of
+string byte materialization client, `__topaz_url_file_url_to_path`, now also
+allocates one buffer sized by the input URL, pushes either decoded percent bytes
+or ordinary URL bytes, and materializes through
+`__topaz_string_buffer_to_string`. The remaining replacement order is: raw byte
+reads first (`__topaz_string_char_code_at`), then removal or reclassification of
 `topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)` after no
 prelude client needs the old two-symbol boundary. This is still pre-v0.2.0
 runtime prelude groundwork, not manifest, doctor, check, or explain work.
@@ -213,8 +215,8 @@ The current string-allocation boundary is:
 - `Array.prototype.slice` keeps monomorphized storage and copy in generated C,
   but its NaN-sentinel, negative-index, clamp, and truncation normalization now
   lives in `__topaz_slice_normalize(...)`;
-- byte-code string materialization stays on the C substrate path for
-  fileURLToPath until it migrates to the explicit string-buffer intrinsics;
+- `fileURLToPath(url)` lives in the runtime prelude and now allocates decoded
+  URL bytes through the internal `StringBuffer` family;
 - allocation clients may migrate to prelude TS if they keep their observable
   behavior and use the current compiler-owned allocation primitive for their
   phase; `trimStart`, `extname`, `String.fromCharCode`, and concat are migrated
@@ -261,18 +263,19 @@ container monomorphization has a replacement.
 `fileURLToPath(url)` now uses the same runtime-prelude migration boundary. Two
 compiler-owned internal prelude affordances,
 `__topaz_panic(message: string): never` and
-`__topaz_string_from_byte_codes(codes: Array<number>): string`, lower directly
-to tiny C substrate helpers while staying hidden from user source like the
-existing `__topaz_*` prelude symbols. The `file://` prefix check, optional empty
-or `localhost` host handling, absolute path check, and byte-preserving percent
-decode live in `runtime/prelude.ts`; imported `fileURLToPath(url)` lowers to the
-stable internal prelude symbol, and the old
+`StringBuffer`, stay hidden from user source like the existing `__topaz_*`
+prelude symbols. The `file://` prefix check, optional empty or `localhost` host
+handling, absolute path check, and byte-preserving percent decode live in
+`runtime/prelude.ts`; decoded bytes are pushed through the internal
+`StringBuffer` family and materialized with
+`__topaz_string_buffer_to_string(...)`. Imported `fileURLToPath(url)` lowers to
+the stable internal prelude symbol, and the old
 `topaz_url_file_url_to_path(...)` helper is no longer part of the C substrate
-inventory. The byte-code helper is necessary because
-`String.fromCharCode(...)` remains ASCII-limited while URL percent decoding can
-produce arbitrary bytes from `%00` through `%ff`. `topaz_runtime_module_url()`
-remains C substrate because it owns executable path syscalls, `realpath`,
-platform conditionals, and its process-lifetime cache.
+inventory. The string-buffer path remains byte-preserving for URL percent
+decoding from `%00` through `%ff` without routing through the old byte-code
+materialization bridge. `topaz_runtime_module_url()` remains C substrate
+because it owns executable path syscalls, `realpath`, platform conditionals,
+and its process-lifetime cache.
 
 Global `parseInt(s, radix)` now follows the scalar prelude lane as
 `__topaz_parse_int(s, radix)`: radix truncation, ASCII whitespace/sign handling,
@@ -281,13 +284,13 @@ Topaz-subset TS. `parseFloat(s)` remains C substrate because it intentionally
 delegates decimal/exponent parsing and roundoff behavior to libc `strtod`.
 
 `String.fromCharCode(n)`, compiler-owned string concat,
-`String.prototype.repeat(count)`, and `String.prototype.slice(start?, end?)`
-now follow the same split boundary for string
+`String.prototype.repeat(count)`, `String.prototype.slice(start?, end?)`, and
+`fileURLToPath(url)` now follow the same split boundary for string
 allocation. The public call shapes and diagnostics remain codegen-owned; the
 prelude helpers allocate through the internal `StringBuffer` intrinsic family
 instead of the temporary `Array<number>`/`__topaz_string_from_byte_codes(Array<number>)`
 bridge. This exercises one-byte push and existing-string append without
-migrating fileURLToPath or charCodeAt yet.
+migrating charCodeAt yet.
 
 `String.prototype.charCodeAt(index)` now follows the scalar string-read split.
 The public call shape and diagnostics remain codegen-owned, while NaN input,
