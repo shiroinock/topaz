@@ -357,41 +357,6 @@ static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
   return memcmp(a.data, b.data, a.len) == 0;
 }
 
-#ifndef TOPAZ_STRING_REPEAT_MAX_BYTES
-#define TOPAZ_STRING_REPEAT_MAX_BYTES ((size_t)256u * 1024u * 1024u)
-#endif
-
-static inline topaz_string topaz_string_repeat(topaz_string s, topaz_number count) {
-  if (!isfinite(count) || count < 0) {
-    fputs("topaz: String.repeat count out of range\n", stderr);
-    abort();
-  }
-  double whole = floor(count);
-  if (whole > (double)SIZE_MAX) {
-    fputs("topaz: String.repeat count out of range\n", stderr);
-    abort();
-  }
-  size_t n = (size_t)whole;
-  if (n == 0 || s.len == 0) {
-    topaz_string r = { "", 0 };
-    return r;
-  }
-  if (n > TOPAZ_STRING_REPEAT_MAX_BYTES / s.len || n > (SIZE_MAX - 1) / s.len) {
-    fputs("topaz: String.repeat output too large\n", stderr);
-    abort();
-  }
-  size_t total = s.len * n;
-  char *buf = (char *)topaz_arena_alloc(total + 1);
-  char *out = buf;
-  for (size_t i = 0; i < n; ++i) {
-    memcpy(out, s.data, s.len);
-    out += s.len;
-  }
-  buf[total] = '\0';
-  topaz_string r = { buf, total };
-  return r;
-}
-
 // Phase 1.5-6 prep #10: ASCII-only String.prototype.charCodeAt. JS spec
 // integer-truncates the index and returns NaN for out-of-range / NaN input.
 // Negative indices return NaN (no JS-style wrap-around — they treat as OOB).

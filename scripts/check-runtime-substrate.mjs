@@ -215,18 +215,6 @@ const inventory = {
     migration: MIGRATION.CONTAINER_MONOMORPH,
     next: NEXT.CONTAINER_MONOMORPH,
   },
-  TOPAZ_STRING_REPEAT_MAX_BYTES: {
-    category: CATEGORY.STRING,
-    reason: "string repeat allocation guard.",
-    migration: MIGRATION.STRING_BUFFER_INTRINSICS,
-    next: NEXT.STRING_BUFFER_INTRINSICS,
-  },
-  topaz_string_repeat: {
-    category: CATEGORY.STRING,
-    reason: "string allocation primitive until string-buffer intrinsics exist.",
-    migration: MIGRATION.STRING_BUFFER_INTRINSICS,
-    next: NEXT.STRING_BUFFER_INTRINSICS,
-  },
   topaz_string_char_code_at: {
     category: CATEGORY.STRING,
     reason: "byte-oriented string primitive used by runtime prelude helpers.",

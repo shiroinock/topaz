@@ -1,4 +1,4 @@
-// Phase 1.5-6i prep: String.prototype.repeat(count).
+// Phase 3.57: String.prototype.repeat(count) lowers through the runtime prelude.
 // ASCII-only Topaz strings repeat by byte length; count is a number and the
 // runtime truncates positive fractions before allocation.
 

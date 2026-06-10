@@ -9774,7 +9774,7 @@ class Emitter {
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_number`);
   }
 
-  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.55 prelude migration:
+  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.57 prelude migration:
   // String.prototype.charCodeAt / .slice / .repeat / .trimStart /
   // .startsWith / .endsWith. Arguments are exact Topaz types (no JS coercion).
   // Missing slice args lower to `(double)NAN` so the runtime prelude helper
@@ -9841,7 +9841,10 @@ class Emitter {
         );
       }
       const count = this.emitWithExpected(countArg, T_NUMBER);
-      return `topaz_string_repeat(${base}, ${count})`;
+      const helper = this.requireInternalPreludeFunctionCName("__topaz_string_repeat", {
+        pos: expr.pos,
+      });
+      return `${helper}(${base}, ${count})`;
     }
     if (method === "trimStart") {
       if (expr.args.length !== 0) {

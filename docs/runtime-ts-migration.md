@@ -72,10 +72,10 @@ recommended order is:
 Do not migrate a helper just because its public TypeScript shape looks simple.
 Split string work into two buckets:
 
-- **Allocation primitives** such as `String.prototype.repeat` and byte-buffer
-  materializing helpers stay on the C substrate until Topaz has explicit
-  internal string-buffer intrinsics. `String.prototype.slice` and
-  compiler-owned string concatenation are the first exceptions: their
+- **Allocation primitives** such as byte-buffer materializing helpers stay on
+  the C substrate until Topaz has explicit internal string-buffer intrinsics.
+  `String.prototype.slice`, compiler-owned string concatenation, and
+  `String.prototype.repeat` are the current exceptions: their
   normalization/copy loops now live in the runtime prelude and delegate final
   materialization to the hidden `__topaz_string_from_byte_codes(...)` substrate
   affordance.
@@ -134,7 +134,10 @@ fallback. `__topaz_string_slice(s, rawStart, rawEnd)` now handles
 arity/type diagnostics and passes NaN sentinels for omitted arguments.
 `__topaz_string_concat(a, b)` now handles compiler-owned binary string `+`,
 string `+=`, and template literal concat chains while keeping public type
-checking unchanged. These helpers keep the public stdlib import shape, language
+checking unchanged. `__topaz_string_repeat(s, count)` now handles
+`String.prototype.repeat(count)` while codegen keeps the public arity/type
+diagnostics and the prelude preserves the range, truncation, and output-size
+checks. These helpers keep the public stdlib import shape, language
 surface, and diagnostics unchanged. The migrated path helpers' old C definitions have
 been removed from the embedded runtime header; `topaz_process_cwd()` is the only
 remaining C path fallback for `resolve`. The old C definitions for migrated
@@ -147,13 +150,16 @@ scanning now lives only in `__topaz_string_is_trim_start_code(...)`.
 
 The current string-allocation boundary is:
 
-- `repeat` and byte-code string materialization stay on the C substrate path
-  until explicit string-buffer intrinsics exist;
 - `String.prototype.slice` algorithmic behavior lives in the runtime prelude,
   but final byte-string materialization still delegates to
   `topaz_string_from_byte_codes(...)`;
 - compiler-owned string concatenation lives in the runtime prelude as an
   allocation client over `charCodeAt` and `__topaz_string_from_byte_codes(...)`;
+- `String.prototype.repeat` lives in the runtime prelude as an allocation
+  client over `charCodeAt` and `__topaz_string_from_byte_codes(...)`, including
+  the existing range and output-size checks;
+- byte-code string materialization stays on the C substrate path until explicit
+  string-buffer intrinsics exist;
 - allocation clients may migrate to prelude TS if they keep their observable
   behavior and delegate the final allocation to those existing compiler-owned
   primitives; `trimStart`, `extname`, and the ASCII scalar policy for

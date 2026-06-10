@@ -317,6 +317,34 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_string_concat]"
 
+  node dist/cli.js examples/string_repeat.ts --emit-c-only -o build/runtime_prelude_string_repeat > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_repeat" build/runtime_prelude_string_repeat.c; then
+    echo "FAIL [runtime_prelude_string_repeat]: missing stable String.repeat prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_repeat\s*\(" build/runtime_prelude_string_repeat.c; then
+    echo "FAIL [runtime_prelude_string_repeat]: stale String.repeat C helper call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_string topaz_string_repeat\s*\(" build/runtime_prelude_string_repeat.c; then
+    echo "FAIL [runtime_prelude_string_repeat]: stale String.repeat C helper definition embedded" >&2
+    exit 1
+  fi
+  if grep -q "TOPAZ_STRING_REPEAT_MAX_BYTES" build/runtime_prelude_string_repeat.c; then
+    echo "FAIL [runtime_prelude_string_repeat]: stale String.repeat max macro embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_repeat.c -o build/runtime_prelude_string_repeat
+  local string_repeat_out
+  string_repeat_out=$(./build/runtime_prelude_string_repeat)
+  if [[ "$string_repeat_out" != $'xxx\n3\n0\ntrue\naa\npre-haha\nqq' ]]; then
+    echo "FAIL [runtime_prelude_string_repeat]:" >&2
+    echo "  expected string_repeat output" >&2
+    printf '%s\n' "$string_repeat_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_string_repeat]"
+
   node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_starts_with > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_starts_with" build/runtime_prelude_starts_with.c; then
     echo "FAIL [runtime_prelude_starts_with]: missing stable startsWith prelude symbol" >&2
@@ -909,6 +937,7 @@ run_fail_case runtime_prelude_parse_int_hidden_fail examples/runtime_prelude_par
 run_fail_case runtime_prelude_string_from_char_code_hidden_fail examples/runtime_prelude_string_from_char_code_hidden_fail.ts "unknown identifier '__topaz_string_from_char_code'"
 run_fail_case runtime_prelude_string_slice_hidden_fail examples/runtime_prelude_string_slice_hidden_fail.ts "unknown identifier '__topaz_string_slice'"
 run_fail_case runtime_prelude_string_concat_hidden_fail examples/runtime_prelude_string_concat_hidden_fail.ts "unknown identifier '__topaz_string_concat'"
+run_fail_case runtime_prelude_string_repeat_hidden_fail examples/runtime_prelude_string_repeat_hidden_fail.ts "unknown identifier '__topaz_string_repeat'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

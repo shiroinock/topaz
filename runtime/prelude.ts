@@ -42,6 +42,32 @@ function __topaz_string_concat(a: string, b: string): string {
   return __topaz_string_from_byte_codes(codes);
 }
 
+function __topaz_string_repeat(s: string, count: number): string {
+  if (count !== count || count - count !== 0 || count < 0) {
+    __topaz_panic("topaz: String.repeat count out of range");
+    return "";
+  }
+  const n: number = count - (count % 1);
+  if (n === 0 || s.length === 0) return "";
+  const maxBytes: number = 268435456;
+  if (n > maxBytes / s.length) {
+    __topaz_panic("topaz: String.repeat output too large");
+    return "";
+  }
+
+  const codes: Array<number> = [];
+  let repeatIndex: number = 0;
+  while (repeatIndex < n) {
+    let i: number = 0;
+    while (i < s.length) {
+      codes.push(s.charCodeAt(i));
+      i = i + 1;
+    }
+    repeatIndex = repeatIndex + 1;
+  }
+  return __topaz_string_from_byte_codes(codes);
+}
+
 function __topaz_string_slice(s: string, rawStart: number, rawEnd: number): string {
   let lo: number = 0;
   if (rawStart !== rawStart) {
