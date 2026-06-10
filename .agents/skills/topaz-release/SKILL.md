@@ -76,7 +76,20 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
    - `SHA256SUMS`
    - a checksum that verifies with `shasum -a 256 -c SHA256SUMS`
 
-7. Give a subagent or tester only the binary, checksum, README/MVP docs, and
+7. Download the draft Release assets into a temporary directory and run the
+   black-box compiler smoke from there:
+
+   ```sh
+   shasum -a 256 -c SHA256SUMS
+   chmod +x ./topaz-darwin-arm64
+   ./topaz-darwin-arm64 <repo>/examples/fib.ts -o ./fib
+   ./fib
+   ```
+
+   The expected output is `5702887`. This specifically checks that the release
+   binary does not depend on a checked-out `runtime/` directory.
+
+8. Give a subagent or tester only the binary, checksum, README/MVP docs, and
    the validation prompt. Do not leak the expected answer unless the task is
    explicitly a guided check.
 
@@ -88,12 +101,19 @@ Use this after an RC has passed black-box validation.
 2. Create the final annotated tag, for example `v0.1.0`.
 3. Push the tag to create/update the draft Release.
 4. Verify the Actions artifact and release assets.
-5. Review release notes, known limitations, checksum, and docs.
-6. Publish the GitHub Release manually.
+5. Download the draft Release assets and repeat the checksum + black-box
+   compiler smoke from the RC flow.
+6. Review release notes, known limitations, checksum, and docs.
+7. Publish the GitHub Release manually.
 
 Do not auto-publish a non-draft release from Codex. If the user explicitly asks
 to publish, confirm that the draft assets, checksum, and release notes have
 already been reviewed.
+
+The release workflow opts JavaScript actions into Node.js 24 with
+`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`; if GitHub changes that migration
+path, update `.github/workflows/release-artifact.yml` before cutting the next
+patch release.
 
 ## Recovery
 

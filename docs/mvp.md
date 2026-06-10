@@ -40,6 +40,7 @@ checkout.
 Run the compiler binary directly:
 
 ```sh
+shasum -a 256 -c SHA256SUMS
 chmod +x ./topaz-darwin-arm64
 ./topaz-darwin-arm64 hello.ts -o hello
 ./hello
@@ -217,6 +218,7 @@ For an external validation run, give the tester only:
 Ask them to verify:
 
 - The generated native binary runs without Node.js.
+- `shasum -a 256 -c SHA256SUMS` verifies the downloaded compiler asset.
 - The compile instructions create one runnable output binary from a simple
   `hello.ts`.
 - `std/process` can print output.

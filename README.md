@@ -48,6 +48,10 @@ source graph without Node.js or a checked-out `runtime/` directory. Downloaded
 GitHub Release assets may need `chmod +x` before first use:
 
 ```sh
+(
+  cd dist-release
+  shasum -a 256 -c SHA256SUMS
+)
 chmod +x ./dist-release/topaz-darwin-arm64
 ./dist-release/topaz-darwin-arm64 examples/fib.ts -o build/fib
 ./build/fib
