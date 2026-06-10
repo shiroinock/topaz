@@ -827,6 +827,27 @@ static inline void topaz_stderr_write(topaz_string s) {
   if (s.len) fwrite(s.data, 1, s.len, stderr);
 }
 
+static inline void topaz_panic(topaz_string message) {
+  if (message.len) fwrite(message.data, 1, message.len, stderr);
+  fputc('\n', stderr);
+  abort();
+}
+
+static inline topaz_string topaz_string_from_byte_codes(topaz_array_number *codes) {
+  char *buf = (char *)topaz_arena_alloc(codes->len + 1);
+  for (size_t i = 0; i < codes->len; i++) {
+    topaz_number n = codes->data[i];
+    if (!isfinite(n) || n < 0 || n > 255 || floor(n) != n) {
+      fputs("topaz: byte code out of range\n", stderr);
+      abort();
+    }
+    buf[i] = (char)(unsigned char)n;
+  }
+  buf[codes->len] = '\0';
+  topaz_string r = { buf, codes->len };
+  return r;
+}
+
 // Phase 1.5-6 prep #24: node:child_process.execFileSync(cmd, args,
 // { stdio: "inherit" }) -> void. fork + execvp + waitpid; stdio inherits the
 // parent (no pipe handling required). argv is built into the arena from the
@@ -881,67 +902,6 @@ static inline void topaz_child_exec_inherit(topaz_string cmd, topaz_array_string
     fputs("topaz: execFileSync child exited with non-zero status\n", stderr);
     abort();
   }
-}
-
-// Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> path. Strip the
-// `file://` scheme + optional empty/`localhost` authority and percent-decode
-// the remaining bytes. POSIX target only — Windows drive letters / backslash
-// translation are out of scope. Aborts on a non-`file:` URL, a non-absolute
-// path, or malformed percent escapes (matches Node's ERR_INVALID_URL family
-// collapsed to abort since we have no Error class).
-static inline topaz_string topaz_url_file_url_to_path(topaz_string url) {
-  static const char PREFIX[] = "file://";
-  const size_t plen = sizeof(PREFIX) - 1;
-  if (url.len < plen || memcmp(url.data, PREFIX, plen) != 0) {
-    fputs("topaz: fileURLToPath: URL must start with 'file://'\n", stderr);
-    abort();
-  }
-  const char *cur = url.data + plen;
-  const char *end = url.data + url.len;
-  if (cur < end && *cur != '/') {
-    const char *host_end = cur;
-    while (host_end < end && *host_end != '/') host_end++;
-    size_t host_len = (size_t)(host_end - cur);
-    if (!(host_len == 9 && memcmp(cur, "localhost", 9) == 0)) {
-      fputs("topaz: fileURLToPath: only empty / 'localhost' file URL hosts are supported\n", stderr);
-      abort();
-    }
-    cur = host_end;
-  }
-  if (cur >= end || *cur != '/') {
-    fputs("topaz: fileURLToPath: file URL path must be absolute\n", stderr);
-    abort();
-  }
-  size_t cap = (size_t)(end - cur);
-  char *buf = (char *)topaz_arena_alloc(cap);
-  size_t out = 0;
-  while (cur < end) {
-    char c = *cur;
-    if (c == '%') {
-      if (cur + 3 > end) {
-        fputs("topaz: fileURLToPath: truncated percent-encoding\n", stderr);
-        abort();
-      }
-      char h = cur[1], l = cur[2];
-      int hv = (h >= '0' && h <= '9') ? h - '0'
-              : (h >= 'a' && h <= 'f') ? h - 'a' + 10
-              : (h >= 'A' && h <= 'F') ? h - 'A' + 10 : -1;
-      int lv = (l >= '0' && l <= '9') ? l - '0'
-              : (l >= 'a' && l <= 'f') ? l - 'a' + 10
-              : (l >= 'A' && l <= 'F') ? l - 'A' + 10 : -1;
-      if (hv < 0 || lv < 0) {
-        fputs("topaz: fileURLToPath: invalid percent-encoding\n", stderr);
-        abort();
-      }
-      buf[out++] = (char)((hv << 4) | lv);
-      cur += 3;
-    } else {
-      buf[out++] = c;
-      cur++;
-    }
-  }
-  topaz_string r = { buf, out };
-  return r;
 }
 
 // Phase 1.5-6 prep #25: `import.meta.url` -> "file://<realpath of executable>".

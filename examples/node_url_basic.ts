@@ -34,3 +34,10 @@ console.log(fileURLToPath(enc));
 // `localhost` authority is treated the same as empty authority.
 const lh: string = "file://localhost/etc/hosts";
 console.log(fileURLToPath(lh));
+
+// Byte-preserving percent decode: avoid printing raw NUL/high bytes directly,
+// but lock their length and byte values.
+const bytes: string = fileURLToPath("file:///tmp/%00%ff");
+console.log(bytes.length);
+console.log(bytes.charCodeAt(5));
+console.log(bytes.charCodeAt(6));

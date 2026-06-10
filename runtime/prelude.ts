@@ -298,3 +298,60 @@ function __topaz_path_resolve_segments(segments: Array<string>, cwd: string): st
   if (norm.length > 0) return norm;
   return ".";
 }
+
+function __topaz_url_hex_value(code: number): number {
+  if (code >= 48 && code <= 57) return code - 48;
+  if (code >= 97 && code <= 102) return code - 97 + 10;
+  if (code >= 65 && code <= 70) return code - 65 + 10;
+  return -1;
+}
+
+function __topaz_url_file_url_to_path(url: string): string {
+  const prefix: string = "file://";
+  if (!__topaz_string_starts_with(url, prefix)) {
+    __topaz_panic("topaz: fileURLToPath: URL must start with 'file://'");
+    return "";
+  }
+
+  let cur: number = prefix.length;
+  if (cur < url.length && url.charCodeAt(cur) !== 47) {
+    let hostEnd: number = cur;
+    while (hostEnd < url.length && url.charCodeAt(hostEnd) !== 47) {
+      hostEnd = hostEnd + 1;
+    }
+    const host: string = url.slice(cur, hostEnd);
+    if (!__topaz_string_eq(host, "localhost")) {
+      __topaz_panic("topaz: fileURLToPath: only empty / 'localhost' file URL hosts are supported");
+      return "";
+    }
+    cur = hostEnd;
+  }
+
+  if (cur >= url.length || url.charCodeAt(cur) !== 47) {
+    __topaz_panic("topaz: fileURLToPath: file URL path must be absolute");
+    return "";
+  }
+
+  const bytes: Array<number> = [];
+  while (cur < url.length) {
+    const code: number = url.charCodeAt(cur);
+    if (code === 37) {
+      if (cur + 3 > url.length) {
+        __topaz_panic("topaz: fileURLToPath: truncated percent-encoding");
+        return "";
+      }
+      const high: number = __topaz_url_hex_value(url.charCodeAt(cur + 1));
+      const low: number = __topaz_url_hex_value(url.charCodeAt(cur + 2));
+      if (high < 0 || low < 0) {
+        __topaz_panic("topaz: fileURLToPath: invalid percent-encoding");
+        return "";
+      }
+      bytes.push(high * 16 + low);
+      cur = cur + 3;
+      continue;
+    }
+    bytes.push(code);
+    cur = cur + 1;
+  }
+  return __topaz_string_from_byte_codes(bytes);
+}

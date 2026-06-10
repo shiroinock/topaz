@@ -2083,6 +2083,11 @@ class Emitter {
     return sig.cName;
   }
 
+  private isCompilingRuntimePrelude(): boolean {
+    const current = g_currentModule;
+    return current !== undefined && current.isInternalModule && current.stableModuleId === "runtime_prelude";
+  }
+
   private emitRuntimePreludeStringEq(lhs: string, rhs: string, anchor: { pos: number }): string {
     const helper = this.requireInternalPreludeFunctionCName("__topaz_string_eq", anchor);
     return `${helper}(${lhs}, ${rhs})`;
@@ -9199,6 +9204,14 @@ class Emitter {
       // 識別子は scope に登録されない (String.fromCharCode と同方針)。
       // bare 利用 (`let f = readFileSync;`) は scope lookup が「unknown
       // identifier」で fall するので、ここの call-site 経路だけ受理する。
+      if (this.isCompilingRuntimePrelude()) {
+        if (callee.name === "__topaz_panic") {
+          return this.emitInternalPreludePanic(expr);
+        }
+        if (callee.name === "__topaz_string_from_byte_codes") {
+          return this.emitInternalPreludeStringFromByteCodes(expr);
+        }
+      }
       if (callee.name === "readFileSync") {
         return this.emitNodeFsReadFileSync(expr);
       }
@@ -10147,6 +10160,48 @@ class Emitter {
     return `topaz_child_exec_inherit(${cmd}, ${args})`;
   }
 
+  private checkInternalPreludePanicArgs(expr: CallExpr): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, "__topaz_panic expects exactly one argument: (message: string)");
+    }
+    const arg = expr.args[0];
+    const t = this.inferType(arg);
+    if (t.kind !== "string") {
+      throw new CodegenError({ pos: arg.pos }, `__topaz_panic message must be string, got ${typeIdent(t)}`);
+    }
+    return arg;
+  }
+
+  private emitInternalPreludePanic(expr: CallExpr): string {
+    const arg = this.checkInternalPreludePanicArgs(expr);
+    return `topaz_panic(${this.emitWithExpected(arg, T_STRING)})`;
+  }
+
+  private checkInternalPreludeStringFromByteCodesArgs(expr: CallExpr): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        "__topaz_string_from_byte_codes expects exactly one argument: (codes: Array<number>)",
+      );
+    }
+    const arg = expr.args[0];
+    const expected = arrayOf(T_NUMBER)!;
+    const t = this.inferType(arg);
+    if (!typeEq(t, expected)) {
+      throw new CodegenError(
+        { pos: arg.pos },
+        `__topaz_string_from_byte_codes codes must be Array<number>, got ${typeIdent(t)}`,
+      );
+    }
+    this.recordArrayMonomorph(expected);
+    return arg;
+  }
+
+  private emitInternalPreludeStringFromByteCodes(expr: CallExpr): string {
+    const arg = this.checkInternalPreludeStringFromByteCodesArgs(expr);
+    return `topaz_string_from_byte_codes(${this.emitWithExpected(arg, arrayOf(T_NUMBER)!)})`;
+  }
+
   // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
   // `file://...` URL の path 部分(scheme + 空 host を剥がす)+ percent-decode
   // して local path を返す 1 引数 string 関数。Node の fileURLToPath は
@@ -10173,7 +10228,10 @@ class Emitter {
   private emitNodeUrlFileURLToPath(expr: CallExpr): string {
     const urlArg = this.checkNodeUrlFileURLToPathArgs(expr);
     const url = this.emitWithExpected(urlArg, T_STRING);
-    return `topaz_url_file_url_to_path(${url})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_url_file_url_to_path", {
+      pos: expr.pos,
+    });
+    return `${helper}(${url})`;
   }
 
   // Phase 1.5-6 prep #26: process.exit(code?). arity 0 -> exit(0) (Node's
@@ -11709,6 +11767,16 @@ class Emitter {
         // shortcut (mirrors emitCall) — `readFileSync` 識別子は scope に存在
         // しないので、ここで先に拾わないと scope lookup が「unknown
         // identifier」で fall する。
+        if (this.isCompilingRuntimePrelude()) {
+          if (callee.name === "__topaz_panic") {
+            this.checkInternalPreludePanicArgs(expr);
+            return T_VOID;
+          }
+          if (callee.name === "__topaz_string_from_byte_codes") {
+            this.checkInternalPreludeStringFromByteCodesArgs(expr);
+            return T_STRING;
+          }
+        }
         if (callee.name === "readFileSync") {
           this.checkNodeFsReadFileSyncArgs(expr);
           return T_STRING;

@@ -612,6 +612,34 @@ TOPAZ
   fi
   echo "PASS [runtime_header_path_helper_cleanup]"
 
+  node dist/cli.js examples/node_url_basic.ts --emit-c-only -o build/runtime_prelude_file_url > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_url_file_url_to_path" build/runtime_prelude_file_url.c; then
+    echo "FAIL [runtime_prelude_file_url]: missing stable fileURLToPath prelude symbol" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_string_from_byte_codes" build/runtime_prelude_file_url.c; then
+    echo "FAIL [runtime_prelude_file_url]: missing byte-code string substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_url_file_url_to_path\s*\(" build/runtime_prelude_file_url.c; then
+    echo "FAIL [runtime_prelude_file_url]: old fileURLToPath helper still emitted" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_runtime_module_url" build/runtime_prelude_file_url.c; then
+    echo "FAIL [runtime_prelude_file_url]: missing import.meta.url substrate" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_file_url.c -o build/runtime_prelude_file_url
+  local file_url_out
+  file_url_out=$(./build/runtime_prelude_file_url)
+  if [[ "$file_url_out" != $'true\ntrue\ntrue\ntrue\nruntime_prelude_file_url\ntrue\ntrue\n/tmp/a b/c/d\n/etc/hosts\n7\n0\n255' ]]; then
+    echo "FAIL [runtime_prelude_file_url]:" >&2
+    echo "  expected node_url_basic output" >&2
+    printf '%s\n' "$file_url_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_file_url]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -767,6 +795,8 @@ run_fail_case runtime_prelude_path_basename_ext_hidden_fail examples/runtime_pre
 run_fail_case runtime_prelude_string_eq_hidden_fail examples/runtime_prelude_string_eq_hidden_fail.ts "unknown identifier '__topaz_string_eq'"
 run_fail_case runtime_prelude_path_join_hidden_fail examples/runtime_prelude_path_join_hidden_fail.ts "unknown identifier '__topaz_path_join_segments'"
 run_fail_case runtime_prelude_path_resolve_hidden_fail examples/runtime_prelude_path_resolve_hidden_fail.ts "unknown identifier '__topaz_path_resolve_segments'"
+run_fail_case runtime_prelude_panic_hidden_fail examples/runtime_prelude_panic_hidden_fail.ts "unknown identifier '__topaz_panic'"
+run_fail_case runtime_prelude_byte_codes_hidden_fail examples/runtime_prelude_byte_codes_hidden_fail.ts "unknown identifier '__topaz_string_from_byte_codes'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
@@ -1010,7 +1040,7 @@ run_fail_case node_child_process_exec_opts_wrong_value_fail examples/node_child_
 run_fail_case node_child_process_exec_as_value_fail examples/node_child_process_exec_as_value_fail.ts "execFileSync returns void and cannot be used as a value"
 run_fail_case node_child_process_unknown_named_import_fail examples/node_child_process_unknown_named_import_fail.ts "unsupported named import 'spawnSync'"
 
-run_case node_url_basic $'true\ntrue\ntrue\ntrue\nnode_url_basic\ntrue\ntrue\n/tmp/a b/c/d\n/etc/hosts'
+run_case node_url_basic $'true\ntrue\ntrue\ntrue\nnode_url_basic\ntrue\ntrue\n/tmp/a b/c/d\n/etc/hosts\n7\n0\n255'
 run_fail_case node_url_arity_fail examples/node_url_arity_fail.ts "fileURLToPath expects exactly one argument"
 run_fail_case node_url_type_fail examples/node_url_type_fail.ts "fileURLToPath argument must be string"
 run_fail_case node_url_as_value_fail examples/node_url_as_value_fail.ts "unknown identifier 'fileURLToPath'"

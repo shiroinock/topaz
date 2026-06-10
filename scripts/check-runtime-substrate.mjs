@@ -163,6 +163,10 @@ const inventory = {
     category: CATEGORY.STRING,
     reason: "string allocation primitive for String.fromCharCode lowering.",
   },
+  topaz_string_from_byte_codes: {
+    category: CATEGORY.STRING,
+    reason: "internal runtime prelude byte-preserving string allocation primitive.",
+  },
 
   topaz_fmod: {
     category: CATEGORY.NUMBER,
@@ -225,10 +229,6 @@ const inventory = {
   topaz_child_exec_inherit: {
     category: CATEGORY.HOST,
     reason: "fork/exec/waitpid child_process host wrapper.",
-  },
-  topaz_url_file_url_to_path: {
-    category: CATEGORY.HOST,
-    reason: "file URL path conversion host-backed helper.",
   },
   topaz_runtime_module_url: {
     category: CATEGORY.HOST,
@@ -295,6 +295,10 @@ const inventory = {
   topaz_throw: {
     category: CATEGORY.EXCEPTION,
     reason: "longjmp exception dispatch substrate.",
+  },
+  topaz_panic: {
+    category: CATEGORY.EXCEPTION,
+    reason: "internal runtime prelude abort diagnostic substrate.",
   },
 };
 
