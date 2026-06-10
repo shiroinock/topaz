@@ -430,26 +430,6 @@ static inline size_t topaz_slice_normalize(double n, size_t len, size_t def) {
   return (size_t)r;
 }
 
-// Phase 1.5-6 prep #10: String.prototype.slice. Reuses topaz_slice_normalize
-// (NaN sentinel encodes the `undefined` default — caller passes NaN for
-// omitted args). Always copies into a fresh arena buffer; substring sharing
-// would couple lifetimes for a marginal saving in ASCII-only Topaz.
-static inline topaz_string topaz_string_slice(topaz_string s, double raw_start, double raw_end) {
-  size_t lo = topaz_slice_normalize(raw_start, s.len, 0);
-  size_t hi = topaz_slice_normalize(raw_end, s.len, s.len);
-  if (hi < lo) hi = lo;
-  size_t out_len = hi - lo;
-  if (out_len == 0) {
-    topaz_string r = { "", 0 };
-    return r;
-  }
-  char *buf = (char *)topaz_arena_alloc(out_len + 1);
-  memcpy(buf, s.data + lo, out_len);
-  buf[out_len] = '\0';
-  topaz_string r = { buf, out_len };
-  return r;
-}
-
 // Phase 1.5-6 prep #13: node:fs.readFileSync(path, "utf8") -> topaz_string.
 // fopen + ftell + fread; the buffer lives in the arena and is reclaimed at
 // process exit. Topaz strings are ASCII-only, so a UTF-8 file with any

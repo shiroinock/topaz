@@ -27,6 +27,41 @@ function __topaz_string_from_char_code(n: number): string {
   return __topaz_string_from_byte_codes(codes);
 }
 
+function __topaz_string_slice(s: string, rawStart: number, rawEnd: number): string {
+  let lo: number = 0;
+  if (rawStart !== rawStart) {
+    lo = 0;
+  } else if (rawStart < 0) {
+    lo = s.length + rawStart;
+  } else {
+    lo = rawStart;
+  }
+  if (lo < 0) lo = 0;
+  if (lo > s.length) lo = s.length;
+  lo = lo - (lo % 1);
+
+  let hi: number = 0;
+  if (rawEnd !== rawEnd) {
+    hi = s.length;
+  } else if (rawEnd < 0) {
+    hi = s.length + rawEnd;
+  } else {
+    hi = rawEnd;
+  }
+  if (hi < 0) hi = 0;
+  if (hi > s.length) hi = s.length;
+  hi = hi - (hi % 1);
+  if (hi < lo) hi = lo;
+
+  const codes: Array<number> = [];
+  let i: number = lo;
+  while (i < hi) {
+    codes.push(s.charCodeAt(i));
+    i = i + 1;
+  }
+  return __topaz_string_from_byte_codes(codes);
+}
+
 function __topaz_string_starts_with(s: string, search: string): boolean {
   if (search.length > s.length) return false;
   let i: number = 0;

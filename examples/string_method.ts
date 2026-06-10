@@ -1,7 +1,7 @@
 // Phase 1.5-6 prep #10: String.prototype.charCodeAt / .slice.
 // ASCII-only, integer-truncated index for charCodeAt (NaN if OOB or negative).
-// .slice reuses topaz_slice_normalize so undefined / negative / out-of-range
-// arguments normalize identically to Array.slice.
+// .slice lowers through the runtime prelude; undefined / negative /
+// out-of-range arguments keep the original byte-slice behavior.
 
 const s: string = "hello";
 

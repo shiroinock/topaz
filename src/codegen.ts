@@ -9765,11 +9765,11 @@ class Emitter {
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_number`);
   }
 
-  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.34 prelude migration:
+  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.55 prelude migration:
   // String.prototype.charCodeAt / .slice / .repeat / .trimStart /
   // .startsWith / .endsWith. Arguments are exact Topaz types (no JS coercion).
-  // Missing slice args lower to `(double)NAN` so topaz_slice_normalize picks
-  // the default. startsWith / endsWith intentionally accept only search.
+  // Missing slice args lower to `(double)NAN` so the runtime prelude helper
+  // picks the default. startsWith / endsWith intentionally accept only search.
   private emitStringMethodCall(
     expr: CallExpr,
     callee: PropAccessExpr,
@@ -9814,7 +9814,10 @@ class Emitter {
         const endArg = expr.args[1];
         endExpr = `(double)(${this.emitWithExpected(endArg, T_NUMBER)})`;
       }
-      return `topaz_string_slice(${base}, ${startExpr}, ${endExpr})`;
+      const helper = this.requireInternalPreludeFunctionCName("__topaz_string_slice", {
+        pos: expr.pos,
+      });
+      return `${helper}(${base}, ${startExpr}, ${endExpr})`;
     }
     if (method === "repeat") {
       if (expr.args.length !== 1) {
