@@ -105,6 +105,26 @@ intrinsic replacement ADR that explains effect metadata and authorization UX.
 Until then, `pnpm run check:runtime-substrate` and smoke keep the lane visible
 as `host-abi-boundary: 12`.
 
+## Phase 3.83 Raw Memory Substrate Policy
+
+The `raw-memory-boundary` lane is deliberately still open with exactly three
+runtime substrate symbols before v0.2.0: `topaz_arena_alloc(...)`,
+`topaz_arena_calloc(...)`, and `topaz_arena_realloc(...)`.
+
+These helpers are the process-lifetime arena allocation foundation for
+generated C, runtime substrate helpers, `StringBuffer` / `BigIntBuffer`
+materialization, containers, closures, host wrappers, and string / number
+buffers. They are not ordinary pure Topaz-subset runtime prelude functions:
+Topaz source currently has no public or internal raw pointer, byte buffer,
+arena lifetime, memcpy, allocation failure, or ownership model that could
+express them safely. Runtime prelude algorithms may call higher-level
+compiler-owned substrates such as `StringBuffer` and `BigIntBuffer`, but they
+must stay above raw arena pointer modeling.
+
+Future movement requires an explicit compiler-owned memory intrinsic or backend
+storage replacement ADR. Until then, `pnpm run check:runtime-substrate` and
+smoke keep the lane visible as `raw-memory-boundary: 3`.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has

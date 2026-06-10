@@ -29,7 +29,8 @@ const MIGRATION = {
 };
 
 const NEXT = {
-  RAW_MEMORY: "Pinned until Topaz has explicit raw pointer, byte buffer, and arena allocation intrinsics.",
+  RAW_MEMORY:
+    "Pinned as the pre-v0.2 compiler-owned raw memory / arena substrate boundary for topaz_arena_alloc, topaz_arena_calloc, and topaz_arena_realloc; moving these allocation, zero-initialization, or grow primitives requires an explicit memory intrinsic or backend storage decision.",
   HOST_ABI:
     "Pinned as the pre-v0.2 capability-aware host ABI substrate boundary for raw stdio writes, filesystem wrappers, process argv/cwd/exit/module URL wrappers, and child process spawn; moving any helper requires an explicit manifest/capability/doctor-aware host syscall or intrinsic decision.",
   LIBC_LIBM:
