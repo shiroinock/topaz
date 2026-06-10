@@ -44,6 +44,11 @@ if [[ "${substrate_out}" != *"host-abi-boundary: 12"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${substrate_out}" != *"container-monomorph-boundary: 13"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: container monomorph substrate lane count changed" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 if [[ "${substrate_out}" != *"exception-boundary: 4"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: exception substrate lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2

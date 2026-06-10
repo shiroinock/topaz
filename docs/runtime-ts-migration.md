@@ -170,6 +170,32 @@ remains part of the embedded runtime header freshness boundary. Until then,
 `pnpm run check:runtime-substrate` and smoke keep the lane visible as
 `c-abi-type-boundary: 8`.
 
+## Phase 3.86 Container Monomorph Substrate Policy
+
+The `container-monomorph-boundary` lane is deliberately still open with exactly
+thirteen runtime substrate entries before v0.2.0: `topaz_string_eq`,
+`TOPAZ_ARRAY_DEFINE`, `TOPAZ_HASH_SLOT_EMPTY`,
+`TOPAZ_HASH_SLOT_OCCUPIED`, `TOPAZ_HASH_SLOT_TOMBSTONE`,
+`topaz_hash_number`, `topaz_key_eq_number`, `topaz_hash_boolean`,
+`topaz_hash_pointer`, `topaz_key_eq_boolean`, `topaz_hash_string`,
+`TOPAZ_MAP_DEFINE`, and `TOPAZ_SET_DEFINE`.
+
+These entries are not ordinary pure Topaz-subset runtime prelude migration
+targets. The Array/Map/Set macro families define monomorphized C storage,
+growth, rehash, and tombstone behavior; the slot-state markers define the
+open-addressing table state shared by generated C and runtime macros; and the
+hash/equality helpers encode key semantics for SameValueZero numbers, byte
+string hashing/equality, booleans, and reference identity. Topaz source cannot
+currently generate the per-container C typedefs, struct layouts, or concrete
+functions that would replace this substrate.
+
+Future movement requires an explicit compiler-owned container
+monomorphization/backend design that replaces the Array/Map/Set substrate as a
+unit. It should not be a helper-by-helper runtime prelude migration, and it
+should not change Map/Set/Array representation as part of this policy lane.
+Until then, `pnpm run check:runtime-substrate` and smoke keep the lane visible
+as `container-monomorph-boundary: 13`.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has

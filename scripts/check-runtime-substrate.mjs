@@ -37,7 +37,8 @@ const NEXT = {
     "Pinned as the pre-v0.2 number substrate boundary for topaz_fmod (number % number via libm fmod), topaz_parse_float (parseFloat via strtod), and topaz_number_to_string (ECMA-262 formatting via snprintf plus strtod roundtrip); moving any helper requires an explicit replacement decision preserving current parse, roundoff, remainder, and formatting behavior.",
   EXCEPTION:
     "Pinned as the pre-v0.2 exception/control-transfer substrate boundary for topaz_try_push, topaz_try_pop, topaz_throw, and topaz_panic because they depend on setjmp/longjmp, jmp_buf frame lifetime, panic diagnostics, and abort/panic control transfer; moving any helper requires a future explicit exception runtime/backend design rather than helper-by-helper runtime prelude migration.",
-  CONTAINER_MONOMORPH: "Needs a compiler-owned replacement for monomorphized container storage, hashing, and equality.",
+  CONTAINER_MONOMORPH:
+    "Pinned as the pre-v0.2 compiler-owned container monomorph substrate for Array/Map/Set macro families, hash-table slot state, growth, rehash, tombstones, hashing, and key equality, including SameValueZero number behavior, string byte hashing/equality, and reference identity; moving any helper requires a future explicit compiler-owned container monomorphization/backend design rather than helper-by-helper runtime prelude migration.",
   STRING_BUFFER_INTRINSICS:
     "Closed after the completed StringBuffer prelude migration; use string-buffer-intrinsic-family for active internal string-buffer substrate or record a new boundary decision.",
   STRING_BUFFER_INTRINSIC_FAMILY: "Compiler-owned internal string-buffer family that will replace the old byte-code boundary as prelude clients migrate.",
