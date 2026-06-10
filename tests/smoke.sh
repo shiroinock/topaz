@@ -373,6 +373,20 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_string_concat]: stale string concat C helper definition embedded" >&2
     exit 1
   fi
+  local string_concat_body
+  string_concat_body=$(awk '
+    /^static __attribute__\(\(unused\)\) topaz_string topaz_fn_runtime_prelude___topaz_string_concat\(topaz_string a, topaz_string b\) \{/ { in_fn = 1 }
+    in_fn { print }
+    in_fn && /^}$/ { exit }
+  ' build/runtime_prelude_string_concat.c)
+  if ! grep -q "topaz_string_buffer_" <<< "$string_concat_body"; then
+    echo "FAIL [runtime_prelude_string_concat]: missing string buffer intrinsic substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_from_byte_codes\s*\(" <<< "$string_concat_body"; then
+    echo "FAIL [runtime_prelude_string_concat]: old byte-code materialization helper still used" >&2
+    exit 1
+  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_concat.c -o build/runtime_prelude_string_concat
   local string_concat_out
   string_concat_out=$(./build/runtime_prelude_string_concat)

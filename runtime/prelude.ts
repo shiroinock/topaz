@@ -36,18 +36,10 @@ function __topaz_string_char_code_at(s: string, index: number): number {
 }
 
 function __topaz_string_concat(a: string, b: string): string {
-  const codes: Array<number> = [];
-  let i: number = 0;
-  while (i < a.length) {
-    codes.push(a.charCodeAt(i));
-    i = i + 1;
-  }
-  i = 0;
-  while (i < b.length) {
-    codes.push(b.charCodeAt(i));
-    i = i + 1;
-  }
-  return __topaz_string_from_byte_codes(codes);
+  const buffer: StringBuffer = __topaz_string_buffer_new(a.length + b.length);
+  __topaz_string_buffer_append_string(buffer, a);
+  __topaz_string_buffer_append_string(buffer, b);
+  return __topaz_string_buffer_to_string(buffer);
 }
 
 function __topaz_string_repeat(s: string, count: number): string {
