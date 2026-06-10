@@ -8,8 +8,21 @@ pnpm run check:runtime-header > /dev/null
 echo "PASS [runtime_header_fresh]"
 pnpm run check:runtime-prelude > /dev/null
 echo "PASS [runtime_prelude_fresh]"
-
+pnpm run check:runtime-substrate > /dev/null
 mkdir -p build
+tmp_runtime_substrate="build/runtime_substrate_probe.h"
+cp runtime/runtime.h "${tmp_runtime_substrate}"
+printf '\nstatic inline topaz_number topaz_unclassified_probe(void) { return 0; }\n' >> "${tmp_runtime_substrate}"
+if substrate_err=$(node scripts/check-runtime-substrate.mjs "${tmp_runtime_substrate}" 2>&1); then
+  echo "FAIL [runtime_substrate_inventory]: expected unclassified helper failure" >&2
+  exit 1
+fi
+if [[ "${substrate_err}" != *"topaz_unclassified_probe"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing unclassified helper name" >&2
+  printf '%s\n' "${substrate_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [runtime_substrate_inventory]"
 
 # Phase 1.5-6e: topaz_parser を oracle (tsc + convertFromTsc) と JSON 等価比較。
 # 全 example が一致しないと codegen 側のテストを走らせる意味が無いのでここで止める。

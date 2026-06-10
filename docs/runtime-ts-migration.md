@@ -25,6 +25,11 @@ support for them:
   prelude functions.
 
 These are substrate, not public user APIs.
+`pnpm run check:runtime-substrate` classifies each remaining `topaz_*` static
+helper and substrate macro (`TOPAZ_*` / `topaz_opt_*`) in `runtime/runtime.h`.
+New C helpers or macros must either be added to that inventory with a substrate
+category/reason or moved to the runtime prelude instead of silently growing the
+header.
 
 ## Topaz Prelude Candidates
 
@@ -148,6 +153,8 @@ Each migrated helper must keep the observable generated program behavior:
   `src/runtime_header.ts` matches `runtime/runtime.h`.
 - `pnpm run check:runtime-prelude` must pass so the embedded prelude source in
   `src/runtime_prelude.ts` matches `runtime/prelude.ts`.
+- `pnpm run check:runtime-substrate` must pass so any remaining C helper or
+  substrate macro growth is explicitly classified.
 - `pnpm run build:release` must still pass the self-host fixed-point and
   binary-only release smoke.
 
