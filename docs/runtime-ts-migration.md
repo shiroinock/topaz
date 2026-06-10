@@ -65,6 +65,29 @@ compiler-owned internal string-buffer intrinsics: opaque buffer allocation,
 byte append/copy/read operations, materialization to immutable `string`, and
 hidden lowering available only to runtime prelude modules.
 
+## Hidden String Buffer Intrinsics
+
+The next implementation target is an internal-prelude-only intrinsic family:
+`__topaz_string_buffer_new(capacity)`,
+`__topaz_string_buffer_push_byte(buffer, byte)`,
+`__topaz_string_buffer_append_string(buffer, value)`,
+`__topaz_string_buffer_byte_at(buffer, index)`, and
+`__topaz_string_buffer_to_string(buffer)`. These helpers operate on an opaque
+compiler-owned `StringBuffer` pseudo type. It is not a public class,
+interface, importable symbol, structural type, `Array<number>`, or pointer
+escape; ordinary user modules must still fail hidden helper references with
+`unknown identifier '__topaz_*'`.
+
+A later implementation phase should first add type and lowering support for
+this pseudo type while keeping the helpers visible only to `runtime/prelude.ts`.
+The replacement order is: string byte materialization clients first
+(`__topaz_string_concat`, `__topaz_string_repeat`, `__topaz_string_slice`,
+`__topaz_string_from_char_code`, and `__topaz_url_file_url_to_path`), raw byte
+reads second (`__topaz_string_char_code_at`), then removal or reclassification
+of `topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)` after no
+prelude client needs the old two-symbol boundary. This is still pre-v0.2.0
+runtime prelude groundwork, not manifest, doctor, check, or explain work.
+
 ## Topaz Prelude Candidates
 
 Migrate helpers only after their required substrate calls are explicit. The
