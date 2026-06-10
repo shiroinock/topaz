@@ -284,6 +284,90 @@ function __topaz_bigint_mul(a: bigint, b: bigint): bigint {
   return __topaz_bigint_buffer_to_bigint(buffer, sign);
 }
 
+function __topaz_bigint_buffer_divmod_decimal_group(buffer: BigIntBuffer, len: number): number {
+  const base16: number = 65536;
+  const groupBase: number = 1000000000;
+  let rem: number = 0;
+  let i: number = len;
+  while (i > 0) {
+    i = i - 1;
+    const limb: number = __topaz_bigint_buffer_get_limb(buffer, i);
+    const lo: number = limb % base16;
+    const hi: number = (limb - lo) / base16;
+
+    const curHi: number = rem * base16 + hi;
+    const curHiRem: number = curHi % groupBase;
+    const qHi: number = (curHi - curHiRem) / groupBase;
+    rem = curHiRem;
+
+    const curLo: number = rem * base16 + lo;
+    const curLoRem: number = curLo % groupBase;
+    const qLo: number = (curLo - curLoRem) / groupBase;
+    rem = curLoRem;
+
+    __topaz_bigint_buffer_set_limb(buffer, i, qHi * base16 + qLo);
+  }
+  return rem;
+}
+
+function __topaz_string_buffer_push_decimal_group(buffer: StringBuffer, value: number, minWidth: number): void {
+  let divisor: number = 1;
+  let digits: number = 1;
+  while (value >= divisor * 10) {
+    divisor = divisor * 10;
+    digits = digits + 1;
+  }
+
+  let width: number = digits;
+  while (width < minWidth) {
+    __topaz_string_buffer_push_byte(buffer, 48);
+    width = width + 1;
+  }
+
+  let remaining: number = value;
+  while (divisor > 0) {
+    const digit: number = (remaining - (remaining % divisor)) / divisor;
+    __topaz_string_buffer_push_byte(buffer, 48 + digit);
+    remaining = remaining % divisor;
+    divisor = (divisor - (divisor % 10)) / 10;
+  }
+}
+
+function __topaz_bigint_to_string(value: bigint): string {
+  const sign: number = __topaz_bigint_sign(value);
+  const len: number = __topaz_bigint_limb_len(value);
+  if (sign === 0 || len === 0) return "0";
+
+  const scratch: BigIntBuffer = __topaz_bigint_buffer_new(len);
+  let copyIndex: number = 0;
+  while (copyIndex < len) {
+    __topaz_bigint_buffer_set_limb(scratch, copyIndex, __topaz_bigint_limb(value, copyIndex));
+    copyIndex = copyIndex + 1;
+  }
+
+  const groups: Array<number> = [];
+  let scratchLen: number = len;
+  while (scratchLen > 0) {
+    groups.push(__topaz_bigint_buffer_divmod_decimal_group(scratch, scratchLen));
+    while (scratchLen > 0 && __topaz_bigint_buffer_get_limb(scratch, scratchLen - 1) === 0) {
+      scratchLen = scratchLen - 1;
+    }
+  }
+
+  const buffer: StringBuffer = __topaz_string_buffer_new(groups.length * 9 + (sign < 0 ? 1 : 0));
+  if (sign < 0) {
+    __topaz_string_buffer_push_byte(buffer, 45);
+  }
+
+  let groupIndex: number = groups.length - 1;
+  __topaz_string_buffer_push_decimal_group(buffer, groups[groupIndex], 0);
+  while (groupIndex > 0) {
+    groupIndex = groupIndex - 1;
+    __topaz_string_buffer_push_decimal_group(buffer, groups[groupIndex], 9);
+  }
+  return __topaz_string_buffer_to_string(buffer);
+}
+
 function __topaz_string_from_char_code(n: number): string {
   if (n !== n || n < 0 || n >= 128) {
     __topaz_panic("topaz: String.fromCharCode argument out of ASCII range");

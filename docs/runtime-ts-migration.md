@@ -45,9 +45,10 @@ symbol should immediately move to TypeScript:
   and representation-level storage.
 - `needs-string-buffer-intrinsics`: legacy raw immutable string byte-read
   helpers that have now been removed from the runtime header.
-- `needs-bigint-limb-intrinsics`: BigInt limb storage, arithmetic, parsing, and
-  formatting that need the internal-prelude-only BigInt limb intrinsic family
-  before helper algorithms can move to Topaz-subset TS.
+- `needs-bigint-limb-intrinsics`: legacy BigInt helper algorithms that needed
+  the internal-prelude-only BigInt limb intrinsic family before they could move
+  to Topaz-subset TS; this lane is now empty after decimal formatting moved to
+  the runtime prelude.
 - `container-monomorph-boundary`: Array/Map/Set macro families, hash slots,
   hashing, and key equality until compiler-owned monomorphization replaces the
   C substrate.
@@ -124,6 +125,16 @@ trailing zero limbs, allocates the immutable `topaz_bigint *`, copies normalized
 limbs, and canonicalizes zero. Decimal formatting remains the only standalone
 helper in that lane.
 
+As of Phase 3.78, decimal BigInt formatting routes through runtime prelude
+`__topaz_bigint_to_string(value)`. The helper copies absolute limbs into a
+`BigIntBuffer`, repeatedly divides by 1e9 using 16-bit chunks so every
+`number` intermediate stays exact, and materializes decimal bytes with
+`StringBuffer`. Console BigInt IO and template literal substitution now target
+that stable internal prelude symbol, while the standalone C
+`topaz_bigint_to_string(...)` helper and the old `needs-bigint-limb-intrinsics`
+migration lane are gone. The eight-symbol `bigint-limb-intrinsic-family`
+remains as the compiler-owned substrate for internal prelude BigInt algorithms.
+
 ## Hidden String Buffer Intrinsics
 
 The next implementation target is an internal-prelude-only intrinsic family:
@@ -179,10 +190,10 @@ evidence helper. Public equality now uses `__topaz_bigint_eq(value, other)`,
 ordering uses `__topaz_bigint_cmp(value, other)`, unary negation uses
 `__topaz_bigint_neg(value)`, and binary addition/subtraction use
 `__topaz_bigint_add(value, other)` / `__topaz_bigint_sub(value, other)`.
-Multiplication uses `__topaz_bigint_mul(value, other)`, and decimal literal
-construction uses `__topaz_bigint_from_decimal(digits)`. Later slices should
-migrate formatting helpers. Decimal formatting remains last because it combines
-limb algorithms with string allocation and formatting behavior.
+Multiplication uses `__topaz_bigint_mul(value, other)`, decimal literal
+construction uses `__topaz_bigint_from_decimal(digits)`, and decimal formatting
+uses `__topaz_bigint_to_string(value)` with exact 16-bit chunk division and
+`StringBuffer` byte output.
 
 ## Topaz Prelude Candidates
 
@@ -333,10 +344,11 @@ stable internal prelude symbol. Console boolean IO also routes through that
 same internal prelude helper and then uses the existing string stdout/stderr
 substrate helpers, so the dedicated C boolean console helpers are no longer
 part of the substrate inventory. Number and BigInt console IO now follow the
-same composition shape, but their stringification remains C substrate:
-`topaz_number_to_string(...)` / `topaz_bigint_to_string(...)` feed the existing
-string stdout/stderr helpers, and the dedicated number/BigInt console wrappers
-are removed. `console.warn(...)` now lowers directly to the same stderr string
+same composition shape. Number stringification remains the C/libc substrate
+`topaz_number_to_string(...)`, while BigInt stringification goes through the
+runtime prelude `__topaz_bigint_to_string(...)`; both feed the existing string
+stdout/stderr helpers, and the dedicated number/BigInt console wrappers are
+removed. `console.warn(...)` now lowers directly to the same stderr string
 IO substrate as `console.error(...)`, so the duplicate
 `topaz_console_warn_string(...)` wrapper is also removed while preserving the
 public `console.warn` call shape and diagnostics. The remaining

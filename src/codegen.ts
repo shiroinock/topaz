@@ -2142,6 +2142,11 @@ class Emitter {
     return `${helper}(${this.emitStringLiteralText(digits, anchor)})`;
   }
 
+  private emitRuntimePreludeBigIntToString(value: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_bigint_to_string", anchor);
+    return `${helper}(${value})`;
+  }
+
   private emitRuntimePreludeStringConcat(lhs: string, rhs: string, anchor: { pos: number }): string {
     const helper = this.requireInternalPreludeFunctionCName("__topaz_string_concat", anchor);
     return `${helper}(${lhs}, ${rhs})`;
@@ -9020,8 +9025,8 @@ class Emitter {
 
   // Phase 1.5-3.5 / 3.56: template literal -> left-associative internal
   // runtime prelude string concat chain. ${} substitutions go through
-  // `topaz_number_to_string` / the runtime prelude boolean stringifier /
-  // identity (for string) so arena alloc cost matches the leak budget we
+  // `topaz_number_to_string` / runtime prelude boolean and bigint stringifiers
+  // / identity (for string) so arena alloc cost matches the leak budget we
   // already absorb for `+` on string operands.
   // Empty literal fragments (e.g. between adjacent `${a}${b}`) are skipped so
   // we don't burn one arena alloc per gap. A no-substitution template
@@ -9037,7 +9042,7 @@ class Emitter {
         const booleanToString = this.requireInternalPreludeFunctionCName("__topaz_boolean_to_string", { pos: sub.pos });
         return `${booleanToString}(${inner})`;
       }
-      if (t.kind === "bigint") return `topaz_bigint_to_string(${inner})`;
+      if (t.kind === "bigint") return this.emitRuntimePreludeBigIntToString(inner, { pos: sub.pos });
       // inferType's TemplateLit branch already vets each span; this arm is
       // defensive in case stringify gets reused later.
       throw new CodegenError(
@@ -9165,7 +9170,7 @@ class Emitter {
       return this.emitLineWrite(fn, `${booleanToString}(${this.emitWithExpected(arg, T_BOOLEAN)})`, { pos: expr.pos });
     }
     if (t.kind === "bigint") {
-      return this.emitLineWrite(fn, `topaz_bigint_to_string(${this.emitExpression(arg)})`, { pos: expr.pos });
+      return this.emitLineWrite(fn, this.emitRuntimePreludeBigIntToString(this.emitWithExpected(arg, T_BIGINT), { pos: arg.pos }), { pos: expr.pos });
     }
     if (t.kind === "number") {
       return this.emitLineWrite(fn, `topaz_number_to_string(${this.emitExpression(arg)})`, { pos: expr.pos });

@@ -199,57 +199,6 @@ static inline topaz_number topaz_bigint_sign(const topaz_bigint *value) {
   return (topaz_number)value->sign;
 }
 
-static inline topaz_string topaz_bigint_to_string(const topaz_bigint *x) {
-  if (x->sign == 0 || x->len == 0) {
-    topaz_string z = { "0", 1 };
-    return z;
-  }
-
-  uint32_t *tmp = (uint32_t *)topaz_arena_alloc(x->len * sizeof(uint32_t));
-  memcpy(tmp, x->limbs, x->len * sizeof(uint32_t));
-  size_t tmp_len = x->len;
-  uint32_t *groups = (uint32_t *)topaz_arena_alloc((x->len * 2 + 1) * sizeof(uint32_t));
-  size_t group_len = 0;
-  const uint64_t base = 1000000000u;
-
-  while (tmp_len > 0) {
-    uint64_t rem = 0;
-    size_t i = tmp_len;
-    while (i > 0) {
-      i--;
-      uint64_t cur = (rem << 32) | tmp[i];
-      tmp[i] = (uint32_t)(cur / base);
-      rem = cur % base;
-    }
-    groups[group_len++] = (uint32_t)rem;
-    while (tmp_len > 0 && tmp[tmp_len - 1] == 0) tmp_len--;
-  }
-
-  size_t cap = (x->sign < 0 ? 1 : 0) + group_len * 9 + 1;
-  char *buf = (char *)topaz_arena_alloc(cap);
-  size_t pos = 0;
-  if (x->sign < 0) buf[pos++] = '-';
-  int n = snprintf(buf + pos, cap - pos, "%u", groups[group_len - 1]);
-  if (n < 0) {
-    fputs("topaz: bigint format failed\n", stderr);
-    abort();
-  }
-  pos += (size_t)n;
-  size_t gi = group_len - 1;
-  while (gi > 0) {
-    gi--;
-    n = snprintf(buf + pos, cap - pos, "%09u", groups[gi]);
-    if (n < 0) {
-      fputs("topaz: bigint format failed\n", stderr);
-      abort();
-    }
-    pos += (size_t)n;
-  }
-  buf[pos] = '\0';
-  topaz_string out = { buf, pos };
-  return out;
-}
-
 // Phase 1.5-3c: sentinel-struct optionals for scalar `T | undefined`. Reference
 // and interface T | undefined collapse to T's own C representation (NULL ptr /
 // .data == NULL), so only scalars need a struct. `_wrap_*` builds a present

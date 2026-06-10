@@ -19,8 +19,8 @@ if [[ "${substrate_out}" != *"string buffer intrinsic boundary: <none>"* ]]; the
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"needs-bigint-limb-intrinsics: 1"* ]]; then
-  echo "FAIL [runtime_substrate_inventory]: bigint migration lane count changed" >&2
+if [[ "${substrate_out}" == *"needs-bigint-limb-intrinsics"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: stale bigint migration lane remains" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
@@ -602,8 +602,12 @@ TOPAZ
     echo "FAIL [runtime_numeric_console_string]: missing number stringification helper" >&2
     exit 1
   fi
-  if ! grep -Eq "\btopaz_bigint_to_string\b" build/runtime_numeric_console_string.c; then
-    echo "FAIL [runtime_numeric_console_string]: missing bigint stringification helper" >&2
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_bigint_to_string" build/runtime_numeric_console_string.c; then
+    echo "FAIL [runtime_numeric_console_string]: missing stable bigint-to-string prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_bigint_to_string\s*\(" build/runtime_numeric_console_string.c; then
+    echo "FAIL [runtime_numeric_console_string]: stale standalone bigint stringification helper emitted or defined" >&2
     exit 1
   fi
   if ! grep -Eq "\btopaz_stdout_write\b" build/runtime_numeric_console_string.c || ! grep -Eq "\btopaz_stderr_write\b" build/runtime_numeric_console_string.c; then
@@ -631,6 +635,46 @@ TOPAZ
     exit 1
   fi
   echo "PASS [runtime_numeric_console_string]"
+
+  node dist/cli.js examples/bigint_large_limb.ts --emit-c-only -o build/runtime_prelude_bigint_to_string > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_bigint_to_string" build/runtime_prelude_bigint_to_string.c; then
+    echo "FAIL [runtime_prelude_bigint_to_string]: missing stable bigint-to-string prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_bigint_to_string\s*\(" build/runtime_prelude_bigint_to_string.c; then
+    echo "FAIL [runtime_prelude_bigint_to_string]: stale standalone bigint stringification helper emitted or defined" >&2
+    exit 1
+  fi
+  local bigint_to_string_body
+  bigint_to_string_body=$(awk '
+    /^static .* topaz_fn_runtime_prelude___topaz_bigint_to_string\(topaz_bigint \* value\) \{/ { in_fn = 1; depth = 0 }
+    in_fn {
+      print
+      for (i = 1; i <= length($0); i++) {
+        ch = substr($0, i, 1)
+        if (ch == "{") depth++
+        else if (ch == "}") depth--
+      }
+      if (depth == 0 && $0 ~ /}/) in_fn = 0
+    }
+  ' build/runtime_prelude_bigint_to_string.c)
+  if ! grep -q "topaz_string_buffer_" <<< "$bigint_to_string_body"; then
+    echo "FAIL [runtime_prelude_bigint_to_string]: missing string buffer intrinsic substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_number_to_string\s*\(" <<< "$bigint_to_string_body"; then
+    echo "FAIL [runtime_prelude_bigint_to_string]: bigint formatting depends on number formatting" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_bigint_to_string.c -o build/runtime_prelude_bigint_to_string
+  local bigint_to_string_out
+  bigint_to_string_out=$(./build/runtime_prelude_bigint_to_string)
+  if [[ "$bigint_to_string_out" != $'123456789012345678901234567890\n1111111110111111111011111111100\n864197532086419753208641975320\n1234567890123456789012345678900\ntrue\ntrue\n123456789012345678901234567890:987654321098765432109876543210' ]]; then
+    echo "FAIL [runtime_prelude_bigint_to_string]:" >&2
+    printf '%s\n' "$bigint_to_string_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_bigint_to_string]"
 
   node dist/cli.js examples/bigint_large_limb.ts --emit-c-only -o build/runtime_prelude_bigint_buffer > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_bigint_clone" build/runtime_prelude_bigint_buffer.c; then
@@ -1292,6 +1336,7 @@ run_fail_case runtime_prelude_bigint_add_hidden_fail examples/runtime_prelude_bi
 run_fail_case runtime_prelude_bigint_sub_hidden_fail examples/runtime_prelude_bigint_sub_hidden_fail.ts "unknown identifier '__topaz_bigint_sub'"
 run_fail_case runtime_prelude_bigint_mul_hidden_fail examples/runtime_prelude_bigint_mul_hidden_fail.ts "unknown identifier '__topaz_bigint_mul'"
 run_fail_case runtime_prelude_bigint_from_decimal_hidden_fail examples/runtime_prelude_bigint_from_decimal_hidden_fail.ts "unknown identifier '__topaz_bigint_from_decimal'"
+run_fail_case runtime_prelude_bigint_to_string_hidden_fail examples/runtime_prelude_bigint_to_string_hidden_fail.ts "unknown identifier '__topaz_bigint_to_string'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
