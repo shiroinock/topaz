@@ -146,6 +146,30 @@ internal substrate boundary rather than a public TypeScript helper. Until then,
 `pnpm run check:runtime-substrate` and smoke keep the lane visible as
 `exception-boundary: 4`.
 
+## Phase 3.85 C ABI Type Substrate Policy
+
+The `c-abi-type-boundary` lane is deliberately still open with exactly eight
+runtime header and optional-wrapper entries before v0.2.0: `TOPAZ_RUNTIME_H`,
+`topaz_opt_wrap_number`, `topaz_opt_wrap_boolean`,
+`topaz_opt_wrap_string`, `topaz_opt_absent_number`,
+`topaz_opt_absent_boolean`, `topaz_opt_absent_string`, and
+`topaz_opt_passthrough`.
+
+These entries are not ordinary pure Topaz-subset runtime prelude migration
+targets. They are the generated-C/runtime ABI type substrate: generated C,
+runtime container macros, optional narrowing, `Map.get`, optional chaining,
+nullish coalescing, and scalar `T | undefined` coercion share their wrapper,
+absent-sentinel, passthrough, type, and layout shapes. Rewriting them as
+`runtime/prelude.ts` helpers would not replace the C compound literals, macros,
+or header boundary that generated C currently includes.
+
+Future movement requires an explicit generated-C ABI/type-layout/backend
+decision that changes the shared optional/layout representation as a unit. It
+should not be a helper-by-helper runtime prelude migration, and the header guard
+remains part of the embedded runtime header freshness boundary. Until then,
+`pnpm run check:runtime-substrate` and smoke keep the lane visible as
+`c-abi-type-boundary: 8`.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has

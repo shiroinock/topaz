@@ -44,7 +44,8 @@ const NEXT = {
   BIGINT_LIMB_INTRINSICS:
     "Closed after the completed BigInt prelude migration; use bigint-limb-intrinsic-family for active internal limb substrate or record a new boundary decision.",
   BIGINT_LIMB_INTRINSIC_FAMILY: "Compiler-owned internal BigIntBuffer limb family required before BigInt helpers migrate into the runtime prelude.",
-  C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
+  C_ABI_TYPE:
+    "Pinned as the pre-v0.2 generated-C/runtime ABI type substrate for TOPAZ_RUNTIME_H, topaz_opt_wrap_number, topaz_opt_wrap_boolean, topaz_opt_wrap_string, topaz_opt_absent_number, topaz_opt_absent_boolean, topaz_opt_absent_string, and topaz_opt_passthrough because generated C, runtime container macros, optional narrowing, Map.get, optional chaining, nullish coalescing, and scalar T | undefined coercion share these optional wrapper, absent sentinel, passthrough, ABI, and layout shapes; moving them requires a future explicit generated-C ABI/type-layout/backend decision rather than helper-by-helper runtime prelude migration.",
 };
 
 const CLOSED_MIGRATION_LANES = [
