@@ -265,12 +265,12 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.11 GitHub Actions release artifact automation** — `release artifact` workflow で GitHub-hosted macOS arm64 runner 上の `pnpm run build:release` を実行し、manual run は workflow artifact、`v*` tag push は draft GitHub Release asset として `topaz-darwin-arm64` と `SHA256SUMS` をアップロードする。決定ログは `docs/adr/0351-github-actions-release-artifact.md`。
 - [x] **3.12 release versioning / runbook skill** — `0.x.y` SemVer、`v0.1.0 = single-binary MVP`、`v0.x.y-rc.N` release candidate、tag-triggered draft Release を方針として固定し、公開手順を `.agents/skills/topaz-release/SKILL.md` に skill 化した。決定ログは `docs/adr/0352-release-versioning-and-skill.md`。
 - [x] **3.13 embedded runtime header for release compiler** — RC1 black-box check で release compiler binary を repo 外へ置くと `runtime.h` が見つからない blocker を検出したため、生成 C に `runtime/runtime.h` 本文を埋め込み、`runtime/` directory なしで `cc` まで通る single-binary compiler artifact にした。決定ログは `docs/adr/0353-embedded-runtime-header.md`。
-- [x] **3.14 v0.1.1 release workflow stabilization** — `v0.1.0` final tag 後に残った GitHub Actions Node.js 20 deprecation annotation へ workflow-level Node 24 opt-in で対応し、README / MVP doc / release skill に checksum + downloaded binary black-box smoke を明記した。言語 surface / runtime semantics は変えない patch。決定ログは `docs/adr/0354-release-workflow-stabilization.md`。
+- [x] **3.14 v0.1.1 release workflow stabilization** — `v0.1.0` final tag 後に残った GitHub Actions Node.js 20 deprecation annotation へ Node 24 対応済みの official action major 更新で対応し、README / MVP doc / release skill に checksum + downloaded binary black-box smoke を明記した。言語 surface / runtime semantics は変えない patch。決定ログは `docs/adr/0354-release-workflow-stabilization.md`。
 
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
-- `v0.1.1` — release artifact 安定化 patch。GitHub Actions Node 24 opt-in、downloaded asset checksum / black-box smoke の手順補強、release skill の検査手順更新。言語 surface / runtime semantics は変えない。
+- `v0.1.1` — release artifact 安定化 patch。GitHub Actions の Node 24 対応 action major 更新、downloaded asset checksum / black-box smoke の手順補強、release skill の検査手順更新。言語 surface / runtime semantics は変えない。
 - `v0.1.y` — MVP-preserving patch。crash fix、diagnostic/doc/workflow 修正、self-host/release gate 安定化。言語 surface や runtime semantics の拡張はしない。
 - `v0.2.0` — capability/effect inference、manifest generation、`doctor` / `check` / `explain`。optional policy file と zero-config build の関係を実装へ進める。
 - `v0.3.0` — async/await / Promise execution。ADR `0327` の fiber-based design を実装 track に移す。

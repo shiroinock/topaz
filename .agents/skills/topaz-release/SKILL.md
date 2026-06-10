@@ -110,10 +110,10 @@ Do not auto-publish a non-draft release from Codex. If the user explicitly asks
 to publish, confirm that the draft assets, checksum, and release notes have
 already been reviewed.
 
-The release workflow opts JavaScript actions into Node.js 24 with
-`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`; if GitHub changes that migration
-path, update `.github/workflows/release-artifact.yml` before cutting the next
-patch release.
+The release workflow should use GitHub JavaScript action majors that target the
+current runner runtime. If a release run emits an action runtime deprecation
+annotation, update `.github/workflows/release-artifact.yml` before cutting the
+next patch release.
 
 ## Recovery
 
