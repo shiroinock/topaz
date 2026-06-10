@@ -196,6 +196,22 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_embedded]"
 
+  node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_starts_with > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_starts_with" build/runtime_prelude_starts_with.c; then
+    echo "FAIL [runtime_prelude_starts_with]: missing stable startsWith prelude symbol" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_starts_with.c -o build/runtime_prelude_starts_with
+  local starts_with_out
+  starts_with_out=$(./build/runtime_prelude_starts_with)
+  if [[ "$starts_with_out" != $'true\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nrelative\nrelative\nbare\nmodule\nmodule\nother' ]]; then
+    echo "FAIL [runtime_prelude_starts_with]:" >&2
+    echo "  expected string_starts_ends_with output" >&2
+    printf '%s\n' "$starts_with_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_starts_with]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -340,6 +356,7 @@ run_case array_method_join $'1,2,3\n5\n1, 2, 3\n7\n123\n3\n1 -> 2 -> 3\nalpha-be
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_module_case module_function_collision examples/module_function_collision_main.ts $'15\n10\n17'
 run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.ts "unknown identifier '__topaz_runtime_prelude_init'"
+run_fail_case runtime_prelude_starts_with_hidden_fail examples/runtime_prelude_starts_with_hidden_fail.ts "unknown identifier '__topaz_string_starts_with'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

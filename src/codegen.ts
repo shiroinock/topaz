@@ -2065,13 +2065,26 @@ class Emitter {
     );
   }
 
-  private internalPreludeInitCName(): string | undefined {
+  private internalPreludeFunctionSig(name: string): TopLevelFunctionSig | undefined {
     for (const sig of this.functionSigs) {
-      if (sig.name === "__topaz_runtime_prelude_init" && sig.sf.isInternalModule) {
-        return sig.cName;
-      }
+      if (sig.name !== name) continue;
+      if (!sig.sf.isInternalModule) continue;
+      if (sig.sf.stableModuleId !== "runtime_prelude") continue;
+      return sig;
     }
     return undefined;
+  }
+
+  private requireInternalPreludeFunctionCName(name: string, anchor: { pos: number }): string {
+    const sig = this.internalPreludeFunctionSig(name);
+    if (sig === undefined) {
+      throw new CodegenError(anchor, `internal compiler error: missing runtime prelude function '${name}'`);
+    }
+    return sig.cName;
+  }
+
+  private internalPreludeInitCName(): string | undefined {
+    return this.internalPreludeFunctionSig("__topaz_runtime_prelude_init")?.cName;
   }
 
   emit(sourceFiles: Array<SourceModule>): string {
@@ -4007,7 +4020,8 @@ class Emitter {
       .map((p) => `${cTypeName(p.type)} ${p.name}`)
       .join(", ");
     const paramsTail = params.length > 0 ? params : "void";
-    return `static ${cReturnTypeName(sig.returnType)} ${sig.cName}(${paramsTail})`;
+    const unusedAttr = sig.sf.isInternalModule ? "__attribute__((unused)) " : "";
+    return `static ${unusedAttr}${cReturnTypeName(sig.returnType)} ${sig.cName}(${paramsTail})`;
   }
 
   private emitFunctionDefinition(fn: FunctionDecl, sf: SourceModule): string {
@@ -9798,7 +9812,14 @@ class Emitter {
         );
       }
       const search = this.emitWithExpected(searchArg, T_STRING);
-      return `topaz_string_${method === "startsWith" ? "starts_with" : "ends_with"}(${base}, ${search})`;
+      if (method === "startsWith") {
+        const helper = this.requireInternalPreludeFunctionCName(
+          "__topaz_string_starts_with",
+          { pos: expr.pos },
+        );
+        return `${helper}(${base}, ${search})`;
+      }
+      return `topaz_string_ends_with(${base}, ${search})`;
     }
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_string`);
   }
