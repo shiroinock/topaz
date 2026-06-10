@@ -112,6 +112,35 @@ if [[ "${effect_report_out}" == *"path.join"* || "${effect_report_out}" == *"std
   exit 1
 fi
 echo "PASS [effect_report]"
+manifest_requirements_out=$(pnpm run check:manifest-requirements)
+if [[ "${manifest_requirements_out}" != *"manifest requirements ok:"* ]]; then
+  echo "FAIL [manifest_requirements]: missing ok summary" >&2
+  printf '%s\n' "${manifest_requirements_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for effect in fs.read fs.write process.argv io.stdout io.stderr; do
+  if [[ "${manifest_requirements_out}" != *"  ${effect}: "* ]]; then
+    echo "FAIL [manifest_requirements]: missing effect group ${effect}" >&2
+    printf '%s\n' "${manifest_requirements_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+if [[ "${manifest_requirements_out}" != *"build/manifest_requirements/main.ts:6:14"* ]]; then
+  echo "FAIL [manifest_requirements]: missing file:line:col occurrence" >&2
+  printf '%s\n' "${manifest_requirements_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${manifest_requirements_out}" != *"empty requirements: none"* ]]; then
+  echo "FAIL [manifest_requirements]: missing empty requirement summary" >&2
+  printf '%s\n' "${manifest_requirements_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${manifest_requirements_out}" == *"path.join"* || "${manifest_requirements_out}" == *"std/path"* || "${manifest_requirements_out}" == *"join(...)"* ]]; then
+  echo "FAIL [manifest_requirements]: pure std/path leaked into requirements" >&2
+  printf '%s\n' "${manifest_requirements_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [manifest_requirements]"
 effect_selfhost_out=$(pnpm run check:effect-selfhost)
 if [[ "${effect_selfhost_out}" != *"effect selfhost ok:"* ]]; then
   echo "FAIL [effect_selfhost]: missing ok summary" >&2
