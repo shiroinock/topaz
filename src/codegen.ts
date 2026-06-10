@@ -76,6 +76,7 @@ type TopazType =
   | { kind: "boolean" }
   | { kind: "string" }
   | { kind: "string_buffer" }
+  | { kind: "bigint_buffer" }
   | { kind: "undefined" }
   | { kind: "unknown" }
   | { kind: "void" }
@@ -120,6 +121,7 @@ const T_BIGINT: TopazType = { kind: "bigint" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
 const T_STRING_BUFFER: TopazType = { kind: "string_buffer" };
+const T_BIGINT_BUFFER: TopazType = { kind: "bigint_buffer" };
 const T_UNDEFINED: TopazType = { kind: "undefined" };
 const T_UNKNOWN: TopazType = { kind: "unknown" };
 // Phase 1.5-6 prep: `void` is only valid as a function / method return type.
@@ -297,6 +299,7 @@ function typeEq(a: TopazType, b: TopazType): boolean {
   if (a.kind === "boolean") return b.kind === "boolean";
   if (a.kind === "string") return b.kind === "string";
   if (a.kind === "string_buffer") return b.kind === "string_buffer";
+  if (a.kind === "bigint_buffer") return b.kind === "bigint_buffer";
   if (a.kind === "undefined") return b.kind === "undefined";
   if (a.kind === "unknown") return b.kind === "unknown";
   if (a.kind === "void") return b.kind === "void";
@@ -482,6 +485,7 @@ function typeIdent(t: TopazType): string {
   if (t.kind === "boolean") return "topaz_boolean";
   if (t.kind === "string") return "topaz_string";
   if (t.kind === "string_buffer") return "topaz_string_buffer";
+  if (t.kind === "bigint_buffer") return "topaz_bigint_buffer";
   if (t.kind === "undefined") return "topaz_undefined";
   if (t.kind === "unknown") return "topaz_unknown";
   if (t.kind === "void") return "topaz_void";
@@ -636,6 +640,9 @@ function cTypeName(t: TopazType): string {
   }
   if (t.kind === "string_buffer") {
     return "topaz_string_buffer *";
+  }
+  if (t.kind === "bigint_buffer") {
+    return "topaz_bigint_buffer *";
   }
   if (t.kind === "bigint") {
     return "topaz_bigint *";
@@ -3851,6 +3858,12 @@ class Emitter {
           throw this.typeErr(nodeAnchor, "StringBuffer takes no type arguments");
         }
         return T_STRING_BUFFER;
+      }
+      if (refName === "BigIntBuffer" && sf.isInternalModule && sf.stableModuleId === "runtime_prelude") {
+        if (node.typeArgs.length > 0) {
+          throw this.typeErr(nodeAnchor, "BigIntBuffer takes no type arguments");
+        }
+        return T_BIGINT_BUFFER;
       }
       // Phase 1.4c-2: when emitting under an active type-parameter scope,
       // bare type references like `T` resolve through the substitution. Must
@@ -9248,6 +9261,30 @@ class Emitter {
         if (callee.name === "__topaz_string_buffer_to_string") {
           return this.emitInternalPreludeStringBufferToString(expr);
         }
+        if (callee.name === "__topaz_bigint_buffer_new") {
+          return this.emitInternalPreludeBigIntBufferNew(expr);
+        }
+        if (callee.name === "__topaz_bigint_buffer_to_bigint") {
+          return this.emitInternalPreludeBigIntBufferToBigInt(expr);
+        }
+        if (callee.name === "__topaz_bigint_buffer_len") {
+          return this.emitInternalPreludeBigIntBufferLen(expr);
+        }
+        if (callee.name === "__topaz_bigint_buffer_get_limb") {
+          return this.emitInternalPreludeBigIntBufferGetLimb(expr);
+        }
+        if (callee.name === "__topaz_bigint_buffer_set_limb") {
+          return this.emitInternalPreludeBigIntBufferSetLimb(expr);
+        }
+        if (callee.name === "__topaz_bigint_limb_len") {
+          return this.emitInternalPreludeBigIntLimbLen(expr);
+        }
+        if (callee.name === "__topaz_bigint_limb") {
+          return this.emitInternalPreludeBigIntLimb(expr);
+        }
+        if (callee.name === "__topaz_bigint_sign") {
+          return this.emitInternalPreludeBigIntSign(expr);
+        }
       }
       if (callee.name === "readFileSync") {
         return this.emitNodeFsReadFileSync(expr);
@@ -10358,6 +10395,168 @@ class Emitter {
   private emitInternalPreludeStringBufferToString(expr: CallExpr): string {
     const bufferArg = this.checkInternalPreludeStringBufferToStringArgs(expr);
     return `topaz_string_buffer_to_string(${this.emitWithExpected(bufferArg, T_STRING_BUFFER)})`;
+  }
+
+  private checkInternalPreludeBigIntBufferNewArgs(expr: CallExpr): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, "__topaz_bigint_buffer_new expects exactly one argument: (capacity: number)");
+    }
+    const capacityArg = expr.args[0];
+    const capacityType = this.inferType(capacityArg);
+    if (capacityType.kind !== "number") {
+      throw new CodegenError(
+        { pos: capacityArg.pos },
+        `__topaz_bigint_buffer_new capacity must be number, got ${typeIdent(capacityType)}`,
+      );
+    }
+    return capacityArg;
+  }
+
+  private emitInternalPreludeBigIntBufferNew(expr: CallExpr): string {
+    const capacityArg = this.checkInternalPreludeBigIntBufferNewArgs(expr);
+    return `topaz_bigint_buffer_new(${this.emitWithExpected(capacityArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeBigIntBufferNumberArgs(
+    expr: CallExpr,
+    name: string,
+    argName: string,
+  ): { bufferArg: Expr; numberArg: Expr } {
+    if (expr.args.length !== 2) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        `${name} expects exactly two arguments: (buffer: BigIntBuffer, ${argName}: number)`,
+      );
+    }
+    const bufferArg = expr.args[0];
+    const bufferType = this.inferType(bufferArg);
+    if (!typeEq(bufferType, T_BIGINT_BUFFER)) {
+      throw new CodegenError({ pos: bufferArg.pos }, `${name} buffer must be BigIntBuffer, got ${typeIdent(bufferType)}`);
+    }
+    const numberArg = expr.args[1];
+    const numberType = this.inferType(numberArg);
+    if (numberType.kind !== "number") {
+      throw new CodegenError({ pos: numberArg.pos }, `${name} ${argName} must be number, got ${typeIdent(numberType)}`);
+    }
+    return { bufferArg, numberArg };
+  }
+
+  private checkInternalPreludeBigIntBufferToBigIntArgs(expr: CallExpr): { bufferArg: Expr; signArg: Expr } {
+    const checked = this.checkInternalPreludeBigIntBufferNumberArgs(expr, "__topaz_bigint_buffer_to_bigint", "sign");
+    return { bufferArg: checked.bufferArg, signArg: checked.numberArg };
+  }
+
+  private emitInternalPreludeBigIntBufferToBigInt(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeBigIntBufferToBigIntArgs(expr);
+    return `topaz_bigint_buffer_to_bigint(${this.emitWithExpected(checked.bufferArg, T_BIGINT_BUFFER)}, ${this.emitWithExpected(checked.signArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeBigIntBufferLenArgs(expr: CallExpr): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, "__topaz_bigint_buffer_len expects exactly one argument: (buffer: BigIntBuffer)");
+    }
+    const bufferArg = expr.args[0];
+    const bufferType = this.inferType(bufferArg);
+    if (!typeEq(bufferType, T_BIGINT_BUFFER)) {
+      throw new CodegenError(
+        { pos: bufferArg.pos },
+        `__topaz_bigint_buffer_len buffer must be BigIntBuffer, got ${typeIdent(bufferType)}`,
+      );
+    }
+    return bufferArg;
+  }
+
+  private emitInternalPreludeBigIntBufferLen(expr: CallExpr): string {
+    const bufferArg = this.checkInternalPreludeBigIntBufferLenArgs(expr);
+    return `topaz_bigint_buffer_len(${this.emitWithExpected(bufferArg, T_BIGINT_BUFFER)})`;
+  }
+
+  private emitInternalPreludeBigIntBufferGetLimb(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeBigIntBufferNumberArgs(expr, "__topaz_bigint_buffer_get_limb", "index");
+    return `topaz_bigint_buffer_get_limb(${this.emitWithExpected(checked.bufferArg, T_BIGINT_BUFFER)}, ${this.emitWithExpected(checked.numberArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeBigIntBufferSetLimbArgs(expr: CallExpr): { bufferArg: Expr; indexArg: Expr; limbArg: Expr } {
+    if (expr.args.length !== 3) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        "__topaz_bigint_buffer_set_limb expects exactly three arguments: (buffer: BigIntBuffer, index: number, limb: number)",
+      );
+    }
+    const bufferArg = expr.args[0];
+    const bufferType = this.inferType(bufferArg);
+    if (!typeEq(bufferType, T_BIGINT_BUFFER)) {
+      throw new CodegenError(
+        { pos: bufferArg.pos },
+        `__topaz_bigint_buffer_set_limb buffer must be BigIntBuffer, got ${typeIdent(bufferType)}`,
+      );
+    }
+    const indexArg = expr.args[1];
+    const indexType = this.inferType(indexArg);
+    if (indexType.kind !== "number") {
+      throw new CodegenError(
+        { pos: indexArg.pos },
+        `__topaz_bigint_buffer_set_limb index must be number, got ${typeIdent(indexType)}`,
+      );
+    }
+    const limbArg = expr.args[2];
+    const limbType = this.inferType(limbArg);
+    if (limbType.kind !== "number") {
+      throw new CodegenError(
+        { pos: limbArg.pos },
+        `__topaz_bigint_buffer_set_limb limb must be number, got ${typeIdent(limbType)}`,
+      );
+    }
+    return { bufferArg, indexArg, limbArg };
+  }
+
+  private emitInternalPreludeBigIntBufferSetLimb(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeBigIntBufferSetLimbArgs(expr);
+    return `topaz_bigint_buffer_set_limb(${this.emitWithExpected(checked.bufferArg, T_BIGINT_BUFFER)}, ${this.emitWithExpected(checked.indexArg, T_NUMBER)}, ${this.emitWithExpected(checked.limbArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeBigIntValueArgs(expr: CallExpr, name: string): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `${name} expects exactly one argument: (value: bigint)`);
+    }
+    const valueArg = expr.args[0];
+    const valueType = this.inferType(valueArg);
+    if (valueType.kind !== "bigint") {
+      throw new CodegenError({ pos: valueArg.pos }, `${name} value must be bigint, got ${typeIdent(valueType)}`);
+    }
+    return valueArg;
+  }
+
+  private emitInternalPreludeBigIntLimbLen(expr: CallExpr): string {
+    const valueArg = this.checkInternalPreludeBigIntValueArgs(expr, "__topaz_bigint_limb_len");
+    return `topaz_bigint_limb_len(${this.emitWithExpected(valueArg, T_BIGINT)})`;
+  }
+
+  private checkInternalPreludeBigIntLimbArgs(expr: CallExpr): { valueArg: Expr; indexArg: Expr } {
+    if (expr.args.length !== 2) {
+      throw new CodegenError({ pos: expr.pos }, "__topaz_bigint_limb expects exactly two arguments: (value: bigint, index: number)");
+    }
+    const valueArg = expr.args[0];
+    const valueType = this.inferType(valueArg);
+    if (valueType.kind !== "bigint") {
+      throw new CodegenError({ pos: valueArg.pos }, `__topaz_bigint_limb value must be bigint, got ${typeIdent(valueType)}`);
+    }
+    const indexArg = expr.args[1];
+    const indexType = this.inferType(indexArg);
+    if (indexType.kind !== "number") {
+      throw new CodegenError({ pos: indexArg.pos }, `__topaz_bigint_limb index must be number, got ${typeIdent(indexType)}`);
+    }
+    return { valueArg, indexArg };
+  }
+
+  private emitInternalPreludeBigIntLimb(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeBigIntLimbArgs(expr);
+    return `topaz_bigint_limb(${this.emitWithExpected(checked.valueArg, T_BIGINT)}, ${this.emitWithExpected(checked.indexArg, T_NUMBER)})`;
+  }
+
+  private emitInternalPreludeBigIntSign(expr: CallExpr): string {
+    const valueArg = this.checkInternalPreludeBigIntValueArgs(expr, "__topaz_bigint_sign");
+    return `topaz_bigint_sign(${this.emitWithExpected(valueArg, T_BIGINT)})`;
   }
 
   // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
@@ -11954,6 +12153,38 @@ class Emitter {
           if (callee.name === "__topaz_string_buffer_to_string") {
             this.checkInternalPreludeStringBufferToStringArgs(expr);
             return T_STRING;
+          }
+          if (callee.name === "__topaz_bigint_buffer_new") {
+            this.checkInternalPreludeBigIntBufferNewArgs(expr);
+            return T_BIGINT_BUFFER;
+          }
+          if (callee.name === "__topaz_bigint_buffer_to_bigint") {
+            this.checkInternalPreludeBigIntBufferToBigIntArgs(expr);
+            return T_BIGINT;
+          }
+          if (callee.name === "__topaz_bigint_buffer_len") {
+            this.checkInternalPreludeBigIntBufferLenArgs(expr);
+            return T_NUMBER;
+          }
+          if (callee.name === "__topaz_bigint_buffer_get_limb") {
+            this.checkInternalPreludeBigIntBufferNumberArgs(expr, "__topaz_bigint_buffer_get_limb", "index");
+            return T_NUMBER;
+          }
+          if (callee.name === "__topaz_bigint_buffer_set_limb") {
+            this.checkInternalPreludeBigIntBufferSetLimbArgs(expr);
+            return T_VOID;
+          }
+          if (callee.name === "__topaz_bigint_limb_len") {
+            this.checkInternalPreludeBigIntValueArgs(expr, "__topaz_bigint_limb_len");
+            return T_NUMBER;
+          }
+          if (callee.name === "__topaz_bigint_limb") {
+            this.checkInternalPreludeBigIntLimbArgs(expr);
+            return T_NUMBER;
+          }
+          if (callee.name === "__topaz_bigint_sign") {
+            this.checkInternalPreludeBigIntValueArgs(expr, "__topaz_bigint_sign");
+            return T_NUMBER;
           }
         }
         if (callee.name === "readFileSync") {

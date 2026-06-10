@@ -24,6 +24,7 @@ const MIGRATION = {
   STRING_BUFFER_INTRINSICS: "needs-string-buffer-intrinsics",
   STRING_BUFFER_INTRINSIC_FAMILY: "string-buffer-intrinsic-family",
   BIGINT_LIMB_INTRINSICS: "needs-bigint-limb-intrinsics",
+  BIGINT_LIMB_INTRINSIC_FAMILY: "bigint-limb-intrinsic-family",
   C_ABI_TYPE: "c-abi-type-boundary",
 };
 
@@ -36,6 +37,7 @@ const NEXT = {
   STRING_BUFFER_INTRINSICS: "Empty after charCodeAt's hidden byte read became a compiler-owned generated-C intrinsic.",
   STRING_BUFFER_INTRINSIC_FAMILY: "Compiler-owned internal string-buffer family that will replace the old byte-code boundary as prelude clients migrate.",
   BIGINT_LIMB_INTRINSICS: "Needs explicit bigint limb storage and arithmetic intrinsics or generated monomorphs.",
+  BIGINT_LIMB_INTRINSIC_FAMILY: "Compiler-owned internal BigIntBuffer limb family required before BigInt helpers migrate into the runtime prelude.",
   C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
 };
 
@@ -211,6 +213,54 @@ const inventory = {
     reason: "bigint formatting over raw limb storage.",
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
+  },
+  topaz_bigint_buffer_new: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude opaque bigint limb buffer allocation primitive.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
+  },
+  topaz_bigint_buffer_to_bigint: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude materialization primitive from BigIntBuffer to immutable bigint.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
+  },
+  topaz_bigint_buffer_len: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude length read primitive for BigIntBuffer limbs.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
+  },
+  topaz_bigint_buffer_get_limb: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude limb read primitive for BigIntBuffer.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
+  },
+  topaz_bigint_buffer_set_limb: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude limb write primitive for BigIntBuffer.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
+  },
+  topaz_bigint_limb_len: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude immutable bigint limb-count inspection primitive.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
+  },
+  topaz_bigint_limb: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude immutable bigint limb inspection primitive.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
+  },
+  topaz_bigint_sign: {
+    category: CATEGORY.BIGINT,
+    reason: "internal runtime prelude immutable bigint sign inspection primitive.",
+    migration: MIGRATION.BIGINT_LIMB_INTRINSIC_FAMILY,
+    next: NEXT.BIGINT_LIMB_INTRINSIC_FAMILY,
   },
 
   topaz_string_eq: {

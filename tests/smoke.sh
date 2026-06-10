@@ -19,6 +19,16 @@ if [[ "${substrate_out}" != *"string buffer intrinsic boundary: <none>"* ]]; the
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${substrate_out}" != *"needs-bigint-limb-intrinsics: 17"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: bigint migration lane count changed" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${substrate_out}" != *"bigint-limb-intrinsic-family: 8"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing bigint intrinsic family lane" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 mkdir -p build
 tmp_runtime_substrate="build/runtime_substrate_probe.h"
 cp runtime/runtime.h "${tmp_runtime_substrate}"
@@ -622,6 +632,28 @@ TOPAZ
   fi
   echo "PASS [runtime_numeric_console_string]"
 
+  node dist/cli.js examples/bigint_large_limb.ts --emit-c-only -o build/runtime_prelude_bigint_buffer > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_bigint_clone" build/runtime_prelude_bigint_buffer.c; then
+    echo "FAIL [runtime_prelude_bigint_buffer]: missing stable bigint clone prelude symbol" >&2
+    exit 1
+  fi
+  for symbol in \
+    topaz_bigint_buffer_new \
+    topaz_bigint_buffer_to_bigint \
+    topaz_bigint_buffer_len \
+    topaz_bigint_buffer_get_limb \
+    topaz_bigint_buffer_set_limb \
+    topaz_bigint_limb_len \
+    topaz_bigint_limb \
+    topaz_bigint_sign; do
+    if ! grep -Eq "\b${symbol}\s*\(" build/runtime_prelude_bigint_buffer.c; then
+      echo "FAIL [runtime_prelude_bigint_buffer]: missing ${symbol} call" >&2
+      exit 1
+    fi
+  done
+  cc -O2 -Iruntime -Wall -Wextra -c build/runtime_prelude_bigint_buffer.c -o build/runtime_prelude_bigint_buffer.o
+  echo "PASS [runtime_prelude_bigint_buffer]"
+
   cat > build/runtime_console_warn_string.ts <<'TOPAZ'
 console.warn("careful");
 console.warn(true);
@@ -1049,6 +1081,7 @@ run_fail_case bigint_non_decimal_fail examples/bigint_non_decimal_fail.ts "only 
 run_fail_case bigint_array_deferred_fail examples/bigint_array_deferred_fail.ts "no Array monomorph for element type topaz_bigint"
 run_fail_case bigint_map_deferred_fail examples/bigint_map_deferred_fail.ts "no Map monomorph for key=topaz_string, value=topaz_bigint"
 run_fail_case bigint_set_deferred_fail examples/bigint_set_deferred_fail.ts "no Set monomorph for element type topaz_bigint"
+run_fail_case runtime_prelude_bigint_buffer_hidden_fail examples/runtime_prelude_bigint_buffer_hidden_fail.ts "unknown identifier '__topaz_bigint_buffer_new'"
 run_fail_case regexp_literal_deferred_fail examples/regexp_literal_deferred_fail.ts "expected expression"
 run_fail_case regexp_constructor_deferred_fail examples/regexp_constructor_deferred_fail.ts "\`new RegExp\` is unsupported"
 run_fail_case regexp_string_test_deferred_fail examples/regexp_string_test_deferred_fail.ts "unsupported method '.test' on topaz_string"

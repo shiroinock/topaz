@@ -16,6 +16,26 @@ function __topaz_string_eq(a: string, b: string): boolean {
   return true;
 }
 
+function __topaz_bigint_clone(value: bigint): bigint {
+  const len: number = __topaz_bigint_limb_len(value);
+  const buffer: BigIntBuffer = __topaz_bigint_buffer_new(len);
+  let i: number = 0;
+  while (i < len) {
+    const limb: number = __topaz_bigint_limb(value, i);
+    __topaz_bigint_buffer_set_limb(buffer, i, limb);
+    if (__topaz_bigint_buffer_get_limb(buffer, i) !== limb) {
+      __topaz_panic("topaz: bigint buffer limb mismatch");
+      return 0n;
+    }
+    i = i + 1;
+  }
+  if (__topaz_bigint_buffer_len(buffer) !== len) {
+    __topaz_panic("topaz: bigint buffer length mismatch");
+    return 0n;
+  }
+  return __topaz_bigint_buffer_to_bigint(buffer, __topaz_bigint_sign(value));
+}
+
 function __topaz_string_from_char_code(n: number): string {
   if (n !== n || n < 0 || n >= 128) {
     __topaz_panic("topaz: String.fromCharCode argument out of ASCII range");

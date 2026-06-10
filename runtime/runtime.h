@@ -95,6 +95,12 @@ typedef struct {
   int sign;
 } topaz_bigint;
 
+typedef struct {
+  uint32_t *limbs;
+  size_t len;
+  size_t cap;
+} topaz_bigint_buffer;
+
 static inline topaz_bigint *topaz_bigint_alloc(size_t len) {
   topaz_bigint *out = (topaz_bigint *)topaz_arena_alloc(sizeof(*out));
   out->limbs = len ? (uint32_t *)topaz_arena_calloc(len, sizeof(uint32_t)) : NULL;
@@ -121,6 +127,99 @@ static inline topaz_bigint *topaz_bigint_copy_abs(const topaz_bigint *x, int sig
   out->sign = x->len == 0 ? 0 : sign;
   topaz_bigint_normalize(out);
   return out;
+}
+
+static inline size_t bigint_buffer_number_to_size(topaz_number n, const char *label) {
+  if (!isfinite(n) || n < 0 || floor(n) != n || n > (topaz_number)SIZE_MAX) {
+    fputs(label, stderr);
+    fputc('\n', stderr);
+    abort();
+  }
+  return (size_t)n;
+}
+
+static inline uint32_t bigint_buffer_number_to_limb(topaz_number n) {
+  if (!isfinite(n) || n < 0 || floor(n) != n || n > (topaz_number)UINT32_MAX) {
+    fputs("topaz: bigint buffer limb out of range\n", stderr);
+    abort();
+  }
+  return (uint32_t)n;
+}
+
+static inline int bigint_buffer_number_to_sign(topaz_number n) {
+  if (!isfinite(n) || floor(n) != n || (n != -1 && n != 0 && n != 1)) {
+    fputs("topaz: bigint buffer sign out of range\n", stderr);
+    abort();
+  }
+  return (int)n;
+}
+
+static inline topaz_bigint_buffer *topaz_bigint_buffer_new(topaz_number capacity) {
+  size_t cap = bigint_buffer_number_to_size(capacity, "topaz: bigint buffer capacity out of range");
+  if (cap > SIZE_MAX / sizeof(uint32_t)) {
+    fputs("topaz: bigint buffer capacity out of range\n", stderr);
+    abort();
+  }
+  topaz_bigint_buffer *buffer = (topaz_bigint_buffer *)topaz_arena_alloc(sizeof(*buffer));
+  buffer->limbs = cap ? (uint32_t *)topaz_arena_calloc(cap, sizeof(uint32_t)) : NULL;
+  buffer->len = 0;
+  buffer->cap = cap;
+  return buffer;
+}
+
+static inline topaz_bigint *topaz_bigint_buffer_to_bigint(topaz_bigint_buffer *buffer, topaz_number sign) {
+  int s = bigint_buffer_number_to_sign(sign);
+  topaz_bigint *out = topaz_bigint_alloc(buffer->len);
+  if (buffer->len) memcpy(out->limbs, buffer->limbs, buffer->len * sizeof(uint32_t));
+  out->len = buffer->len;
+  out->sign = buffer->len == 0 ? 0 : s;
+  topaz_bigint_normalize(out);
+  if (out->len != 0 && out->sign == 0) {
+    fputs("topaz: bigint buffer sign out of range\n", stderr);
+    abort();
+  }
+  return out;
+}
+
+static inline topaz_number topaz_bigint_buffer_len(topaz_bigint_buffer *buffer) {
+  return (topaz_number)buffer->len;
+}
+
+static inline topaz_number topaz_bigint_buffer_get_limb(topaz_bigint_buffer *buffer, topaz_number index) {
+  size_t i = bigint_buffer_number_to_size(index, "topaz: bigint buffer index out of range");
+  if (i >= buffer->len) {
+    fputs("topaz: bigint buffer index out of range\n", stderr);
+    abort();
+  }
+  return (topaz_number)buffer->limbs[i];
+}
+
+static inline void topaz_bigint_buffer_set_limb(topaz_bigint_buffer *buffer, topaz_number index, topaz_number limb) {
+  size_t i = bigint_buffer_number_to_size(index, "topaz: bigint buffer index out of range");
+  uint32_t v = bigint_buffer_number_to_limb(limb);
+  if (i >= buffer->cap) {
+    fputs("topaz: bigint buffer index out of range\n", stderr);
+    abort();
+  }
+  buffer->limbs[i] = v;
+  if (i >= buffer->len) buffer->len = i + 1;
+}
+
+static inline topaz_number topaz_bigint_limb_len(const topaz_bigint *value) {
+  return (topaz_number)value->len;
+}
+
+static inline topaz_number topaz_bigint_limb(const topaz_bigint *value, topaz_number index) {
+  size_t i = bigint_buffer_number_to_size(index, "topaz: bigint limb index out of range");
+  if (i >= value->len) {
+    fputs("topaz: bigint limb index out of range\n", stderr);
+    abort();
+  }
+  return (topaz_number)value->limbs[i];
+}
+
+static inline topaz_number topaz_bigint_sign(const topaz_bigint *value) {
+  return (topaz_number)value->sign;
 }
 
 static inline int topaz_bigint_cmp_abs(const topaz_bigint *a, const topaz_bigint *b) {
