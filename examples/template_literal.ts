@@ -1,6 +1,6 @@
 // Phase 1.5-3.5: template literal lowering. Each ${} substitution flows
 // through to_string helpers (number / boolean / string) and the whole
-// expression collapses to a left-associative `topaz_string_concat` chain.
+// expression collapses to a left-associative internal prelude concat chain.
 
 let name: string = "topaz";
 let n: number = 42;

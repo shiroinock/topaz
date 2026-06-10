@@ -209,12 +209,6 @@ const inventory = {
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },
 
-  topaz_string_concat: {
-    category: CATEGORY.STRING,
-    reason: "string allocation primitive for compiler-owned concatenation.",
-    migration: MIGRATION.STRING_BUFFER_INTRINSICS,
-    next: NEXT.STRING_BUFFER_INTRINSICS,
-  },
   topaz_string_eq: {
     category: CATEGORY.CONTAINER,
     reason: "string key equality substrate for Map/Set monomorphs.",

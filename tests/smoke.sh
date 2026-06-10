@@ -293,6 +293,30 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_string_slice]"
 
+  node dist/cli.js examples/template_literal.ts --emit-c-only -o build/runtime_prelude_string_concat > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_concat" build/runtime_prelude_string_concat.c; then
+    echo "FAIL [runtime_prelude_string_concat]: missing stable string concat prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_concat\s*\(" build/runtime_prelude_string_concat.c; then
+    echo "FAIL [runtime_prelude_string_concat]: stale string concat C helper call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_string topaz_string_concat\s*\(" build/runtime_prelude_string_concat.c; then
+    echo "FAIL [runtime_prelude_string_concat]: stale string concat C helper definition embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_concat.c -o build/runtime_prelude_string_concat
+  local string_concat_out
+  string_concat_out=$(./build/runtime_prelude_string_concat)
+  if [[ "$string_concat_out" != $'hello, topaz!\ntopaz is 42\nflag=true\ntopaz\ntopaz/42\n42true\npi=3.14\nsum=0.30000000000000004\nbig=1e+21\ntiny=1e-7\ntwice(42)=84\nlen(topaz)=5\nn+1=43\nanswer=7\n?=7\n(3, 4)\nnorm=25\nq="topaz"\ntab\there\n[0][1][2][3][4]' ]]; then
+    echo "FAIL [runtime_prelude_string_concat]:" >&2
+    echo "  expected template_literal output" >&2
+    printf '%s\n' "$string_concat_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_string_concat]"
+
   node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_starts_with > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_starts_with" build/runtime_prelude_starts_with.c; then
     echo "FAIL [runtime_prelude_starts_with]: missing stable startsWith prelude symbol" >&2
@@ -884,6 +908,7 @@ run_fail_case runtime_prelude_byte_codes_hidden_fail examples/runtime_prelude_by
 run_fail_case runtime_prelude_parse_int_hidden_fail examples/runtime_prelude_parse_int_hidden_fail.ts "unknown identifier '__topaz_parse_int'"
 run_fail_case runtime_prelude_string_from_char_code_hidden_fail examples/runtime_prelude_string_from_char_code_hidden_fail.ts "unknown identifier '__topaz_string_from_char_code'"
 run_fail_case runtime_prelude_string_slice_hidden_fail examples/runtime_prelude_string_slice_hidden_fail.ts "unknown identifier '__topaz_string_slice'"
+run_fail_case runtime_prelude_string_concat_hidden_fail examples/runtime_prelude_string_concat_hidden_fail.ts "unknown identifier '__topaz_string_concat'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

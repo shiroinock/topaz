@@ -27,6 +27,21 @@ function __topaz_string_from_char_code(n: number): string {
   return __topaz_string_from_byte_codes(codes);
 }
 
+function __topaz_string_concat(a: string, b: string): string {
+  const codes: Array<number> = [];
+  let i: number = 0;
+  while (i < a.length) {
+    codes.push(a.charCodeAt(i));
+    i = i + 1;
+  }
+  i = 0;
+  while (i < b.length) {
+    codes.push(b.charCodeAt(i));
+    i = i + 1;
+  }
+  return __topaz_string_from_byte_codes(codes);
+}
+
 function __topaz_string_slice(s: string, rawStart: number, rawEnd: number): string {
   let lo: number = 0;
   if (rawStart !== rawStart) {

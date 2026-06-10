@@ -72,12 +72,13 @@ recommended order is:
 Do not migrate a helper just because its public TypeScript shape looks simple.
 Split string work into two buckets:
 
-- **Allocation primitives** such as `String.prototype.repeat`, string
-  concatenation, and byte-buffer materializing helpers stay on the C substrate
-  until Topaz has explicit internal string-buffer intrinsics. `String.prototype.slice`
-  is the first exception: its normalization and byte-copy loop now live in the
-  runtime prelude and delegate final materialization to the hidden
-  `__topaz_string_from_byte_codes(...)` substrate affordance.
+- **Allocation primitives** such as `String.prototype.repeat` and byte-buffer
+  materializing helpers stay on the C substrate until Topaz has explicit
+  internal string-buffer intrinsics. `String.prototype.slice` and
+  compiler-owned string concatenation are the first exceptions: their
+  normalization/copy loops now live in the runtime prelude and delegate final
+  materialization to the hidden `__topaz_string_from_byte_codes(...)` substrate
+  affordance.
 - **Allocation clients** may move to the runtime prelude if their algorithmic
   work is pure Topaz-subset control flow and they delegate the final string
   allocation/copying to those existing primitives without changing behavior.
@@ -130,9 +131,11 @@ imported `node:path` / `std/path` `resolve(...segments)` after codegen packages
 the checked variadic arguments and passes the C substrate `topaz_process_cwd()`
 fallback. `__topaz_string_slice(s, rawStart, rawEnd)` now handles
 `String.prototype.slice(start?, end?)` after codegen preserves the public
-arity/type diagnostics and passes NaN sentinels for omitted arguments. These
-helpers keep the public stdlib import shape, language surface, and diagnostics
-unchanged. The migrated path helpers' old C definitions have
+arity/type diagnostics and passes NaN sentinels for omitted arguments.
+`__topaz_string_concat(a, b)` now handles compiler-owned binary string `+`,
+string `+=`, and template literal concat chains while keeping public type
+checking unchanged. These helpers keep the public stdlib import shape, language
+surface, and diagnostics unchanged. The migrated path helpers' old C definitions have
 been removed from the embedded runtime header; `topaz_process_cwd()` is the only
 remaining C path fallback for `resolve`. The old C definitions for migrated
 `startsWith`, `endsWith`, `trimStart`, and compiler-owned boolean
@@ -144,11 +147,13 @@ scanning now lives only in `__topaz_string_is_trim_start_code(...)`.
 
 The current string-allocation boundary is:
 
-- `repeat`, concat, and byte-code string materialization stay on the C
-  substrate path until explicit string-buffer intrinsics exist;
+- `repeat` and byte-code string materialization stay on the C substrate path
+  until explicit string-buffer intrinsics exist;
 - `String.prototype.slice` algorithmic behavior lives in the runtime prelude,
   but final byte-string materialization still delegates to
   `topaz_string_from_byte_codes(...)`;
+- compiler-owned string concatenation lives in the runtime prelude as an
+  allocation client over `charCodeAt` and `__topaz_string_from_byte_codes(...)`;
 - allocation clients may migrate to prelude TS if they keep their observable
   behavior and delegate the final allocation to those existing compiler-owned
   primitives; `trimStart`, `extname`, and the ASCII scalar policy for

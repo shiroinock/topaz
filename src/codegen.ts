@@ -2093,6 +2093,11 @@ class Emitter {
     return `${helper}(${lhs}, ${rhs})`;
   }
 
+  private emitRuntimePreludeStringConcat(lhs: string, rhs: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_string_concat", anchor);
+    return `${helper}(${lhs}, ${rhs})`;
+  }
+
   private internalPreludeInitCName(): string | undefined {
     return this.internalPreludeFunctionSig("__topaz_runtime_prelude_init")?.cName;
   }
@@ -8333,7 +8338,7 @@ class Emitter {
       }
       if (op === "+=" && this.inferType(expr.target).kind === "string") {
         const lhs = this.emitExpression(expr.target);
-        return `(${lhs} = topaz_string_concat(${lhs}, ${this.emitExpression(expr.value)}))`;
+        return `(${lhs} = ${this.emitRuntimePreludeStringConcat(lhs, this.emitExpression(expr.value), assignAnchor)})`;
       }
       const cop = this.assignOp(expr);
       const lhs = this.emitExpression(expr.target);
@@ -8369,7 +8374,11 @@ class Emitter {
         }
       }
       if (tok === "+" && this.inferType(expr.lhs).kind === "string") {
-        return `topaz_string_concat(${this.emitExpression(expr.lhs)}, ${this.emitExpression(expr.rhs)})`;
+        return this.emitRuntimePreludeStringConcat(
+          this.emitExpression(expr.lhs),
+          this.emitExpression(expr.rhs),
+          { pos: expr.pos },
+        );
       }
       if (
         (tok === "===" || tok === "!==") &&
@@ -8944,15 +8953,15 @@ class Emitter {
     return `((topaz_string){ ${escaped}, ${byteLen} })`;
   }
 
-  private appendTemplatePiece(current: string | undefined, piece: string): string {
-    return current === undefined ? piece : `topaz_string_concat(${current}, ${piece})`;
+  private appendTemplatePiece(current: string | undefined, piece: string, anchor: { pos: number }): string {
+    return current === undefined ? piece : this.emitRuntimePreludeStringConcat(current, piece, anchor);
   }
 
-  // Phase 1.5-3.5: template literal -> left-associative `topaz_string_concat`
-  // chain. ${} substitutions go through `topaz_number_to_string` /
-  // the runtime prelude boolean stringifier / identity (for string) so that
-  // arena alloc cost matches the leak budget we already absorb for `+` on
-  // string operands.
+  // Phase 1.5-3.5 / 3.56: template literal -> left-associative internal
+  // runtime prelude string concat chain. ${} substitutions go through
+  // `topaz_number_to_string` / the runtime prelude boolean stringifier /
+  // identity (for string) so arena alloc cost matches the leak budget we
+  // already absorb for `+` on string operands.
   // Empty literal fragments (e.g. between adjacent `${a}${b}`) are skipped so
   // we don't burn one arena alloc per gap. A no-substitution template
   // (`template_lit` with empty subs) yields the head as a plain string literal,
@@ -8979,12 +8988,12 @@ class Emitter {
     let acc: string | undefined = undefined;
 
     if (expr.head !== "") {
-      acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(expr.head, { pos: expr.pos }));
+      acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(expr.head, { pos: expr.pos }), { pos: expr.pos });
     }
     for (const sub of expr.subs) {
-      acc = this.appendTemplatePiece(acc, stringify(sub.expr));
+      acc = this.appendTemplatePiece(acc, stringify(sub.expr), { pos: sub.expr.pos });
       if (sub.cookedAfter !== "") {
-        acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(sub.cookedAfter, { pos: expr.pos }));
+        acc = this.appendTemplatePiece(acc, this.emitStringLiteralText(sub.cookedAfter, { pos: expr.pos }), { pos: expr.pos });
       }
     }
     // All-empty template (`${a}` with empty head + empty tail) still needs to

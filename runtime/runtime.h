@@ -73,8 +73,8 @@ static void *topaz_arena_realloc(void *old_ptr, size_t old_size, size_t new_size
 
 // Phase 1.2: immutable byte string. ASCII-only for now — JS .length is in
 // UTF-16 code units, but we store UTF-8, so non-ASCII would diverge.
-// `data` is either a literal (static lifetime) or arena-allocated by concat
-// (released at process exit, see topaz_arena_alloc above).
+// `data` is either a literal (static lifetime) or arena-allocated by string
+// helpers (released at process exit, see topaz_arena_alloc above).
 typedef struct {
   const char *data;
   size_t len;
@@ -351,16 +351,6 @@ typedef struct { topaz_boolean present; topaz_string  value; } topaz_opt_string;
 #define topaz_opt_absent_string  ((topaz_opt_string){  false, { NULL, 0 } })
 
 #define topaz_opt_passthrough(v) (v)
-
-static inline topaz_string topaz_string_concat(topaz_string a, topaz_string b) {
-  size_t total = a.len + b.len;
-  char *buf = (char *)topaz_arena_alloc(total + 1);
-  if (a.len) memcpy(buf, a.data, a.len);
-  if (b.len) memcpy(buf + a.len, b.data, b.len);
-  buf[total] = '\0';
-  topaz_string r = { buf, total };
-  return r;
-}
 
 static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
   if (a.len != b.len) return false;
