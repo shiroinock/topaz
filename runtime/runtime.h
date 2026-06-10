@@ -597,27 +597,10 @@ static inline topaz_string topaz_process_cwd(void) {
   }
 }
 
-// Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s) for the
-// self-hosted number-literal parser. The codegen requires an explicit radix
-// for parseInt (1-arg auto-radix is a footgun, unused in src/). Both copy into
-// an arena buffer to guarantee a NUL terminator for strtoll/strtod (a
-// topaz_string is not contractually NUL-terminated past .len). Divergences
-// from JS: a bad radix (not 0 and outside [2,36]) and a string whose prefix has
-// no valid digits both yield NaN rather than JS's NaN-on-empty / clamped
-// behaviour; otherwise strtoll/strtod's prefix parse stops at the first invalid
-// char (same as JS parseInt/parseFloat). Result is widened to f64.
-static inline topaz_number topaz_parse_int(topaz_string s, topaz_number radix) {
-  int base = (int)radix;
-  if (base != 0 && (base < 2 || base > 36)) return (topaz_number)NAN;
-  char *buf = (char *)topaz_arena_alloc(s.len + 1);
-  if (s.len) memcpy(buf, s.data, s.len);
-  buf[s.len] = '\0';
-  char *end = buf;
-  long long v = strtoll(buf, &end, base);
-  if (end == buf) return (topaz_number)NAN;
-  return (topaz_number)v;
-}
-
+// Phase 1.5-6 prep #16 / Phase 3.52: global parseFloat(s) remains C substrate
+// for the self-hosted number-literal parser because decimal/exponent parsing
+// and roundoff delegate to libc strtod. parseInt(s, radix)'s pure byte scanner
+// now lives in the runtime prelude.
 static inline topaz_number topaz_parse_float(topaz_string s) {
   char *buf = (char *)topaz_arena_alloc(s.len + 1);
   if (s.len) memcpy(buf, s.data, s.len);

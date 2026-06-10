@@ -10512,7 +10512,8 @@ class Emitter {
     const checkedArgs = this.checkParseIntArgs(expr);
     const s = this.emitWithExpected(checkedArgs.sArg, T_STRING);
     const radix = this.emitWithExpected(checkedArgs.radixArg, T_NUMBER);
-    return `topaz_parse_int(${s}, ${radix})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_parse_int", { pos: expr.pos });
+    return `${helper}(${s}, ${radix})`;
   }
 
   private checkParseFloatArgs(expr: CallExpr): Expr {

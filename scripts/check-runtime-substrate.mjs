@@ -172,10 +172,6 @@ const inventory = {
     category: CATEGORY.NUMBER,
     reason: "libm-backed modulo substrate.",
   },
-  topaz_parse_int: {
-    category: CATEGORY.NUMBER,
-    reason: "host strtod/strtol-adjacent parse substrate for parseInt.",
-  },
   topaz_parse_float: {
     category: CATEGORY.NUMBER,
     reason: "host strtod substrate for parseFloat.",

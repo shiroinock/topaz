@@ -171,6 +171,12 @@ produce arbitrary bytes from `%00` through `%ff`. `topaz_runtime_module_url()`
 remains C substrate because it owns executable path syscalls, `realpath`,
 platform conditionals, and its process-lifetime cache.
 
+Global `parseInt(s, radix)` now follows the scalar prelude lane as
+`__topaz_parse_int(s, radix)`: radix truncation, ASCII whitespace/sign handling,
+auto-base prefix handling, digit scanning, and NaN-on-no-digit all live in
+Topaz-subset TS. `parseFloat(s)` remains C substrate because it intentionally
+delegates decimal/exponent parsing and roundoff behavior to libc `strtod`.
+
 Prelude modules remain internal compiler modules, not a user import surface.
 
 ## Migration Rule

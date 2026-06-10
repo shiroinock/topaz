@@ -209,6 +209,34 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_embedded]"
 
+  node dist/cli.js examples/parse_number.ts --emit-c-only -o build/runtime_prelude_parse_int > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_parse_int" build/runtime_prelude_parse_int.c; then
+    echo "FAIL [runtime_prelude_parse_int]: missing stable parseInt prelude symbol" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_parse_float" build/runtime_prelude_parse_int.c; then
+    echo "FAIL [runtime_prelude_parse_int]: missing parseFloat C substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_parse_int\s*\(" build/runtime_prelude_parse_int.c; then
+    echo "FAIL [runtime_prelude_parse_int]: stale parseInt C helper call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_number topaz_parse_int\s*\(" build/runtime_prelude_parse_int.c; then
+    echo "FAIL [runtime_prelude_parse_int]: stale parseInt C helper definition embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_parse_int.c -o build/runtime_prelude_parse_int
+  local parse_int_prelude_out
+  parse_int_prelude_out=$(./build/runtime_prelude_parse_int)
+  if [[ "$parse_int_prelude_out" != $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n-123\n15\n1295\n511\n10\n123\n8\n16\n15\n2.5\n100\nNaN\nNaN' ]]; then
+    echo "FAIL [runtime_prelude_parse_int]:" >&2
+    echo "  expected parse_number output" >&2
+    printf '%s\n' "$parse_int_prelude_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_parse_int]"
+
   node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_starts_with > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_starts_with" build/runtime_prelude_starts_with.c; then
     echo "FAIL [runtime_prelude_starts_with]: missing stable startsWith prelude symbol" >&2
@@ -797,6 +825,7 @@ run_fail_case runtime_prelude_path_join_hidden_fail examples/runtime_prelude_pat
 run_fail_case runtime_prelude_path_resolve_hidden_fail examples/runtime_prelude_path_resolve_hidden_fail.ts "unknown identifier '__topaz_path_resolve_segments'"
 run_fail_case runtime_prelude_panic_hidden_fail examples/runtime_prelude_panic_hidden_fail.ts "unknown identifier '__topaz_panic'"
 run_fail_case runtime_prelude_byte_codes_hidden_fail examples/runtime_prelude_byte_codes_hidden_fail.ts "unknown identifier '__topaz_string_from_byte_codes'"
+run_fail_case runtime_prelude_parse_int_hidden_fail examples/runtime_prelude_parse_int_hidden_fail.ts "unknown identifier '__topaz_parse_int'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
@@ -1066,7 +1095,7 @@ run_fail_case std_process_write_error_type_fail examples/std_process_write_error
 run_fail_case std_process_write_error_as_value_fail examples/std_process_write_error_as_value_fail.ts "console.error returns void and cannot be used as a value"
 
 run_case number_literal_bases $'34\n16\n10\n3\n63\n160\ntrue\ntrue'
-run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n15\n1295\n511\n2.5\n100\nNaN\nNaN'
+run_case parse_number $'255\n16\n5\n10\n3.14\n42\n0\n100\n123\n-123\n15\n1295\n511\n10\n123\n8\n16\n15\n2.5\n100\nNaN\nNaN'
 run_fail_case parse_int_arity_fail examples/parse_int_arity_fail.ts "parseInt expects exactly two arguments"
 run_fail_case parse_int_arg_type_fail examples/parse_int_arg_type_fail.ts "parseInt first argument must be string"
 run_fail_case parse_int_radix_type_fail examples/parse_int_radix_type_fail.ts "parseInt radix argument must be number"

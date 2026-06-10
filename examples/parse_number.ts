@@ -27,9 +27,15 @@ console.log(parseNum("100"));    // 100
 
 // --- direct parseInt with assorted radixes ---
 console.log(parseInt("7b", 16));  // 123
+console.log(parseInt("-7b", 16)); // -123
 console.log(parseInt("1111", 2)); // 15
 console.log(parseInt("zz", 36));  // 1295
 console.log(parseInt("777", 8));  // 511
+console.log(parseInt(" \t+10z", 10)); // 10
+console.log(parseInt("123x", 0));     // 123
+console.log(parseInt("010", 0));      // 8
+console.log(parseInt("0x10", 0));     // 16
+console.log(parseInt("0Xf", 16));     // 15
 
 // --- parseFloat ---
 console.log(parseFloat("2.5"));   // 2.5

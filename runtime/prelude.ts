@@ -41,6 +41,72 @@ function __topaz_string_is_trim_start_code(code: number): boolean {
   return code === 32 || code === 9 || code === 10 || code === 13 || code === 12 || code === 11;
 }
 
+function __topaz_parse_int_digit_value(code: number): number {
+  if (code >= 48 && code <= 57) return code - 48;
+  if (code >= 65 && code <= 90) return code - 55;
+  if (code >= 97 && code <= 122) return code - 87;
+  return -1;
+}
+
+function __topaz_parse_int(s: string, radix: number): number {
+  const truncatedRadix: number = radix - (radix % 1);
+  if (truncatedRadix !== truncatedRadix) return 0 / 0;
+  let base: number = truncatedRadix;
+  if (base !== 0 && (base < 2 || base > 36)) return 0 / 0;
+
+  let i: number = 0;
+  while (i < s.length) {
+    if (!__topaz_string_is_trim_start_code(s.charCodeAt(i))) break;
+    i = i + 1;
+  }
+
+  let sign: number = 1;
+  if (i < s.length) {
+    const signCode: number = s.charCodeAt(i);
+    if (signCode === 43) {
+      i = i + 1;
+    } else if (signCode === 45) {
+      sign = -1;
+      i = i + 1;
+    }
+  }
+
+  if (base === 0) {
+    if (
+      i + 1 < s.length &&
+      s.charCodeAt(i) === 48 &&
+      (s.charCodeAt(i + 1) === 120 || s.charCodeAt(i + 1) === 88)
+    ) {
+      base = 16;
+      i = i + 2;
+    } else if (i < s.length && s.charCodeAt(i) === 48) {
+      base = 8;
+    } else {
+      base = 10;
+    }
+  } else if (
+    base === 16 &&
+    i + 1 < s.length &&
+    s.charCodeAt(i) === 48 &&
+    (s.charCodeAt(i + 1) === 120 || s.charCodeAt(i + 1) === 88)
+  ) {
+    i = i + 2;
+  }
+
+  let consumed: boolean = false;
+  let value: number = 0;
+  while (i < s.length) {
+    const digit: number = __topaz_parse_int_digit_value(s.charCodeAt(i));
+    if (digit < 0 || digit >= base) break;
+    consumed = true;
+    value = value * base + digit;
+    i = i + 1;
+  }
+
+  if (!consumed) return 0 / 0;
+  return sign * value;
+}
+
 function __topaz_string_trim_start(s: string): string {
   let start: number = 0;
   while (start < s.length) {
