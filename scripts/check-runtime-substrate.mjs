@@ -193,18 +193,6 @@ const inventory = {
     category: CATEGORY.CONSOLE,
     reason: "stderr warning string IO helper.",
   },
-  topaz_console_log_boolean: {
-    category: CATEGORY.CONSOLE,
-    reason: "stdout boolean IO helper.",
-  },
-  topaz_console_error_boolean: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr boolean IO helper.",
-  },
-  topaz_console_warn_boolean: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr warning boolean IO helper.",
-  },
   topaz_console_log_number: {
     category: CATEGORY.CONSOLE,
     reason: "stdout number IO helper.",

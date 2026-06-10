@@ -9083,9 +9083,12 @@ class Emitter {
       method === "log" ? "log"
       : method === "warn" ? "warn"
       : "error";
+    if (t.kind === "boolean") {
+      const booleanToString = this.requireInternalPreludeFunctionCName("__topaz_boolean_to_string", { pos: arg.pos });
+      return `topaz_console_${family}_string(${booleanToString}(${this.emitWithExpected(arg, T_BOOLEAN)}))`;
+    }
     const fn =
-      t.kind === "boolean" ? `topaz_console_${family}_boolean`
-      : t.kind === "string" ? `topaz_console_${family}_string`
+      t.kind === "string" ? `topaz_console_${family}_string`
       : t.kind === "bigint" ? `topaz_console_${family}_bigint`
       : `topaz_console_${family}_number`;
     return `${fn}(${this.emitExpression(arg)})`;

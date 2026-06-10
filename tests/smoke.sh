@@ -249,6 +249,46 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_boolean_to_string]"
 
+  cat > build/runtime_prelude_console_boolean.ts <<'TOPAZ'
+function truthy(): boolean {
+  return true;
+}
+
+console.log(truthy());
+console.error(!truthy());
+console.warn(truthy() === true);
+TOPAZ
+  node dist/cli.js build/runtime_prelude_console_boolean.ts --emit-c-only -o build/runtime_prelude_console_boolean > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_boolean_to_string" build/runtime_prelude_console_boolean.c; then
+    echo "FAIL [runtime_prelude_console_boolean]: missing stable boolean-to-string prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_console_(log|error|warn)_boolean\b" build/runtime_prelude_console_boolean.c; then
+    echo "FAIL [runtime_prelude_console_boolean]: old boolean console helper still emitted" >&2
+    exit 1
+  fi
+  if ! grep -Eq "\btopaz_console_(log|error|warn)_string\b" build/runtime_prelude_console_boolean.c; then
+    echo "FAIL [runtime_prelude_console_boolean]: missing string console IO helper" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_console_boolean.c -o build/runtime_prelude_console_boolean
+  ./build/runtime_prelude_console_boolean > build/runtime_prelude_console_boolean.stdout 2> build/runtime_prelude_console_boolean.stderr
+  local console_boolean_stdout
+  console_boolean_stdout=$(< build/runtime_prelude_console_boolean.stdout)
+  local console_boolean_stderr
+  console_boolean_stderr=$(< build/runtime_prelude_console_boolean.stderr)
+  if [[ "$console_boolean_stdout" != "true" ]]; then
+    echo "FAIL [runtime_prelude_console_boolean stdout]:" >&2
+    printf '%s\n' "$console_boolean_stdout" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  if [[ "$console_boolean_stderr" != $'false\ntrue' ]]; then
+    echo "FAIL [runtime_prelude_console_boolean stderr]:" >&2
+    printf '%s\n' "$console_boolean_stderr" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_console_boolean]"
+
   node dist/cli.js examples/string_basic.ts --emit-c-only -o build/runtime_prelude_string_eq > /dev/null
   local string_eq_calls
   string_eq_calls=$(grep -c "topaz_fn_runtime_prelude___topaz_string_eq(" build/runtime_prelude_string_eq.c || true)

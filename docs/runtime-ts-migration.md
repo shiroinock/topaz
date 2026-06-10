@@ -135,10 +135,13 @@ helper are removed from `runtime/runtime.h` once codegen no longer targets them.
 Boolean stringification also qualifies for the prelude lane because it is a
 pure scalar-to-literal choice and does not allocate beyond returning string
 literals. Its old C helper definition is removed after codegen targets only the
-stable internal prelude symbol. Direct console boolean IO remains a substrate IO
-helper. String byte equality qualifies because it is pure length and byte
-scanning over existing string intrinsics, but Map/Set string key equality
-remains on the C substrate until container monomorphization has a replacement.
+stable internal prelude symbol. Console boolean IO also routes through that
+same internal prelude helper and then uses the existing string stdout/stderr
+substrate helpers, so the dedicated C boolean console helpers are no longer
+part of the substrate inventory. String byte equality qualifies because it is
+pure length and byte scanning over existing string intrinsics, but Map/Set
+string key equality remains on the C substrate until container monomorphization
+has a replacement.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

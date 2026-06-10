@@ -644,18 +644,6 @@ static inline topaz_number topaz_parse_float(topaz_string s) {
   return v;
 }
 
-static inline void topaz_console_log_boolean(topaz_boolean b) {
-  fputs(b ? "true\n" : "false\n", stdout);
-}
-
-static inline void topaz_console_error_boolean(topaz_boolean b) {
-  fputs(b ? "true\n" : "false\n", stderr);
-}
-
-static inline void topaz_console_warn_boolean(topaz_boolean b) {
-  topaz_console_error_boolean(b);
-}
-
 // Phase 1.2 / 1.5-3.5: ECMA-262 ToString(Number). Shortest round-trip via
 // snprintf(%.*e) + strtod precision search, then ECMA-262 formatting written
 // into an arena-allocated buffer. The returned `topaz_string` is owned by the
