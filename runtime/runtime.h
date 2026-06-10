@@ -382,10 +382,6 @@ static inline int topaz_bigint_cmp(const topaz_bigint *a, const topaz_bigint *b)
   return a->sign > 0 ? cmp : -cmp;
 }
 
-static inline topaz_boolean topaz_bigint_eq(const topaz_bigint *a, const topaz_bigint *b) {
-  return topaz_bigint_cmp(a, b) == 0;
-}
-
 static inline topaz_string topaz_bigint_to_string(const topaz_bigint *x) {
   if (x->sign == 0 || x->len == 0) {
     topaz_string z = { "0", 1 };

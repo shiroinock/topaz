@@ -75,9 +75,15 @@ exposing representation mutation to user source.
 
 As of Phase 3.70, that hidden BigInt limb family exists as a compiler-owned
 substrate beside the legacy C BigInt helpers. The old
-`needs-bigint-limb-intrinsics` lane remains unchanged for the existing helper
-algorithms, while the eight new `BigIntBuffer` / limb-inspection helpers are
+`needs-bigint-limb-intrinsics` lane remained unchanged for the existing helper
+algorithms, while the eight new `BigIntBuffer` / limb-inspection helpers were
 tracked separately as `bigint-limb-intrinsic-family`.
+
+As of Phase 3.71, public BigInt `===` / `!==` is the first migrated consumer of
+the hidden limb-inspection family. It routes through runtime prelude
+`__topaz_bigint_eq(a, b)`, which compares signs, handles canonical zero, checks
+limb length, and then compares each little-endian limb. Ordering, arithmetic,
+literal parsing, and decimal formatting remain in the C substrate.
 
 ## Hidden String Buffer Intrinsics
 
@@ -128,14 +134,14 @@ continue to fail hidden helper references with `unknown identifier '__topaz_*'`.
 
 The generated-C ABI boundary remains `topaz_bigint *` backed by little-endian
 32-bit limbs plus `sign` until a later implementation ADR changes it. The first
-implementation slice added pseudo type and hidden lowering while keeping the
+implementation slice added pseudo type and hidden lowering while keeping most
 existing C helpers, plus an internal `__topaz_bigint_clone(value)` compile
-evidence helper that is not yet a public BigInt lowering target. Later slices
-should migrate leaf and small helpers such as `topaz_bigint_zero`,
-`topaz_bigint_neg`, `topaz_bigint_copy_abs`, and comparison/equality style
-helpers before add/sub/mul. Decimal parsing and decimal formatting should move
-last because they combine limb algorithms with C-string literal ingress, string
-allocation, and formatting behavior.
+evidence helper. Public equality now uses `__topaz_bigint_eq(value, other)`.
+Later slices should migrate leaf and small helpers such as `topaz_bigint_zero`,
+`topaz_bigint_neg`, `topaz_bigint_copy_abs`, and signed comparison before
+add/sub/mul. Decimal parsing and decimal formatting should move last because
+they combine limb algorithms with C-string literal ingress, string allocation,
+and formatting behavior.
 
 ## Topaz Prelude Candidates
 

@@ -19,7 +19,7 @@ if [[ "${substrate_out}" != *"string buffer intrinsic boundary: <none>"* ]]; the
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"needs-bigint-limb-intrinsics: 17"* ]]; then
+if [[ "${substrate_out}" != *"needs-bigint-limb-intrinsics: 16"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: bigint migration lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
@@ -654,6 +654,25 @@ TOPAZ
   cc -O2 -Iruntime -Wall -Wextra -c build/runtime_prelude_bigint_buffer.c -o build/runtime_prelude_bigint_buffer.o
   echo "PASS [runtime_prelude_bigint_buffer]"
 
+  node dist/cli.js examples/bigint_equality.ts --emit-c-only -o build/runtime_prelude_bigint_eq > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_bigint_eq" build/runtime_prelude_bigint_eq.c; then
+    echo "FAIL [runtime_prelude_bigint_eq]: missing stable bigint equality prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_bigint_eq\s*\(" build/runtime_prelude_bigint_eq.c; then
+    echo "FAIL [runtime_prelude_bigint_eq]: stale bigint equality C helper call or definition emitted" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_bigint_eq.c -o build/runtime_prelude_bigint_eq
+  local bigint_eq_out
+  bigint_eq_out=$(./build/runtime_prelude_bigint_eq)
+  if [[ "$bigint_eq_out" != $'true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue' ]]; then
+    echo "FAIL [runtime_prelude_bigint_eq]:" >&2
+    printf '%s\n' "$bigint_eq_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_bigint_eq]"
+
   cat > build/runtime_console_warn_string.ts <<'TOPAZ'
 console.warn("careful");
 console.warn(true);
@@ -1067,6 +1086,7 @@ run_case template_literal $'hello, topaz!\ntopaz is 42\nflag=true\ntopaz\ntopaz/
 
 run_case bigint_value_skeleton ""
 run_case bigint_arithmetic $'579\n333\n-333\n56088\n-123\n123:-456\ntrue\ntrue\ntrue\ntrue'
+run_case bigint_equality $'true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue'
 run_case bigint_large_limb $'123456789012345678901234567890\n1111111110111111111011111111100\n864197532086419753208641975320\n1234567890123456789012345678900\ntrue\ntrue\n123456789012345678901234567890:987654321098765432109876543210'
 run_case bigint_sign_zero $'0\n0\n0\ntrue\ntrue\ntrue\ntrue\n0\n30\n-30'
 run_fail_case bigint_mixed_arithmetic_fail examples/bigint_mixed_arithmetic_fail.ts "mixed number/bigint operators are unsupported"
@@ -1142,6 +1162,7 @@ run_fail_case runtime_prelude_array_slice_normalize_hidden_fail examples/runtime
 run_fail_case runtime_prelude_string_char_code_at_hidden_fail examples/runtime_prelude_string_char_code_at_hidden_fail.ts "unknown identifier '__topaz_string_char_code_at'"
 run_fail_case runtime_prelude_string_byte_at_hidden_fail examples/runtime_prelude_string_byte_at_hidden_fail.ts "unknown identifier '__topaz_string_byte_at'"
 run_fail_case runtime_prelude_string_buffer_hidden_fail examples/runtime_prelude_string_buffer_hidden_fail.ts "unknown identifier '__topaz_string_buffer_new'"
+run_fail_case runtime_prelude_bigint_eq_hidden_fail examples/runtime_prelude_bigint_eq_hidden_fail.ts "unknown identifier '__topaz_bigint_eq'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

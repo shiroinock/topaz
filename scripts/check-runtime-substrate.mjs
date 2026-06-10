@@ -202,12 +202,6 @@ const inventory = {
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },
-  topaz_bigint_eq: {
-    category: CATEGORY.BIGINT,
-    reason: "public bigint equality lowering target.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
   topaz_bigint_to_string: {
     category: CATEGORY.BIGINT,
     reason: "bigint formatting over raw limb storage.",

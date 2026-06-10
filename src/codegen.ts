@@ -2107,6 +2107,11 @@ class Emitter {
     return `${helper}(${lhs}, ${rhs})`;
   }
 
+  private emitRuntimePreludeBigIntEq(lhs: string, rhs: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_bigint_eq", anchor);
+    return `${helper}(${lhs}, ${rhs})`;
+  }
+
   private emitRuntimePreludeStringConcat(lhs: string, rhs: string, anchor: { pos: number }): string {
     const helper = this.requireInternalPreludeFunctionCName("__topaz_string_concat", anchor);
     return `${helper}(${lhs}, ${rhs})`;
@@ -8395,8 +8400,8 @@ class Emitter {
           if (tok === "<=") return `topaz_bigint_cmp(${lhs}, ${rhs}) <= 0`;
           if (tok === ">") return `topaz_bigint_cmp(${lhs}, ${rhs}) > 0`;
           if (tok === ">=") return `topaz_bigint_cmp(${lhs}, ${rhs}) >= 0`;
-          if (tok === "===") return `topaz_bigint_eq(${lhs}, ${rhs})`;
-          if (tok === "!==") return `(!topaz_bigint_eq(${lhs}, ${rhs}))`;
+          if (tok === "===") return this.emitRuntimePreludeBigIntEq(lhs, rhs, { pos: expr.pos });
+          if (tok === "!==") return `(!${this.emitRuntimePreludeBigIntEq(lhs, rhs, { pos: expr.pos })})`;
         }
       }
       if (tok === "+" && this.inferType(expr.lhs).kind === "string") {

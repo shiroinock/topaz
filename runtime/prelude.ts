@@ -36,6 +36,22 @@ function __topaz_bigint_clone(value: bigint): bigint {
   return __topaz_bigint_buffer_to_bigint(buffer, __topaz_bigint_sign(value));
 }
 
+function __topaz_bigint_eq(a: bigint, b: bigint): boolean {
+  const aSign: number = __topaz_bigint_sign(a);
+  const bSign: number = __topaz_bigint_sign(b);
+  if (aSign !== bSign) return false;
+  if (aSign === 0) return true;
+
+  const len: number = __topaz_bigint_limb_len(a);
+  if (len !== __topaz_bigint_limb_len(b)) return false;
+  let i: number = 0;
+  while (i < len) {
+    if (__topaz_bigint_limb(a, i) !== __topaz_bigint_limb(b, i)) return false;
+    i = i + 1;
+  }
+  return true;
+}
+
 function __topaz_string_from_char_code(n: number): string {
   if (n !== n || n < 0 || n >= 128) {
     __topaz_panic("topaz: String.fromCharCode argument out of ASCII range");
