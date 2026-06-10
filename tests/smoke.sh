@@ -78,6 +78,40 @@ if [[ "${effect_provenance_out}" == *"path.join"* ]]; then
   exit 1
 fi
 echo "PASS [effect_provenance]"
+effect_report_out=$(pnpm run check:effect-report)
+if [[ "${effect_report_out}" != *"effect report ok:"* ]]; then
+  echo "FAIL [effect_report]: missing ok summary" >&2
+  printf '%s\n' "${effect_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${effect_report_out}" != *"topaz builtin effect report: build/effect_report/main.ts"* ]]; then
+  echo "FAIL [effect_report]: missing stable heading" >&2
+  printf '%s\n' "${effect_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for effect in fs.read fs.write process.argv io.stdout io.stderr; do
+  if [[ "${effect_report_out}" != *"  ${effect}: "* ]]; then
+    echo "FAIL [effect_report]: missing effect summary ${effect}" >&2
+    printf '%s\n' "${effect_report_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+if [[ "${effect_report_out}" != *"console.warn(...)"* ]]; then
+  echo "FAIL [effect_report]: missing console.warn detail" >&2
+  printf '%s\n' "${effect_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${effect_report_out}" != *$'effects: none\nrequirements: none'* ]]; then
+  echo "FAIL [effect_report]: missing no-effect report" >&2
+  printf '%s\n' "${effect_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${effect_report_out}" == *"path.join"* || "${effect_report_out}" == *"std/path"* || "${effect_report_out}" == *"join(...)"* ]]; then
+  echo "FAIL [effect_report]: pure std/path leaked into report" >&2
+  printf '%s\n' "${effect_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [effect_report]"
 release_workflow=".github/workflows/release-artifact.yml"
 if ! grep -Fq 'release_flags=(--draft)' "${release_workflow}"; then
   echo "FAIL [release_workflow_prerelease]: missing draft release flag baseline" >&2
