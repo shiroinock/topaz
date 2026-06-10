@@ -336,6 +336,37 @@ TOPAZ
   fi
   echo "PASS [runtime_numeric_console_string]"
 
+  cat > build/runtime_console_warn_string.ts <<'TOPAZ'
+console.warn("careful");
+console.warn(true);
+console.warn(2.5);
+console.warn(0n);
+TOPAZ
+  node dist/cli.js build/runtime_console_warn_string.ts --emit-c-only -o build/runtime_console_warn_string > /dev/null
+  if ! grep -Eq "\btopaz_console_error_string\b" build/runtime_console_warn_string.c; then
+    echo "FAIL [runtime_console_warn_string]: missing stderr string helper for console.warn" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_console_warn_string\b" build/runtime_console_warn_string.c; then
+    echo "FAIL [runtime_console_warn_string]: stale console.warn string wrapper emitted or defined" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_console_warn_string.c -o build/runtime_console_warn_string
+  ./build/runtime_console_warn_string > build/runtime_console_warn_string.stdout 2> build/runtime_console_warn_string.stderr
+  if [[ -s build/runtime_console_warn_string.stdout ]]; then
+    echo "FAIL [runtime_console_warn_string stdout]: expected empty stdout" >&2
+    sed 's/^/  got: /' build/runtime_console_warn_string.stdout >&2
+    exit 1
+  fi
+  printf 'careful\ntrue\n2.5\n0\n' > build/runtime_console_warn_string.expected_stderr
+  if ! cmp -s build/runtime_console_warn_string.expected_stderr build/runtime_console_warn_string.stderr; then
+    echo "FAIL [runtime_console_warn_string stderr]:" >&2
+    sed 's/^/  expected: /' build/runtime_console_warn_string.expected_stderr >&2
+    sed 's/^/  got: /' build/runtime_console_warn_string.stderr >&2
+    exit 1
+  fi
+  echo "PASS [runtime_console_warn_string]"
+
   node dist/cli.js examples/string_basic.ts --emit-c-only -o build/runtime_prelude_string_eq > /dev/null
   local string_eq_calls
   string_eq_calls=$(grep -c "topaz_fn_runtime_prelude___topaz_string_eq(" build/runtime_prelude_string_eq.c || true)

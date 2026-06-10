@@ -424,10 +424,6 @@ static inline void topaz_console_error_string(topaz_string s) {
   putc('\n', stderr);
 }
 
-static inline void topaz_console_warn_string(topaz_string s) {
-  topaz_console_error_string(s);
-}
-
 // JS `%` is IEEE-754 remainder with truncated quotient = fmod.
 // C's `%` is integer-only, so all topaz_number `%` lowers to this helper.
 static inline topaz_number topaz_fmod(topaz_number a, topaz_number b) {

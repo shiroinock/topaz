@@ -9079,10 +9079,7 @@ class Emitter {
   private emitConsoleCall(expr: CallExpr, method: string): string {
     const arg = this.checkConsoleCallArgs(expr, method);
     const t = this.inferType(arg);
-    const family =
-      method === "log" ? "log"
-      : method === "warn" ? "warn"
-      : "error";
+    const family = method === "log" ? "log" : "error";
     if (t.kind === "boolean") {
       const booleanToString = this.requireInternalPreludeFunctionCName("__topaz_boolean_to_string", { pos: arg.pos });
       return `topaz_console_${family}_string(${booleanToString}(${this.emitWithExpected(arg, T_BOOLEAN)}))`;

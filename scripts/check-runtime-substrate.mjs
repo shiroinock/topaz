@@ -189,10 +189,6 @@ const inventory = {
     category: CATEGORY.CONSOLE,
     reason: "stderr string IO helper.",
   },
-  topaz_console_warn_string: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr warning string IO helper.",
-  },
   topaz_stdout_write: {
     category: CATEGORY.CONSOLE,
     reason: "process.stdout.write substrate.",

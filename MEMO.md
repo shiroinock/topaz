@@ -286,6 +286,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.45 runtime substrate inventory check** — `runtime/runtime.h` に残る `topaz_*` static helper と `TOPAZ_*` / `topaz_opt_*` macro を substrate category/reason 付き inventory で分類し、新規 C surface が未分類のまま増えたら smoke / release gate で止める。runtime 挙動は変更しない。決定ログは `docs/adr/0372-runtime-substrate-inventory-check.md`。
 - [x] **3.46 console boolean IO prelude route** — `console.log` / `console.error` / `console.warn` の boolean 引数を `__topaz_boolean_to_string` 経由で既存 string IO substrate へ流し、専用 C boolean console helper と inventory entry を削除した。public console behavior / diagnostics / prelude import surface は維持する。決定ログは `docs/adr/0373-console-boolean-prelude-io.md`。
 - [x] **3.47 numeric console IO string substrate route** — `console.log` / `console.error` / `console.warn` の number / bigint 引数を既存 `topaz_number_to_string` / `topaz_bigint_to_string` から string IO substrate へ流し、専用 C number / bigint console helper と inventory entry を削除した。formatting / newline / diagnostics は維持する。決定ログは `docs/adr/0374-numeric-console-string-substrate.md`。
+- [x] **3.48 console warn string wrapper cleanup** — `console.warn(...)` の lowering を既存 stderr string IO substrate `topaz_console_error_string(...)` へ直接向け、純粋 wrapper だった `topaz_console_warn_string` と inventory entry を削除した。accepted argument / diagnostics / stderr newline behavior は維持する。決定ログは `docs/adr/0375-console-warn-string-wrapper-cleanup.md`。
 
 Release/version allocation:
 

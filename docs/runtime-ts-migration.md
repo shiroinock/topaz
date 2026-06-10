@@ -142,9 +142,13 @@ part of the substrate inventory. Number and BigInt console IO now follow the
 same composition shape, but their stringification remains C substrate:
 `topaz_number_to_string(...)` / `topaz_bigint_to_string(...)` feed the existing
 string stdout/stderr helpers, and the dedicated number/BigInt console wrappers
-are removed. String byte equality qualifies because it is pure length and byte
-scanning over existing string intrinsics, but Map/Set string key equality
-remains on the C substrate until container monomorphization has a replacement.
+are removed. `console.warn(...)` now lowers directly to the same stderr string
+IO substrate as `console.error(...)`, so the duplicate
+`topaz_console_warn_string(...)` wrapper is also removed while preserving the
+public `console.warn` call shape and diagnostics. String byte equality
+qualifies because it is pure length and byte scanning over existing string
+intrinsics, but Map/Set string key equality remains on the C substrate until
+container monomorphization has a replacement.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 
