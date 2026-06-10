@@ -155,6 +155,23 @@ qualifies because it is pure length and byte scanning over existing string
 intrinsics, but Map/Set string key equality remains on the C substrate until
 container monomorphization has a replacement.
 
+`fileURLToPath(url)` is the next URL/path boundary, but it should not migrate as
+one large C-to-TS rewrite. It first needs two compiler-owned internal prelude
+affordances: `__topaz_panic(message: string): never`, lowered to a tiny C
+substrate helper that writes the message to stderr, appends one newline, and
+aborts; and `__topaz_string_from_byte_codes(codes: Array<number>): string`,
+lowered to a raw allocation helper that copies numeric byte codes into a Topaz
+string payload. The byte-code helper is necessary because
+`String.fromCharCode(...)` remains ASCII-limited while URL percent decoding can
+produce arbitrary bytes from `%00` through `%ff`. Both helpers stay hidden from
+user source like the existing `__topaz_*` prelude symbols. Once they exist, the
+`file://` prefix, optional empty/`localhost` host, absolute path check, and
+percent-decoding algorithm may move into `runtime/prelude.ts`; codegen can then
+lower imported `fileURLToPath(url)` to the stable internal prelude symbol and
+remove `topaz_url_file_url_to_path(...)` from the C substrate inventory.
+`topaz_runtime_module_url()` remains C substrate because it owns executable path
+syscalls, `realpath`, platform conditionals, and its process-lifetime cache.
+
 Prelude modules remain internal compiler modules, not a user import surface.
 
 ## Migration Rule
