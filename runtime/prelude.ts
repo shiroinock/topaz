@@ -94,3 +94,71 @@ function __topaz_path_dirname(path: string): string {
   if (hasRoot && end === 1) return "//";
   return path.slice(0, end);
 }
+
+function __topaz_path_basename(path: string): string {
+  let start: number = 0;
+  let end: number = -1;
+  let matchedSlash: boolean = true;
+  for (let i: number = path.length - 1; i >= 0; i = i - 1) {
+    const code: number = path.charCodeAt(i);
+    if (code === 47) {
+      if (!matchedSlash) {
+        start = i + 1;
+        break;
+      }
+    } else if (end === -1) {
+      matchedSlash = false;
+      end = i + 1;
+    }
+  }
+  if (end === -1) return "";
+  return path.slice(start, end);
+}
+
+function __topaz_path_basename_ext(path: string, ext: string): string {
+  if (ext.length === 0 || ext.length > path.length) return __topaz_path_basename(path);
+  if (ext.length === path.length) {
+    let same: boolean = true;
+    let fullIndex: number = 0;
+    while (fullIndex < path.length) {
+      if (path.charCodeAt(fullIndex) !== ext.charCodeAt(fullIndex)) {
+        same = false;
+        break;
+      }
+      fullIndex = fullIndex + 1;
+    }
+    if (same) return "";
+  }
+  let start: number = 0;
+  let end: number = -1;
+  let firstNonSlashEnd: number = -1;
+  let extIndex: number = ext.length - 1;
+  let matchedSlash: boolean = true;
+  for (let i: number = path.length - 1; i >= 0; i = i - 1) {
+    const code: number = path.charCodeAt(i);
+    if (code === 47) {
+      if (!matchedSlash) {
+        start = i + 1;
+        break;
+      }
+    } else {
+      if (firstNonSlashEnd === -1) {
+        matchedSlash = false;
+        firstNonSlashEnd = i + 1;
+      }
+      if (extIndex >= 0) {
+        if (code === ext.charCodeAt(extIndex)) {
+          extIndex = extIndex - 1;
+          if (extIndex === -1) end = i;
+        } else {
+          extIndex = -1;
+          end = firstNonSlashEnd;
+        }
+      }
+    }
+  }
+  if (start === end) end = firstNonSlashEnd;
+  else if (end === -1) end = path.length;
+  if (end <= start) return "";
+  return path.slice(start, end);
+}

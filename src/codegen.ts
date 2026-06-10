@@ -10315,10 +10315,16 @@ class Emitter {
     const checkedArgs = this.checkNodePathBasenameArgs(expr);
     const path = this.emitWithExpected(checkedArgs.pathArg, T_STRING);
     if (!checkedArgs.hasExt) {
-      return `topaz_path_basename(${path})`;
+      const helper = this.requireInternalPreludeFunctionCName("__topaz_path_basename", {
+        pos: expr.pos,
+      });
+      return `${helper}(${path})`;
     }
     const ext = this.emitWithExpected(checkedArgs.extArg, T_STRING);
-    return `topaz_path_basename_ext(${path}, ${ext})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_path_basename_ext", {
+      pos: expr.pos,
+    });
+    return `${helper}(${path}, ${ext})`;
   }
 
   // Phase 1.5-6 prep #22: node:path.extname(p) の引数検査。1 引数 string。

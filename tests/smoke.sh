@@ -276,6 +276,26 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_path_dirname]"
 
+  node dist/cli.js examples/node_path_basename.ts --emit-c-only -o build/runtime_prelude_path_basename > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_path_basename" build/runtime_prelude_path_basename.c; then
+    echo "FAIL [runtime_prelude_path_basename]: missing stable path basename prelude symbol" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_path_basename_ext" build/runtime_prelude_path_basename.c; then
+    echo "FAIL [runtime_prelude_path_basename]: missing stable path basename ext prelude symbol" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_path_basename.c -o build/runtime_prelude_path_basename
+  local path_basename_out
+  path_basename_out=$(./build/runtime_prelude_path_basename)
+  if [[ "$path_basename_out" != $'baz.ts\nbar\nbar\nfoo\nfoo\n\ntrue\nbaz\nfoo\nmain\nbar.ts\ntrue\nindex' ]]; then
+    echo "FAIL [runtime_prelude_path_basename]:" >&2
+    echo "  expected node_path_basename output" >&2
+    printf '%s\n' "$path_basename_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_path_basename]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -425,6 +445,8 @@ run_fail_case runtime_prelude_ends_with_hidden_fail examples/runtime_prelude_end
 run_fail_case runtime_prelude_trim_start_hidden_fail examples/runtime_prelude_trim_start_hidden_fail.ts "unknown identifier '__topaz_string_trim_start'"
 run_fail_case runtime_prelude_path_extname_hidden_fail examples/runtime_prelude_path_extname_hidden_fail.ts "unknown identifier '__topaz_path_extname'"
 run_fail_case runtime_prelude_path_dirname_hidden_fail examples/runtime_prelude_path_dirname_hidden_fail.ts "unknown identifier '__topaz_path_dirname'"
+run_fail_case runtime_prelude_path_basename_hidden_fail examples/runtime_prelude_path_basename_hidden_fail.ts "unknown identifier '__topaz_path_basename'"
+run_fail_case runtime_prelude_path_basename_ext_hidden_fail examples/runtime_prelude_path_basename_ext_hidden_fail.ts "unknown identifier '__topaz_path_basename_ext'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
