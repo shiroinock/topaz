@@ -46,7 +46,8 @@ symbol should immediately move to TypeScript:
 - `needs-string-buffer-intrinsics`: legacy raw immutable string byte-read
   helpers that have now been removed from the runtime header.
 - `needs-bigint-limb-intrinsics`: BigInt limb storage, arithmetic, parsing, and
-  formatting that need explicit limb intrinsics or generated monomorphs first.
+  formatting that need the internal-prelude-only BigInt limb intrinsic family
+  before helper algorithms can move to Topaz-subset TS.
 - `container-monomorph-boundary`: Array/Map/Set macro families, hash slots,
   hashing, and key equality until compiler-owned monomorphization replaces the
   C substrate.
@@ -65,6 +66,12 @@ now lowers directly to generated C that reads `topaz_string.data[(size_t)i]`.
 The old byte-code string materialization bridge has also been removed;
 allocation and copying clients now use the compiler-owned internal
 `StringBuffer` intrinsic family.
+
+As of Phase 3.69, the next runtime migration target is not direct
+helper-by-helper C-to-TS copying for BigInt. The `needs-bigint-limb-intrinsics`
+lane first needs an internal-prelude-only limb intrinsic family so future
+helpers can inspect immutable `bigint` values and build fresh results without
+exposing representation mutation to user source.
 
 ## Hidden String Buffer Intrinsics
 
@@ -98,13 +105,39 @@ data access, so the old string-buffer-intrinsics boundary is empty. This is
 still pre-v0.2.0 runtime prelude groundwork, not manifest, doctor, check, or
 explain work.
 
+## Hidden BigInt Limb Intrinsics
+
+The next implementation target is an internal-prelude-only intrinsic family
+around an opaque compiler-owned `BigIntBuffer` pseudo type:
+`__topaz_bigint_buffer_new(capacity)`,
+`__topaz_bigint_buffer_to_bigint(buffer, sign)`,
+`__topaz_bigint_buffer_len(buffer)`,
+`__topaz_bigint_buffer_get_limb(buffer, index)`,
+`__topaz_bigint_buffer_set_limb(buffer, index, limb)`,
+`__topaz_bigint_limb_len(value)`, `__topaz_bigint_limb(value, index)`, and
+`__topaz_bigint_sign(value)`. `BigIntBuffer` is accepted only while compiling
+`runtime/prelude.ts`; it is not a public class, interface, importable symbol,
+structural type, `Array<number>`, or pointer escape. Ordinary user modules must
+continue to fail hidden helper references with `unknown identifier '__topaz_*'`.
+
+The generated-C ABI boundary remains `topaz_bigint *` backed by little-endian
+32-bit limbs plus `sign` until a later implementation ADR changes it. The first
+implementation slice should add pseudo type and hidden lowering while keeping
+the existing C helpers. Later slices should migrate leaf and small helpers such
+as `topaz_bigint_zero`, `topaz_bigint_neg`, `topaz_bigint_copy_abs`, and
+comparison/equality style helpers before add/sub/mul. Decimal parsing and
+decimal formatting should move last because they combine limb algorithms with
+C-string literal ingress, string allocation, and formatting behavior.
+
 ## Topaz Prelude Candidates
 
 Migrate helpers only after their required substrate calls are explicit. The
 recommended order is:
 
 1. Path/string algorithms that can be expressed over byte-oriented intrinsics.
-2. BigInt arithmetic and formatting once limb storage has intrinsic accessors.
+2. BigInt helpers once the internal limb inspection and `BigIntBuffer`
+   construction intrinsics exist, starting with leaf helpers and leaving
+   decimal parse/format last.
 3. Container algorithms after Map/Set macro monomorphization has a replacement
    story.
 4. Filesystem/process wrappers last, because they are thin host calls and will
