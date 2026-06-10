@@ -233,11 +233,12 @@ keep the active lanes visible as `string-buffer-intrinsic-family: 5` and
 
 ## Phase 3.88 Runtime Prelude Release Checkpoint
 
-Phase 3.88 treats the current runtime TS prelude lane as the v0.1.2 checkpoint,
-not as a future promise to move the first pure helper. The implemented state now
-includes internal runtime prelude injection and embedding, stable hidden prelude
-symbols for migrated pure helpers, and active compiler-owned `StringBuffer` and
-`BigIntBuffer` intrinsic substrate families used by those helpers.
+Phase 3.88 records the current runtime TS prelude lane as a release checkpoint,
+not as a future promise to move the first pure helper. The implemented state
+now includes internal runtime prelude injection and embedding, stable hidden
+prelude symbols for migrated pure helpers, and active compiler-owned
+`StringBuffer` and `BigIntBuffer` intrinsic substrate families used by those
+helpers.
 
 The remaining C runtime surface is deliberately classified before v0.2.0:
 number/libc-libm helpers, host ABI helpers, raw memory and arena helpers,
@@ -249,6 +250,18 @@ not from the old "move every `runtime.h` helper" framing.
 
 This checkpoint does not create a release tag, promise a release date, expand
 the public language surface, or change runtime semantics.
+
+## Phase 3.89 Release-Version Realignment
+
+Phase 3.89 keeps the already-published `v0.1.2` GitHub Release immutable. That
+tag points at the older phase 3.60 release history, so the completed runtime TS
+prelude checkpoint now targets `v0.1.3` as the next release vehicle instead of
+retagging, deleting, force-pushing, or editing public `v0.1.2` history.
+
+The scope remains documentation and release-roadmap alignment. Future runtime
+movement still starts from explicit substrate/backend ADRs for the pinned
+boundaries, or from removing an intrinsic family after no prelude client needs
+it, not from a generic `runtime.h` migration mandate.
 
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw

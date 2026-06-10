@@ -1,6 +1,6 @@
 # 0415 - runtime prelude release checkpoint
 
-- **Status**: Accepted
+- **Status**: Superseded by [0416](./0416-runtime-checkpoint-version-realignment.md)
 - **Date**: 2026-06-11
 - **Phase**: 3.88
 
