@@ -124,24 +124,6 @@ const inventory = {
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },
-  topaz_bigint_mul_small_in_place: {
-    category: CATEGORY.BIGINT,
-    reason: "decimal parser limb multiply step.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_add_small_in_place: {
-    category: CATEGORY.BIGINT,
-    reason: "decimal parser limb add step.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_from_decimal_cstr: {
-    category: CATEGORY.BIGINT,
-    reason: "bootstrap parser literal bridge from C strings to bigint limbs.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
   topaz_bigint_to_string: {
     category: CATEGORY.BIGINT,
     reason: "bigint formatting over raw limb storage.",

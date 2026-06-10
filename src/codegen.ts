@@ -2137,6 +2137,11 @@ class Emitter {
     return `${helper}(${lhs}, ${rhs})`;
   }
 
+  private emitRuntimePreludeBigIntFromDecimal(digits: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_bigint_from_decimal", anchor);
+    return `${helper}(${this.emitStringLiteralText(digits, anchor)})`;
+  }
+
   private emitRuntimePreludeStringConcat(lhs: string, rhs: string, anchor: { pos: number }): string {
     const helper = this.requireInternalPreludeFunctionCName("__topaz_string_concat", anchor);
     return `${helper}(${lhs}, ${rhs})`;
@@ -8042,7 +8047,7 @@ class Emitter {
       return emitNumberLiteralText(expr.text, expr.value);
     }
     if (expr.kind === "bigint_lit") {
-      return `topaz_bigint_from_decimal_cstr("${decimalBigIntDigits(expr.text)}")`;
+      return this.emitRuntimePreludeBigIntFromDecimal(decimalBigIntDigits(expr.text), { pos: expr.pos });
     }
     if (expr.kind === "bool_lit") return expr.value ? "true" : "false";
     if (expr.kind === "null_lit") {

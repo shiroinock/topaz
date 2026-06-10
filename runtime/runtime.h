@@ -210,63 +210,6 @@ static inline topaz_number topaz_bigint_sign(const topaz_bigint *value) {
   return (topaz_number)value->sign;
 }
 
-static inline void topaz_bigint_mul_small_in_place(topaz_bigint *x, uint32_t m) {
-  if (x->len == 0 || m == 1) return;
-  if (m == 0) {
-    x->len = 0;
-    x->limbs = NULL;
-    x->sign = 0;
-    return;
-  }
-  uint64_t carry = 0;
-  for (size_t i = 0; i < x->len; i++) {
-    uint64_t cur = (uint64_t)x->limbs[i] * (uint64_t)m + carry;
-    x->limbs[i] = (uint32_t)cur;
-    carry = cur >> 32;
-  }
-  if (carry) {
-    x->limbs[x->len] = (uint32_t)carry;
-    x->len++;
-  }
-}
-
-static inline void topaz_bigint_add_small_in_place(topaz_bigint *x, uint32_t v) {
-  if (v == 0) return;
-  if (x->len == 0) {
-    x->limbs[0] = v;
-    x->len = 1;
-    x->sign = 1;
-    return;
-  }
-  uint64_t carry = v;
-  size_t i = 0;
-  while (carry) {
-    uint64_t cur = (uint64_t)x->limbs[i] + carry;
-    x->limbs[i] = (uint32_t)cur;
-    carry = cur >> 32;
-    i++;
-  }
-}
-
-static inline topaz_bigint *topaz_bigint_from_decimal_cstr(const char *digits) {
-  size_t digits_len = strlen(digits);
-  topaz_bigint *out = (topaz_bigint *)topaz_arena_alloc(sizeof(*out));
-  out->limbs = digits_len ? (uint32_t *)topaz_arena_calloc(digits_len + 1, sizeof(uint32_t)) : NULL;
-  out->len = 0;
-  out->sign = 0;
-  for (size_t i = 0; i < digits_len; i++) {
-    char c = digits[i];
-    if (c < '0' || c > '9') {
-      fputs("topaz: invalid bigint literal\n", stderr);
-      abort();
-    }
-    topaz_bigint_mul_small_in_place(out, 10);
-    topaz_bigint_add_small_in_place(out, (uint32_t)(c - '0'));
-  }
-  topaz_bigint_normalize(out);
-  return out;
-}
-
 static inline topaz_string topaz_bigint_to_string(const topaz_bigint *x) {
   if (x->sign == 0 || x->len == 0) {
     topaz_string z = { "0", 1 };

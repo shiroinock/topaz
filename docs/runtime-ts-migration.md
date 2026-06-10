@@ -109,6 +109,14 @@ inside the multiply-add step so every `number` intermediate stays below the
 IEEE-754 exact-integer boundary. Decimal literal parsing and decimal formatting
 remain in the C substrate.
 
+As of Phase 3.76, decimal BigInt literals route through runtime prelude
+`__topaz_bigint_from_decimal(digits)`. Codegen still validates decimal-only
+literal source text with `decimalBigIntDigits(...)`, then passes a normal Topaz
+string literal into the prelude helper. The helper scans ASCII digits left to
+right, updates a `BigIntBuffer` with multiply-by-10 and add-digit steps, and
+materializes through `__topaz_bigint_buffer_to_bigint(...)`. Decimal formatting
+still remains in C as `topaz_bigint_to_string(...)`.
+
 ## Hidden String Buffer Intrinsics
 
 The next implementation target is an internal-prelude-only intrinsic family:
@@ -164,10 +172,10 @@ evidence helper. Public equality now uses `__topaz_bigint_eq(value, other)`,
 ordering uses `__topaz_bigint_cmp(value, other)`, unary negation uses
 `__topaz_bigint_neg(value)`, and binary addition/subtraction use
 `__topaz_bigint_add(value, other)` / `__topaz_bigint_sub(value, other)`.
-Later slices should migrate multiplication, parse, and format helpers.
-Decimal parsing and decimal formatting should move last because they combine
-limb algorithms with C-string literal ingress, string allocation, and
-formatting behavior.
+Multiplication uses `__topaz_bigint_mul(value, other)`, and decimal literal
+construction uses `__topaz_bigint_from_decimal(digits)`. Later slices should
+migrate formatting helpers. Decimal formatting remains last because it combines
+limb algorithms with string allocation and formatting behavior.
 
 ## Topaz Prelude Candidates
 

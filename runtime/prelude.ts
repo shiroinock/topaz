@@ -155,6 +155,59 @@ function __topaz_bigint_sub(a: bigint, b: bigint): bigint {
   return __topaz_bigint_add(a, __topaz_bigint_neg(b));
 }
 
+function __topaz_bigint_buffer_mul_small(buffer: BigIntBuffer, factor: number): void {
+  const base: number = 4294967296;
+  let carry: number = 0;
+  let i: number = 0;
+  const len: number = __topaz_bigint_buffer_len(buffer);
+  while (i < len) {
+    const cur: number = __topaz_bigint_buffer_get_limb(buffer, i) * factor + carry;
+    const limb: number = cur % base;
+    __topaz_bigint_buffer_set_limb(buffer, i, limb);
+    carry = (cur - limb) / base;
+    i = i + 1;
+  }
+  if (carry !== 0) {
+    __topaz_bigint_buffer_set_limb(buffer, len, carry);
+  }
+}
+
+function __topaz_bigint_buffer_add_small(buffer: BigIntBuffer, value: number): void {
+  if (value === 0) return;
+  const base: number = 4294967296;
+  let carry: number = value;
+  let i: number = 0;
+  while (carry !== 0) {
+    if (i < __topaz_bigint_buffer_len(buffer)) {
+      const cur: number = __topaz_bigint_buffer_get_limb(buffer, i) + carry;
+      const limb: number = cur % base;
+      __topaz_bigint_buffer_set_limb(buffer, i, limb);
+      carry = (cur - limb) / base;
+    } else {
+      __topaz_bigint_buffer_set_limb(buffer, i, carry);
+      carry = 0;
+    }
+    i = i + 1;
+  }
+}
+
+function __topaz_bigint_from_decimal(digits: string): bigint {
+  const buffer: BigIntBuffer = __topaz_bigint_buffer_new(digits.length + 1);
+  let i: number = 0;
+  while (i < digits.length) {
+    const code: number = digits.charCodeAt(i);
+    if (code < 48 || code > 57) {
+      __topaz_panic("topaz: invalid bigint literal");
+      return __topaz_bigint_buffer_to_bigint(buffer, 0);
+    }
+    __topaz_bigint_buffer_mul_small(buffer, 10);
+    __topaz_bigint_buffer_add_small(buffer, code - 48);
+    i = i + 1;
+  }
+  const sign: number = __topaz_bigint_buffer_len(buffer) === 0 ? 0 : 1;
+  return __topaz_bigint_buffer_to_bigint(buffer, sign);
+}
+
 function __topaz_bigint_mul_add_limb(
   buffer: BigIntBuffer,
   index: number,
