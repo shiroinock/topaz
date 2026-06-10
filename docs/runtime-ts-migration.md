@@ -142,7 +142,12 @@ diagnostics and the prelude preserves the range, truncation, and output-size
 checks. `__topaz_slice_normalize(n, len, def)` now handles the numeric
 normalization shared by `Array.prototype.slice(start?, end?)` while codegen
 keeps the receiver snapshot, raw bound temps, `hi < lo` clamp, destination
-allocation, reserve, and element copy loop. These helpers keep the public
+allocation, reserve, and element copy loop. `__topaz_string_char_code_at(s,
+index)` now handles `String.prototype.charCodeAt(index)` after codegen keeps
+the public arity/type diagnostics; it performs the public NaN, negative,
+out-of-range, and fractional truncation behavior in Topaz-subset TS, then
+delegates only the raw in-range byte read to `__topaz_string_byte_at(...)`.
+These helpers keep the public
 stdlib import shape, language surface, and diagnostics unchanged. The migrated path helpers' old C definitions have
 been removed from the embedded runtime header; `topaz_process_cwd()` is the only
 remaining C path fallback for `resolve`. The old C definitions for migrated
@@ -163,6 +168,9 @@ The current string-allocation boundary is:
 - `String.prototype.repeat` lives in the runtime prelude as an allocation
   client over `charCodeAt` and `__topaz_string_from_byte_codes(...)`, including
   the existing range and output-size checks;
+- `String.prototype.charCodeAt` public semantics live in the runtime prelude,
+  while C keeps only the raw `topaz_string_byte_at(...)` substrate used by the
+  hidden `__topaz_string_byte_at(...)` affordance;
 - `Array.prototype.slice` keeps monomorphized storage and copy in generated C,
   but its NaN-sentinel, negative-index, clamp, and truncation normalization now
   lives in `__topaz_slice_normalize(...)`;
@@ -240,6 +248,14 @@ NaN / negative / `>= 128` rejection and valid fractional truncation live in
 byte-code C substrate through `__topaz_string_from_byte_codes(Array<number>)`,
 so the stale dedicated C `topaz_string_from_char_code(...)` helper is removed
 without broadening string allocation migration.
+
+`String.prototype.charCodeAt(index)` now follows the scalar string-read split.
+The public call shape and diagnostics remain codegen-owned, while NaN input,
+negative input, out-of-range input, and positive fractional truncation live in
+`__topaz_string_char_code_at(s, index)`. The only C read helper left for this
+path is `topaz_string_byte_at(...)`, a raw byte-read substrate reachable only
+through hidden internal prelude calls. Byte-code string materialization still
+uses `topaz_string_from_byte_codes(...)`.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

@@ -9220,6 +9220,9 @@ class Emitter {
         if (callee.name === "__topaz_string_from_byte_codes") {
           return this.emitInternalPreludeStringFromByteCodes(expr);
         }
+        if (callee.name === "__topaz_string_byte_at") {
+          return this.emitInternalPreludeStringByteAt(expr);
+        }
       }
       if (callee.name === "readFileSync") {
         return this.emitNodeFsReadFileSync(expr);
@@ -9777,7 +9780,7 @@ class Emitter {
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_number`);
   }
 
-  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.57 prelude migration:
+  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.59 prelude migration:
   // String.prototype.charCodeAt / .slice / .repeat / .trimStart /
   // .startsWith / .endsWith. Arguments are exact Topaz types (no JS coercion).
   // Missing slice args lower to `(double)NAN` so the runtime prelude helper
@@ -9801,7 +9804,8 @@ class Emitter {
         );
       }
       const idx = this.emitWithExpected(indexArg, T_NUMBER);
-      return `topaz_string_char_code_at(${base}, ${idx})`;
+      const helper = this.requireInternalPreludeFunctionCName("__topaz_string_char_code_at", { pos: expr.pos });
+      return `${helper}(${base}, ${idx})`;
     }
     if (method === "slice") {
       if (expr.args.length > 2) {
@@ -10219,6 +10223,34 @@ class Emitter {
   private emitInternalPreludeStringFromByteCodes(expr: CallExpr): string {
     const arg = this.checkInternalPreludeStringFromByteCodesArgs(expr);
     return `topaz_string_from_byte_codes(${this.emitWithExpected(arg, arrayOf(T_NUMBER)!)})`;
+  }
+
+  private checkInternalPreludeStringByteAtArgs(expr: CallExpr): { sArg: Expr; indexArg: Expr } {
+    if (expr.args.length !== 2) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        "__topaz_string_byte_at expects exactly two arguments: (s: string, index: number)",
+      );
+    }
+    const sArg = expr.args[0];
+    const sType = this.inferType(sArg);
+    if (sType.kind !== "string") {
+      throw new CodegenError({ pos: sArg.pos }, `__topaz_string_byte_at string must be string, got ${typeIdent(sType)}`);
+    }
+    const indexArg = expr.args[1];
+    const indexType = this.inferType(indexArg);
+    if (indexType.kind !== "number") {
+      throw new CodegenError(
+        { pos: indexArg.pos },
+        `__topaz_string_byte_at index must be number, got ${typeIdent(indexType)}`,
+      );
+    }
+    return { sArg, indexArg };
+  }
+
+  private emitInternalPreludeStringByteAt(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeStringByteAtArgs(expr);
+    return `topaz_string_byte_at(${this.emitWithExpected(checked.sArg, T_STRING)}, ${this.emitWithExpected(checked.indexArg, T_NUMBER)})`;
   }
 
   // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
@@ -11795,6 +11827,10 @@ class Emitter {
           if (callee.name === "__topaz_string_from_byte_codes") {
             this.checkInternalPreludeStringFromByteCodesArgs(expr);
             return T_STRING;
+          }
+          if (callee.name === "__topaz_string_byte_at") {
+            this.checkInternalPreludeStringByteAtArgs(expr);
+            return T_NUMBER;
           }
         }
         if (callee.name === "readFileSync") {

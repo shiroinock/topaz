@@ -11,6 +11,7 @@ console.log(s.length);  // 5
 // --- charCodeAt: ASCII codepoints ---
 console.log(s.charCodeAt(0));  // 104 (h)
 console.log(s.charCodeAt(1));  // 101 (e)
+console.log(s.charCodeAt(1.8));  // 101 (fraction truncates toward zero)
 console.log(s.charCodeAt(4));  // 111 (o)
 
 // --- charCodeAt: out-of-range → NaN ---

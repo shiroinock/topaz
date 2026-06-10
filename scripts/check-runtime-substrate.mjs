@@ -215,9 +215,9 @@ const inventory = {
     migration: MIGRATION.CONTAINER_MONOMORPH,
     next: NEXT.CONTAINER_MONOMORPH,
   },
-  topaz_string_char_code_at: {
+  topaz_string_byte_at: {
     category: CATEGORY.STRING,
-    reason: "byte-oriented string primitive used by runtime prelude helpers.",
+    reason: "raw byte-read substrate used only through runtime prelude string helpers.",
     migration: MIGRATION.STRING_BUFFER_INTRINSICS,
     next: NEXT.STRING_BUFFER_INTRINSICS,
   },

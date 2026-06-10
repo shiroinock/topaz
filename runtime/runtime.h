@@ -357,12 +357,7 @@ static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
   return memcmp(a.data, b.data, a.len) == 0;
 }
 
-// Phase 1.5-6 prep #10: ASCII-only String.prototype.charCodeAt. JS spec
-// integer-truncates the index and returns NaN for out-of-range / NaN input.
-// Negative indices return NaN (no JS-style wrap-around — they treat as OOB).
-static inline topaz_number topaz_string_char_code_at(topaz_string s, topaz_number i) {
-  if (isnan(i)) return (topaz_number)NAN;
-  if (i < 0 || i >= (topaz_number)s.len) return (topaz_number)NAN;
+static inline topaz_number topaz_string_byte_at(topaz_string s, topaz_number i) {
   size_t idx = (size_t)i;
   return (topaz_number)(unsigned char)s.data[idx];
 }

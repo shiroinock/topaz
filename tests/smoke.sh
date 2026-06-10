@@ -266,6 +266,34 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_string_from_char_code]"
 
+  node dist/cli.js examples/string_method.ts --emit-c-only -o build/runtime_prelude_string_char_code_at > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_char_code_at" build/runtime_prelude_string_char_code_at.c; then
+    echo "FAIL [runtime_prelude_string_char_code_at]: missing stable String.charCodeAt prelude symbol" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_string_byte_at(" build/runtime_prelude_string_char_code_at.c; then
+    echo "FAIL [runtime_prelude_string_char_code_at]: missing raw string byte-read substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_char_code_at\s*\(" build/runtime_prelude_string_char_code_at.c; then
+    echo "FAIL [runtime_prelude_string_char_code_at]: stale charCodeAt C helper call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_number topaz_string_char_code_at\s*\(" build/runtime_prelude_string_char_code_at.c; then
+    echo "FAIL [runtime_prelude_string_char_code_at]: stale charCodeAt C helper definition embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_char_code_at.c -o build/runtime_prelude_string_char_code_at
+  local string_char_code_at_out
+  string_char_code_at_out=$(./build/runtime_prelude_string_char_code_at)
+  if [[ "$string_char_code_at_out" != $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef' ]]; then
+    echo "FAIL [runtime_prelude_string_char_code_at]:" >&2
+    echo "  expected string_method output" >&2
+    printf '%s\n' "$string_char_code_at_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_string_char_code_at]"
+
   node dist/cli.js examples/string_method.ts --emit-c-only -o build/runtime_prelude_string_slice > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_slice" build/runtime_prelude_string_slice.c; then
     echo "FAIL [runtime_prelude_string_slice]: missing stable String.slice prelude symbol" >&2
@@ -282,7 +310,7 @@ run_cli_smoke() {
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_slice.c -o build/runtime_prelude_string_slice
   local string_slice_out
   string_slice_out=$(./build/runtime_prelude_string_slice)
-  if [[ "$string_slice_out" != $'5\n104\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef' ]]; then
+  if [[ "$string_slice_out" != $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef' ]]; then
     echo "FAIL [runtime_prelude_string_slice]:" >&2
     printf '%s\n' "$string_slice_out" | sed 's/^/  got: /' >&2
     exit 1
@@ -959,6 +987,8 @@ run_fail_case runtime_prelude_string_slice_hidden_fail examples/runtime_prelude_
 run_fail_case runtime_prelude_string_concat_hidden_fail examples/runtime_prelude_string_concat_hidden_fail.ts "unknown identifier '__topaz_string_concat'"
 run_fail_case runtime_prelude_string_repeat_hidden_fail examples/runtime_prelude_string_repeat_hidden_fail.ts "unknown identifier '__topaz_string_repeat'"
 run_fail_case runtime_prelude_array_slice_normalize_hidden_fail examples/runtime_prelude_array_slice_normalize_hidden_fail.ts "unknown identifier '__topaz_slice_normalize'"
+run_fail_case runtime_prelude_string_char_code_at_hidden_fail examples/runtime_prelude_string_char_code_at_hidden_fail.ts "unknown identifier '__topaz_string_char_code_at'"
+run_fail_case runtime_prelude_string_byte_at_hidden_fail examples/runtime_prelude_string_byte_at_hidden_fail.ts "unknown identifier '__topaz_string_byte_at'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
@@ -1096,7 +1126,7 @@ run_case module_const_hoist $'true\nfalse\ntrue\nfalse\ntrue\ntrue\n51\n-1\n42\n
 run_fail_case module_const_hoist_let_fail examples/module_const_hoist_let_fail.ts "unknown identifier 'counter'"
 run_fail_case module_const_hoist_nonscalar_fail examples/module_const_hoist_nonscalar_fail.ts "unknown identifier 'GREETING'"
 
-run_case string_method $'5\n104\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef'
+run_case string_method $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef'
 run_fail_case string_char_code_at_arity_fail examples/string_char_code_at_arity_fail.ts "String.charCodeAt expects exactly one argument"
 run_fail_case string_char_code_at_arg_type_fail examples/string_char_code_at_arg_type_fail.ts "String.charCodeAt argument must be number"
 run_fail_case string_slice_arg_type_fail examples/string_slice_arg_type_fail.ts "String.slice argument must be number"

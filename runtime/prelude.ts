@@ -27,6 +27,14 @@ function __topaz_string_from_char_code(n: number): string {
   return __topaz_string_from_byte_codes(codes);
 }
 
+function __topaz_string_char_code_at(s: string, index: number): number {
+  if (index !== index) return 0 / 0;
+  if (index < 0) return 0 / 0;
+  if (index >= s.length) return 0 / 0;
+  const i: number = index - (index % 1);
+  return __topaz_string_byte_at(s, i);
+}
+
 function __topaz_string_concat(a: string, b: string): string {
   const codes: Array<number> = [];
   let i: number = 0;
