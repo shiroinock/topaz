@@ -8,6 +8,52 @@ pnpm run check:runtime-header > /dev/null
 echo "PASS [runtime_header_fresh]"
 pnpm run check:runtime-prelude > /dev/null
 echo "PASS [runtime_prelude_fresh]"
+builtin_effect_out=$(pnpm run check:builtin-effects)
+if [[ "${builtin_effect_out}" != *"builtin effect inventory ok"* ]]; then
+  echo "FAIL [builtin_effect_inventory]: missing ok summary" >&2
+  printf '%s\n' "${builtin_effect_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for effect in fs.read fs.metadata fs.write process.argv process.exit io.stdout io.stderr process.spawn; do
+  if [[ "${builtin_effect_out}" != *"  ${effect}: "* ]]; then
+    echo "FAIL [builtin_effect_inventory]: missing effect vocabulary entry ${effect}" >&2
+    printf '%s\n' "${builtin_effect_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+for status in public compat synthetic_compat; do
+  if [[ "${builtin_effect_out}" != *"  ${status}: "* ]]; then
+    echo "FAIL [builtin_effect_inventory]: missing status summary ${status}" >&2
+    printf '%s\n' "${builtin_effect_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+mkdir -p build
+tmp_builtin_effects="build/builtin_effect_unknown_probe.mjs"
+printf '%s\n' \
+  'export function builtinDescriptors() {' \
+  '  return [' \
+  '    {' \
+  '      kind: "import",' \
+  '      specifier: "std/fs",' \
+  '      importedName: "readFileSync",' \
+  '      semanticName: "fs.readFileSync",' \
+  '      status: "public",' \
+  '      effects: ["fs.delete"],' \
+  '      explanation: "probe descriptor"' \
+  '    }' \
+  '  ];' \
+  '}' > "${tmp_builtin_effects}"
+if builtin_effect_err=$(node scripts/check-builtin-effects.mjs "${tmp_builtin_effects}" 2>&1); then
+  echo "FAIL [builtin_effect_inventory]: expected unknown effect failure" >&2
+  exit 1
+fi
+if [[ "${builtin_effect_err}" != *"unknown effect 'fs.delete'"* ]]; then
+  echo "FAIL [builtin_effect_inventory]: missing unknown effect diagnostic" >&2
+  printf '%s\n' "${builtin_effect_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [builtin_effect_inventory]"
 release_workflow=".github/workflows/release-artifact.yml"
 if ! grep -Fq 'release_flags=(--draft)' "${release_workflow}"; then
   echo "FAIL [release_workflow_prerelease]: missing draft release flag baseline" >&2
