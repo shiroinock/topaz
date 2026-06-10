@@ -237,6 +237,30 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_parse_int]"
 
+  node dist/cli.js examples/string_from_char_code.ts --emit-c-only -o build/runtime_prelude_string_from_char_code > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_from_char_code" build/runtime_prelude_string_from_char_code.c; then
+    echo "FAIL [runtime_prelude_string_from_char_code]: missing stable fromCharCode prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_from_char_code\s*\(" build/runtime_prelude_string_from_char_code.c; then
+    echo "FAIL [runtime_prelude_string_from_char_code]: stale fromCharCode C helper call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_string topaz_string_from_char_code\s*\(" build/runtime_prelude_string_from_char_code.c; then
+    echo "FAIL [runtime_prelude_string_from_char_code]: stale fromCharCode C helper definition embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_from_char_code.c -o build/runtime_prelude_string_from_char_code
+  local from_char_code_out
+  from_char_code_out=$(./build/runtime_prelude_string_from_char_code)
+  if [[ "$from_char_code_out" != $'A\na\n0\nz\nB\n1\n72\nHello\n5\nA\nz\nmark=!\n1\n1\n127\nA\nA\nD\nZ\nabcde' ]]; then
+    echo "FAIL [runtime_prelude_string_from_char_code]:" >&2
+    echo "  expected string_from_char_code output" >&2
+    printf '%s\n' "$from_char_code_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_string_from_char_code]"
+
   node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_starts_with > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_starts_with" build/runtime_prelude_starts_with.c; then
     echo "FAIL [runtime_prelude_starts_with]: missing stable startsWith prelude symbol" >&2
@@ -826,6 +850,7 @@ run_fail_case runtime_prelude_path_resolve_hidden_fail examples/runtime_prelude_
 run_fail_case runtime_prelude_panic_hidden_fail examples/runtime_prelude_panic_hidden_fail.ts "unknown identifier '__topaz_panic'"
 run_fail_case runtime_prelude_byte_codes_hidden_fail examples/runtime_prelude_byte_codes_hidden_fail.ts "unknown identifier '__topaz_string_from_byte_codes'"
 run_fail_case runtime_prelude_parse_int_hidden_fail examples/runtime_prelude_parse_int_hidden_fail.ts "unknown identifier '__topaz_parse_int'"
+run_fail_case runtime_prelude_string_from_char_code_hidden_fail examples/runtime_prelude_string_from_char_code_hidden_fail.ts "unknown identifier '__topaz_string_from_char_code'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

@@ -159,10 +159,6 @@ const inventory = {
     category: CATEGORY.STRING,
     reason: "string allocation primitive delegated to by migrated prelude helpers.",
   },
-  topaz_string_from_char_code: {
-    category: CATEGORY.STRING,
-    reason: "string allocation primitive for String.fromCharCode lowering.",
-  },
   topaz_string_from_byte_codes: {
     category: CATEGORY.STRING,
     reason: "internal runtime prelude byte-preserving string allocation primitive.",

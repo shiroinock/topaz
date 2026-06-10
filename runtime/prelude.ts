@@ -16,6 +16,17 @@ function __topaz_string_eq(a: string, b: string): boolean {
   return true;
 }
 
+function __topaz_string_from_char_code(n: number): string {
+  if (n !== n || n < 0 || n >= 128) {
+    __topaz_panic("topaz: String.fromCharCode argument out of ASCII range");
+    return "";
+  }
+  const code: number = n - (n % 1);
+  const codes: Array<number> = [];
+  codes.push(code);
+  return __topaz_string_from_byte_codes(codes);
+}
+
 function __topaz_string_starts_with(s: string, search: string): boolean {
   if (search.length > s.length) return false;
   let i: number = 0;

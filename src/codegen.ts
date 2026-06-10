@@ -9887,7 +9887,8 @@ class Emitter {
       );
     }
     const code = this.emitWithExpected(codeArg, T_NUMBER);
-    return `topaz_string_from_char_code(${code})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_string_from_char_code", { pos: expr.pos });
+    return `${helper}(${code})`;
   }
 
   private inferStringStaticReturn(

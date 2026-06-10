@@ -47,9 +47,9 @@ Do not migrate a helper just because its public TypeScript shape looks simple.
 Split string work into two buckets:
 
 - **Allocation primitives** such as `String.prototype.slice`,
-  `String.prototype.repeat`, string concatenation, and
-  `String.fromCharCode(...)` stay on the C substrate until Topaz has explicit
-  internal string-buffer intrinsics.
+  `String.prototype.repeat`, string concatenation, and byte-buffer materializing
+  helpers stay on the C substrate until Topaz has explicit internal
+  string-buffer intrinsics.
 - **Allocation clients** may move to the runtime prelude if their algorithmic
   work is pure Topaz-subset control flow and they delegate the final string
   allocation/copying to those existing primitives without changing behavior.
@@ -111,11 +111,13 @@ scanning now lives only in `__topaz_string_is_trim_start_code(...)`.
 
 The current string-allocation boundary is:
 
-- allocation primitives (`slice`, `repeat`, concat, `String.fromCharCode`) stay
-  on the C substrate path until explicit string-buffer intrinsics exist;
+- allocation primitives (`slice`, `repeat`, concat, byte-code string
+  materialization) stay on the C substrate path until explicit string-buffer
+  intrinsics exist;
 - allocation clients may migrate to prelude TS if they keep their observable
   behavior and delegate the final allocation to those existing compiler-owned
-  primitives; `trimStart` and `extname` are the first migrated examples.
+  primitives; `trimStart`, `extname`, and the ASCII scalar policy for
+  `String.fromCharCode` are migrated examples.
 
 Path helpers are migrated one at a time. `extname` qualifies because it is a
 pure scan over a single string and delegates the final substring allocation to
@@ -176,6 +178,14 @@ Global `parseInt(s, radix)` now follows the scalar prelude lane as
 auto-base prefix handling, digit scanning, and NaN-on-no-digit all live in
 Topaz-subset TS. `parseFloat(s)` remains C substrate because it intentionally
 delegates decimal/exponent parsing and roundoff behavior to libc `strtod`.
+
+`String.fromCharCode(n)` now follows the same split boundary for one-byte ASCII
+strings. The public call shape and diagnostics remain codegen-owned, while the
+NaN / negative / `>= 128` rejection and valid fractional truncation live in
+`__topaz_string_from_char_code(n)`. Final allocation is still delegated to the
+byte-code C substrate through `__topaz_string_from_byte_codes(Array<number>)`,
+so the stale dedicated C `topaz_string_from_char_code(...)` helper is removed
+without broadening string allocation migration.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 
