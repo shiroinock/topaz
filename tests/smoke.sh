@@ -212,6 +212,22 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_starts_with]"
 
+  node dist/cli.js examples/template_literal.ts --emit-c-only -o build/runtime_prelude_boolean_to_string > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_boolean_to_string" build/runtime_prelude_boolean_to_string.c; then
+    echo "FAIL [runtime_prelude_boolean_to_string]: missing stable boolean-to-string prelude symbol" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_boolean_to_string.c -o build/runtime_prelude_boolean_to_string
+  local boolean_to_string_out
+  boolean_to_string_out=$(./build/runtime_prelude_boolean_to_string)
+  if [[ "$boolean_to_string_out" != $'hello, topaz!\ntopaz is 42\nflag=true\ntopaz\ntopaz/42\n42true\npi=3.14\nsum=0.30000000000000004\nbig=1e+21\ntiny=1e-7\ntwice(42)=84\nlen(topaz)=5\nn+1=43\nanswer=7\n?=7\n(3, 4)\nnorm=25\nq="topaz"\ntab\there\n[0][1][2][3][4]' ]]; then
+    echo "FAIL [runtime_prelude_boolean_to_string]:" >&2
+    echo "  expected template_literal output" >&2
+    printf '%s\n' "$boolean_to_string_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_boolean_to_string]"
+
   node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_ends_with > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_ends_with" build/runtime_prelude_ends_with.c; then
     echo "FAIL [runtime_prelude_ends_with]: missing stable endsWith prelude symbol" >&2
@@ -440,6 +456,7 @@ run_case array_method_join $'1,2,3\n5\n1, 2, 3\n7\n123\n3\n1 -> 2 -> 3\nalpha-be
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_module_case module_function_collision examples/module_function_collision_main.ts $'15\n10\n17'
 run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.ts "unknown identifier '__topaz_runtime_prelude_init'"
+run_fail_case runtime_prelude_boolean_to_string_hidden_fail examples/runtime_prelude_boolean_to_string_hidden_fail.ts "unknown identifier '__topaz_boolean_to_string'"
 run_fail_case runtime_prelude_starts_with_hidden_fail examples/runtime_prelude_starts_with_hidden_fail.ts "unknown identifier '__topaz_string_starts_with'"
 run_fail_case runtime_prelude_ends_with_hidden_fail examples/runtime_prelude_ends_with_hidden_fail.ts "unknown identifier '__topaz_string_ends_with'"
 run_fail_case runtime_prelude_trim_start_hidden_fail examples/runtime_prelude_trim_start_hidden_fail.ts "unknown identifier '__topaz_string_trim_start'"

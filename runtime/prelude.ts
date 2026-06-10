@@ -1,6 +1,11 @@
 function __topaz_runtime_prelude_init(): void {
 }
 
+function __topaz_boolean_to_string(value: boolean): string {
+  if (value) return "true";
+  return "false";
+}
+
 function __topaz_string_starts_with(s: string, search: string): boolean {
   if (search.length > s.length) return false;
   let i: number = 0;

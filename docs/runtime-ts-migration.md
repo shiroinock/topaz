@@ -81,8 +81,11 @@ imported `node:path` / `std/path` `extname(path)`. It is followed by
 `__topaz_path_dirname(path)`, which codegen targets for imported `dirname(path)`.
 The next helpers on the same allocation-client lane are
 `__topaz_path_basename(path)` and `__topaz_path_basename_ext(path, ext)`, which
-codegen targets for imported `basename(path, ext?)`. These path helpers keep
-the public stdlib import shape and diagnostics unchanged.
+codegen targets for imported `basename(path, ext?)`. The next scalar literal
+client is `__topaz_boolean_to_string(value)`, which codegen targets for
+compiler-owned boolean stringification in template literal substitutions and
+`Array<boolean>.join(...)`. These helpers keep the public stdlib import shape,
+language surface, and diagnostics unchanged.
 The current string-allocation boundary is:
 
 - allocation primitives (`slice`, `repeat`, concat, `String.fromCharCode`) stay
@@ -100,6 +103,9 @@ the one-argument helper scans the last path segment, and the two-argument helper
 adds suffix matching before delegating final allocation to `path.slice(start,
 end)`. Helpers that need path normalization, host IO, varargs, or mutable
 buffers stay on the C substrate path until those boundaries are explicit.
+Boolean stringification also qualifies for the prelude lane because it is a
+pure scalar-to-literal choice and does not allocate beyond returning string
+literals. Direct console boolean IO remains a substrate IO helper.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

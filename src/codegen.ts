@@ -2816,16 +2816,21 @@ class Emitter {
     const tag = arrayShortName(t);
     const elem = arrayElem(t)!;
     let toStringStmt: string = "";
+    let forwardDecl: string | undefined = undefined;
     if (elem.kind === "string") {
       toStringStmt = `topaz_string __e = src->data[i];`;
     } else if (elem.kind === "number") {
       toStringStmt = `topaz_string __e = topaz_number_to_string(src->data[i]);`;
     } else if (elem.kind === "boolean") {
-      toStringStmt = `topaz_string __e = topaz_boolean_to_string(src->data[i]);`;
+      const booleanToString = this.requireInternalPreludeFunctionCName("__topaz_boolean_to_string", { pos: 0 });
+      forwardDecl = `static __attribute__((unused)) topaz_string ${booleanToString}(topaz_boolean value);`;
+      toStringStmt = `topaz_string __e = ${booleanToString}(src->data[i]);`;
     } else {
       throwInternalCodegenError(`emitArrayJoinHelper: unsupported elem ${typeIdent(elem)}`);
     }
-    return [
+    const lines: Array<string> = [];
+    if (forwardDecl !== undefined) lines.push(forwardDecl);
+    lines.push(
       `static inline topaz_string topaz_array_${tag}_join(topaz_array_${tag} *src, topaz_string sep) {`,
       `  size_t n = src->len;`,
       `  if (n == 0) { topaz_string r = { "", 0 }; return r; }`,
@@ -2849,7 +2854,8 @@ class Emitter {
       `  topaz_string r = { buf, total };`,
       `  return r;`,
       `}`,
-    ].join("\n");
+    );
+    return lines.join("\n");
   }
 
   // Phase 1.5-3.5g-iterator: emit the per-container state struct used by every
@@ -8930,8 +8936,9 @@ class Emitter {
 
   // Phase 1.5-3.5: template literal -> left-associative `topaz_string_concat`
   // chain. ${} substitutions go through `topaz_number_to_string` /
-  // `topaz_boolean_to_string` / identity (for string) so that arena alloc cost
-  // matches the leak budget we already absorb for `+` on string operands.
+  // the runtime prelude boolean stringifier / identity (for string) so that
+  // arena alloc cost matches the leak budget we already absorb for `+` on
+  // string operands.
   // Empty literal fragments (e.g. between adjacent `${a}${b}`) are skipped so
   // we don't burn one arena alloc per gap. A no-substitution template
   // (`template_lit` with empty subs) yields the head as a plain string literal,
@@ -8942,7 +8949,10 @@ class Emitter {
       const inner = this.emitExpression(sub);
       if (t.kind === "string") return inner;
       if (t.kind === "number") return `topaz_number_to_string(${inner})`;
-      if (t.kind === "boolean") return `topaz_boolean_to_string(${inner})`;
+      if (t.kind === "boolean") {
+        const booleanToString = this.requireInternalPreludeFunctionCName("__topaz_boolean_to_string", { pos: sub.pos });
+        return `${booleanToString}(${inner})`;
+      }
       if (t.kind === "bigint") return `topaz_bigint_to_string(${inner})`;
       // inferType's TemplateLit branch already vets each span; this arm is
       // defensive in case stringify gets reused later.
