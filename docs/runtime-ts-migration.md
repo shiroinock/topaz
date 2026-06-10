@@ -94,7 +94,10 @@ packages the already checked variadic arguments into an internal
 surface, and diagnostics unchanged. The migrated path helpers' old C
 definitions have been removed from the embedded runtime header; only
 `topaz_path_resolve(...)` and its `topaz_path_normalize_string(...)` dependency
-remain on the C path boundary.
+remain on the C path boundary. The old C definitions for migrated
+`startsWith`, `endsWith`, `trimStart`, and compiler-owned boolean
+stringification are also removed from the embedded runtime header; their stable
+internal prelude helpers remain the only lowering targets.
 
 The current string-allocation boundary is:
 
@@ -121,10 +124,11 @@ path until the host fallback boundary is explicit; `topaz_path_normalize_string`
 stays there while `resolve` depends on it.
 Boolean stringification also qualifies for the prelude lane because it is a
 pure scalar-to-literal choice and does not allocate beyond returning string
-literals. Direct console boolean IO remains a substrate IO helper. String byte
-equality qualifies because it is pure length and byte scanning over existing
-string intrinsics, but Map/Set string key equality remains on the C substrate
-until container monomorphization has a replacement.
+literals. Its old C helper definition is removed after codegen targets only the
+stable internal prelude symbol. Direct console boolean IO remains a substrate IO
+helper. String byte equality qualifies because it is pure length and byte
+scanning over existing string intrinsics, but Map/Set string key equality
+remains on the C substrate until container monomorphization has a replacement.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

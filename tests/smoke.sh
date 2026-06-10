@@ -201,6 +201,10 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_starts_with]: missing stable startsWith prelude symbol" >&2
     exit 1
   fi
+  if grep -Eq "static inline topaz_boolean topaz_string_starts_with\\(" build/runtime_prelude_starts_with.c; then
+    echo "FAIL [runtime_prelude_starts_with]: migrated startsWith helper definition still embedded" >&2
+    exit 1
+  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_starts_with.c -o build/runtime_prelude_starts_with
   local starts_with_out
   starts_with_out=$(./build/runtime_prelude_starts_with)
@@ -215,6 +219,10 @@ run_cli_smoke() {
   node dist/cli.js examples/template_literal.ts --emit-c-only -o build/runtime_prelude_boolean_to_string > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_boolean_to_string" build/runtime_prelude_boolean_to_string.c; then
     echo "FAIL [runtime_prelude_boolean_to_string]: missing stable boolean-to-string prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_string topaz_boolean_to_string\\(" build/runtime_prelude_boolean_to_string.c; then
+    echo "FAIL [runtime_prelude_boolean_to_string]: migrated boolean-to-string helper definition still embedded" >&2
     exit 1
   fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_boolean_to_string.c -o build/runtime_prelude_boolean_to_string
@@ -282,6 +290,10 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_ends_with]: missing stable endsWith prelude symbol" >&2
     exit 1
   fi
+  if grep -Eq "static inline topaz_boolean topaz_string_ends_with\\(" build/runtime_prelude_ends_with.c; then
+    echo "FAIL [runtime_prelude_ends_with]: migrated endsWith helper definition still embedded" >&2
+    exit 1
+  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_ends_with.c -o build/runtime_prelude_ends_with
   local ends_with_out
   ends_with_out=$(./build/runtime_prelude_ends_with)
@@ -296,6 +308,10 @@ run_cli_smoke() {
   node dist/cli.js examples/string_trim_start.ts --emit-c-only -o build/runtime_prelude_trim_start > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_trim_start" build/runtime_prelude_trim_start.c; then
     echo "FAIL [runtime_prelude_trim_start]: missing stable trimStart prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_string topaz_string_trim_start\\(" build/runtime_prelude_trim_start.c; then
+    echo "FAIL [runtime_prelude_trim_start]: migrated trimStart helper definition still embedded" >&2
     exit 1
   fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_trim_start.c -o build/runtime_prelude_trim_start

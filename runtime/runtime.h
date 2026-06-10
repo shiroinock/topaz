@@ -367,35 +367,8 @@ static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
   return memcmp(a.data, b.data, a.len) == 0;
 }
 
-static inline topaz_boolean topaz_string_starts_with(topaz_string s, topaz_string search) {
-  if (search.len > s.len) return false;
-  return memcmp(s.data, search.data, search.len) == 0;
-}
-
-static inline topaz_boolean topaz_string_ends_with(topaz_string s, topaz_string search) {
-  if (search.len > s.len) return false;
-  return memcmp(s.data + (s.len - search.len), search.data, search.len) == 0;
-}
-
 static inline topaz_boolean topaz_string_is_trim_start_byte(unsigned char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-
-static inline topaz_string topaz_string_trim_start(topaz_string s) {
-  size_t start = 0;
-  while (start < s.len && topaz_string_is_trim_start_byte((unsigned char)s.data[start])) {
-    start += 1;
-  }
-  size_t out_len = s.len - start;
-  if (out_len == 0) {
-    topaz_string r = { "", 0 };
-    return r;
-  }
-  char *buf = (char *)topaz_arena_alloc(out_len + 1);
-  memcpy(buf, s.data + start, out_len);
-  buf[out_len] = '\0';
-  topaz_string r = { buf, out_len };
-  return r;
 }
 
 #ifndef TOPAZ_STRING_REPEAT_MAX_BYTES
@@ -805,17 +778,6 @@ static inline void topaz_console_error_boolean(topaz_boolean b) {
 
 static inline void topaz_console_warn_boolean(topaz_boolean b) {
   topaz_console_error_boolean(b);
-}
-
-// Phase 1.5-3.5: boolean → string. Returns a `topaz_string` pointing into a
-// `static const` literal; no arena alloc, immutable byte string.
-static inline topaz_string topaz_boolean_to_string(topaz_boolean b) {
-  static const char true_str[]  = "true";
-  static const char false_str[] = "false";
-  topaz_string r;
-  if (b) { r.data = true_str;  r.len = 4; }
-  else   { r.data = false_str; r.len = 5; }
-  return r;
 }
 
 // Phase 1.2 / 1.5-3.5: ECMA-262 ToString(Number). Shortest round-trip via
