@@ -415,6 +415,20 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_string_repeat]: stale String.repeat max macro embedded" >&2
     exit 1
   fi
+  local string_repeat_body
+  string_repeat_body=$(awk '
+    /^static __attribute__\(\(unused\)\) topaz_string topaz_fn_runtime_prelude___topaz_string_repeat\(topaz_string s, topaz_number count\) \{/ { in_fn = 1 }
+    in_fn { print }
+    in_fn && /^}$/ { exit }
+  ' build/runtime_prelude_string_repeat.c)
+  if ! grep -q "topaz_string_buffer_" <<< "$string_repeat_body"; then
+    echo "FAIL [runtime_prelude_string_repeat]: missing string buffer intrinsic substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_from_byte_codes\s*\(" <<< "$string_repeat_body"; then
+    echo "FAIL [runtime_prelude_string_repeat]: old byte-code materialization helper still used" >&2
+    exit 1
+  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_repeat.c -o build/runtime_prelude_string_repeat
   local string_repeat_out
   string_repeat_out=$(./build/runtime_prelude_string_repeat)

@@ -55,17 +55,13 @@ function __topaz_string_repeat(s: string, count: number): string {
     return "";
   }
 
-  const codes: Array<number> = [];
+  const buffer: StringBuffer = __topaz_string_buffer_new(s.length * n);
   let repeatIndex: number = 0;
   while (repeatIndex < n) {
-    let i: number = 0;
-    while (i < s.length) {
-      codes.push(s.charCodeAt(i));
-      i = i + 1;
-    }
+    __topaz_string_buffer_append_string(buffer, s);
     repeatIndex = repeatIndex + 1;
   }
-  return __topaz_string_from_byte_codes(codes);
+  return __topaz_string_buffer_to_string(buffer);
 }
 
 function __topaz_slice_normalize(n: number, len: number, def: number): number {
