@@ -189,7 +189,13 @@ export class Parser {
       const item: ModuleItem = this.parseModuleItem();
       items.push(item);
     }
-    return { filePath: this.file, lineStarts: this.lineStarts, items: items };
+    return {
+      filePath: this.file,
+      isInternalModule: false,
+      stableModuleId: "",
+      lineStarts: this.lineStarts,
+      items: items,
+    };
   }
 
   parseModuleItem(): ModuleItem {
@@ -1956,9 +1962,13 @@ function parseNumberLiteral(text: string): number {
   return parseFloat(text);
 }
 
-export function parseFile(filePath: string): SourceModule {
-  const source: string = readFileSync(filePath, "utf8");
+export function parseSource(filePath: string, source: string): SourceModule {
   const tokens: Array<Token> = tokenize(source, filePath);
   const parser: Parser = new Parser(tokens, filePath, computeLineStarts(source));
   return parser.parseModule();
+}
+
+export function parseFile(filePath: string): SourceModule {
+  const source: string = readFileSync(filePath, "utf8");
+  return parseSource(filePath, source);
 }

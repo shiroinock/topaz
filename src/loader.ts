@@ -3,7 +3,8 @@ import { dirname, resolve } from "node:path";
 
 import { ImportDecl, ImportSpecifier, SourceModule } from "./ast.js";
 import { allowedBuiltinImportNames, isAllowedBuiltinImport, isBuiltinImportSpecifier } from "./builtin_descriptors.js";
-import { parseFile } from "./topaz_parser.js";
+import { runtimePreludeSource } from "./runtime_prelude.js";
+import { parseFile, parseSource } from "./topaz_parser.js";
 
 // Phase 1.5-6g-1: production loading now uses the native Topaz parser. The
 // loader still owns module-specifier validation, DFS order, and cycle errors;
@@ -25,7 +26,10 @@ export function loadModuleGraph(rootPath: string): ModuleGraph {
   const root = resolve(rootPath);
   const state = new LoaderState();
   state.visit(root, undefined);
-  return { files: state.order, loaded: state.loadedPaths() };
+  const prelude = parseSource("runtime/prelude.ts", runtimePreludeSource());
+  prelude.isInternalModule = true;
+  prelude.stableModuleId = "runtime_prelude";
+  return { files: [prelude, ...state.order], loaded: state.loadedPaths() };
 }
 
 class LoaderState {

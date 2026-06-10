@@ -6,6 +6,8 @@ cd "$(dirname "$0")/.."
 pnpm run build > /dev/null
 pnpm run check:runtime-header > /dev/null
 echo "PASS [runtime_header_fresh]"
+pnpm run check:runtime-prelude > /dev/null
+echo "PASS [runtime_prelude_fresh]"
 
 mkdir -p build
 
@@ -178,6 +180,22 @@ run_cli_smoke() {
   fi
   echo "PASS [cli_emit_c_only]"
 
+  node dist/cli.js examples/fib.ts --emit-c-only -o build/runtime_prelude_embedded > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_runtime_prelude_init" build/runtime_prelude_embedded.c; then
+    echo "FAIL [runtime_prelude_embedded]: missing stable prelude init symbol" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_embedded.c -o build/runtime_prelude_embedded
+  local prelude_out
+  prelude_out=$(./build/runtime_prelude_embedded)
+  if [[ "$prelude_out" != "5702887" ]]; then
+    echo "FAIL [runtime_prelude_embedded]:" >&2
+    echo "  expected: 5702887" >&2
+    echo "  got: $prelude_out" >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_embedded]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -321,6 +339,7 @@ run_case array_method_join $'1,2,3\n5\n1, 2, 3\n7\n123\n3\n1 -> 2 -> 3\nalpha-be
 
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
 run_module_case module_function_collision examples/module_function_collision_main.ts $'15\n10\n17'
+run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.ts "unknown identifier '__topaz_runtime_prelude_init'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

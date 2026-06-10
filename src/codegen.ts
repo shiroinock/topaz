@@ -2012,6 +2012,7 @@ class Emitter {
   }
 
   private moduleId(sf: SourceModule): string {
+    if (sf.stableModuleId !== "") return sf.stableModuleId;
     for (let i = 0; i < this.moduleIdModules.length; i++) {
       if (this.moduleIdModules[i] === sf) return this.moduleIdValues[i];
     }
@@ -2043,11 +2044,13 @@ class Emitter {
 
   private resolveFunctionSig(name: string, anchor: { pos: number }): TopLevelFunctionSig | undefined {
     const matches: Array<TopLevelFunctionSig> = [];
+    const current = g_currentModule;
     for (const sig of this.functionSigs) {
-      if (sig.name === name) matches.push(sig);
+      if (sig.name !== name) continue;
+      if (current !== undefined && sig.sf.isInternalModule !== current.isInternalModule) continue;
+      matches.push(sig);
     }
     if (matches.length === 0) return undefined;
-    const current = g_currentModule;
     if (current !== undefined) {
       const local = matches.filter((sig) => sig.sf === current);
       if (local.length > 1) {
@@ -2062,6 +2065,15 @@ class Emitter {
     );
   }
 
+  private internalPreludeInitCName(): string | undefined {
+    for (const sig of this.functionSigs) {
+      if (sig.name === "__topaz_runtime_prelude_init" && sig.sf.isInternalModule) {
+        return sig.cName;
+      }
+    }
+    return undefined;
+  }
+
   emit(sourceFiles: Array<SourceModule>): string {
     if (sourceFiles.length === 0) {
       throwInternalCodegenError("codegen: at least one source file is required");
@@ -2072,7 +2084,8 @@ class Emitter {
     this.moduleIdValues = emptyModuleIdValues;
     for (let i = 0; i < sourceFiles.length; i++) {
       this.moduleIdModules.push(sourceFiles[i]);
-      this.moduleIdValues.push(`m${i}`);
+      const stableModuleId = sourceFiles[i].stableModuleId;
+      this.moduleIdValues.push(stableModuleId !== "" ? stableModuleId : `m${i}`);
     }
     // Phase 1.5-6e-4: codegen consumes Topaz `SourceModule[]` directly (the
     // `convertFromTsc` bridge now lives in cli.ts). `extractDecls` flattens
@@ -2535,6 +2548,10 @@ class Emitter {
     // -Wextra even when the program never touches process.argv.
     out.push("int main(int __topaz_argc, char **__topaz_argv) {");
     out.push("  topaz_runtime_init_argv(__topaz_argc, __topaz_argv);");
+    const preludeInit = this.internalPreludeInitCName();
+    if (preludeInit !== undefined) {
+      out.push(`  ${preludeInit}();`);
+    }
     this.scope.push();
     for (const topEntry of topLevel) {
       const stmt = topEntry.stmt;

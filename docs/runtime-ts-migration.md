@@ -57,6 +57,13 @@ The compiler needs an internal prelude lane before any helper can move:
   internal compiler errors unless the prelude source itself is being developed.
 - Keep the generated native compiler and `pnpm run test:selfhost` as the gate.
 
+`runtime/prelude.ts` is embedded into `src/runtime_prelude.ts` by
+`pnpm run generate:runtime-prelude`. Normal compilation parses that embedded
+source as an internal module before user modules and gives it the stable C
+module id `runtime_prelude`. The skeleton currently emits only the no-op
+`__topaz_runtime_prelude_init()` function so helper migration can begin later
+without reading repo files at generated-compiler runtime.
+
 ## Migration Rule
 
 Each migrated helper must keep the observable generated program behavior:
@@ -66,6 +73,8 @@ Each migrated helper must keep the observable generated program behavior:
   positive case when the behavior is user-visible.
 - `pnpm run check:runtime-header` must pass so the embedded C substrate in
   `src/runtime_header.ts` matches `runtime/runtime.h`.
+- `pnpm run check:runtime-prelude` must pass so the embedded prelude source in
+  `src/runtime_prelude.ts` matches `runtime/prelude.ts`.
 - `pnpm run build:release` must still pass the self-host fixed-point and
   binary-only release smoke.
 

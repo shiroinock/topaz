@@ -13,12 +13,14 @@ pnpm run build
 pnpm test
 ```
 
-When `runtime/runtime.h` changes, refresh the embedded compiler copy before
-testing:
+When `runtime/runtime.h` or `runtime/prelude.ts` changes, refresh the embedded
+compiler copies before testing:
 
 ```sh
 pnpm run generate:runtime-header
+pnpm run generate:runtime-prelude
 pnpm run check:runtime-header
+pnpm run check:runtime-prelude
 ```
 
 ## Compile And Run
@@ -46,15 +48,17 @@ The self-hosted compiler can be built as a native binary:
 pnpm run build:release
 ```
 
-This first checks that `src/runtime_header.ts` is fresh, then runs the self-host
-fixed-point gate and writes:
+This first checks that `src/runtime_header.ts` and `src/runtime_prelude.ts` are
+fresh, then runs the self-host fixed-point gate and writes:
 
 - `dist-release/topaz-darwin-arm64` on Apple Silicon macOS.
 - `dist-release/SHA256SUMS`.
 
 The release artifact is the native compiler. It can compile a Topaz-subset
-source graph without Node.js or a checked-out `runtime/` directory. Downloaded
-GitHub Release assets may need `chmod +x` before first use:
+source graph without Node.js or a checked-out `runtime/` directory. The
+compiler embeds the internal runtime prelude source; it is not a user-importable
+stdlib surface. Downloaded GitHub Release assets may need `chmod +x` before
+first use:
 
 ```sh
 (
