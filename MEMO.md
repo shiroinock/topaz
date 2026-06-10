@@ -270,6 +270,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.29 runtime header freshness check** — `src/runtime_header.ts` が `runtime/runtime.h` から再生成済みかを既存 generator の `--check` で検証し、通常 smoke と release artifact build の前段 gate に組み込んだ。決定ログは `docs/adr/0356-runtime-header-freshness-check.md`。
 - [x] **3.30 embedded runtime prelude skeleton** — `runtime/prelude.ts` を `src/runtime_prelude.ts` に埋め込み、loader が internal module として user module より前に parse する lane を追加した。stable C module id `runtime_prelude` と no-op init symbol を持つが、user name resolution からは隠す。決定ログは `docs/adr/0357-embedded-runtime-prelude-skeleton.md`。
 - [x] **3.31 startsWith runtime prelude migration** — `runtime/prelude.ts` に `__topaz_string_starts_with` を追加し、`String.prototype.startsWith(search)` の lowering 先を stable internal prelude symbol へ切り替えた。public surface / diagnostics は維持し、`endsWith` と allocation/host helper は引き続き C substrate に残す。決定ログは `docs/adr/0358-runtime-prelude-starts-with.md`。
+- [x] **3.32 endsWith runtime prelude migration** — `runtime/prelude.ts` に `__topaz_string_ends_with` を追加し、`String.prototype.endsWith(search)` の lowering 先を stable internal prelude symbol へ切り替えた。public surface / diagnostics は維持し、allocation/host helper は引き続き C substrate に残す。決定ログは `docs/adr/0359-runtime-prelude-ends-with.md`。
 
 Release/version allocation:
 

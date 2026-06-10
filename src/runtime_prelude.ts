@@ -3,6 +3,6 @@
 
 export function runtimePreludeSource(): string {
   return (
-    "function __topaz_runtime_prelude_init(): void {\n}\n\nfunction __topaz_string_starts_with(s: string, search: string): boolean {\n  if (search.length > s.length) return false;\n  let i: number = 0;\n  while (i < search.length) {\n    if (s.charCodeAt(i) !== search.charCodeAt(i)) return false;\n    i = i + 1;\n  }\n  return true;\n}\n"
+    "function __topaz_runtime_prelude_init(): void {\n}\n\nfunction __topaz_string_starts_with(s: string, search: string): boolean {\n  if (search.length > s.length) return false;\n  let i: number = 0;\n  while (i < search.length) {\n    if (s.charCodeAt(i) !== search.charCodeAt(i)) return false;\n    i = i + 1;\n  }\n  return true;\n}\n\nfunction __topaz_string_ends_with(s: string, search: string): boolean {\n  if (search.length > s.length) return false;\n  let offset: number = s.length - search.length;\n  let i: number = 0;\n  while (i < search.length) {\n    if (s.charCodeAt(offset + i) !== search.charCodeAt(i)) return false;\n    i = i + 1;\n  }\n  return true;\n}\n"
   );
 }

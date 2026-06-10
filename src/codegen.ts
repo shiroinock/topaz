@@ -9812,14 +9812,10 @@ class Emitter {
         );
       }
       const search = this.emitWithExpected(searchArg, T_STRING);
-      if (method === "startsWith") {
-        const helper = this.requireInternalPreludeFunctionCName(
-          "__topaz_string_starts_with",
-          { pos: expr.pos },
-        );
-        return `${helper}(${base}, ${search})`;
-      }
-      return `topaz_string_ends_with(${base}, ${search})`;
+      const helperName =
+        method === "startsWith" ? "__topaz_string_starts_with" : "__topaz_string_ends_with";
+      const helper = this.requireInternalPreludeFunctionCName(helperName, { pos: expr.pos });
+      return `${helper}(${base}, ${search})`;
     }
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_string`);
   }

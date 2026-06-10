@@ -212,6 +212,22 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_starts_with]"
 
+  node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_ends_with > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_ends_with" build/runtime_prelude_ends_with.c; then
+    echo "FAIL [runtime_prelude_ends_with]: missing stable endsWith prelude symbol" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_ends_with.c -o build/runtime_prelude_ends_with
+  local ends_with_out
+  ends_with_out=$(./build/runtime_prelude_ends_with)
+  if [[ "$ends_with_out" != $'true\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nrelative\nrelative\nbare\nmodule\nmodule\nother' ]]; then
+    echo "FAIL [runtime_prelude_ends_with]:" >&2
+    echo "  expected string_starts_ends_with output" >&2
+    printf '%s\n' "$ends_with_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_ends_with]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -357,6 +373,7 @@ run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n
 run_module_case module_function_collision examples/module_function_collision_main.ts $'15\n10\n17'
 run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.ts "unknown identifier '__topaz_runtime_prelude_init'"
 run_fail_case runtime_prelude_starts_with_hidden_fail examples/runtime_prelude_starts_with_hidden_fail.ts "unknown identifier '__topaz_string_starts_with'"
+run_fail_case runtime_prelude_ends_with_hidden_fail examples/runtime_prelude_ends_with_hidden_fail.ts "unknown identifier '__topaz_string_ends_with'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

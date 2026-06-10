@@ -61,8 +61,9 @@ The compiler needs an internal prelude lane before any helper can move:
 `pnpm run generate:runtime-prelude`. Normal compilation parses that embedded
 source as an internal module before user modules and gives it the stable C
 module id `runtime_prelude`. The first migrated helper is
-`__topaz_string_starts_with()`, which codegen targets for
-`String.prototype.startsWith(search)` while preserving the public method shape
+`__topaz_string_starts_with()`, followed by `__topaz_string_ends_with()`, which
+codegen targets for `String.prototype.startsWith(search)` and
+`String.prototype.endsWith(search)` while preserving the public method shape
 and diagnostics. Allocation-heavy helpers such as `slice` and `repeat` remain
 on the C substrate path until explicit string-buffer intrinsics exist.
 
