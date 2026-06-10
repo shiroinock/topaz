@@ -77,9 +77,10 @@ codegen targets for `String.prototype.startsWith(search)` and
 `__topaz_string_trim_start()` for `String.prototype.trimStart()` while
 preserving the public method shape and diagnostics. The first non-string-method
 helper on this lane is `__topaz_path_extname(path)`, which codegen targets for
-imported `node:path` / `std/path` `extname(path)` while keeping the public
-stdlib import shape and diagnostics unchanged. The current string-allocation
-boundary is:
+imported `node:path` / `std/path` `extname(path)`. It is followed by
+`__topaz_path_dirname(path)`, which codegen targets for imported `dirname(path)`.
+Both path helpers keep the public stdlib import shape and diagnostics unchanged.
+The current string-allocation boundary is:
 
 - allocation primitives (`slice`, `repeat`, concat, `String.fromCharCode`) stay
   on the C substrate path until explicit string-buffer intrinsics exist;
@@ -89,7 +90,9 @@ boundary is:
 
 Path helpers are migrated one at a time. `extname` qualifies because it is a
 pure scan over a single string and delegates the final substring allocation to
-`path.slice(start, end)`. Helpers that need path normalization, host IO,
+`path.slice(start, end)`. `dirname` is the second path helper on the runtime
+prelude lane because it is also a pure scan over one string and returns either a
+literal or `path.slice(0, end)`. Helpers that need path normalization, host IO,
 varargs, or mutable buffers stay on the C substrate path until those boundaries
 are explicit.
 

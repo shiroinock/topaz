@@ -10242,7 +10242,10 @@ class Emitter {
   private emitNodePathDirname(expr: CallExpr): string {
     const pathArg = this.checkNodePathDirnameArgs(expr);
     const path = this.emitWithExpected(pathArg, T_STRING);
-    return `topaz_path_dirname(${path})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_path_dirname", {
+      pos: expr.pos,
+    });
+    return `${helper}(${path})`;
   }
 
   // Phase 1.5-6 prep #18: node:path.resolve(...segments) は variadic。1 個以上の

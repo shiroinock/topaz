@@ -71,3 +71,26 @@ function __topaz_path_extname(path: string): string {
   }
   return path.slice(startDot, end);
 }
+
+function __topaz_path_dirname(path: string): string {
+  if (path.length === 0) return ".";
+  const hasRoot: boolean = path.charCodeAt(0) === 47;
+  let end: number = -1;
+  let matchedSlash: boolean = true;
+  for (let i: number = path.length - 1; i >= 1; i = i - 1) {
+    if (path.charCodeAt(i) === 47) {
+      if (!matchedSlash) {
+        end = i;
+        break;
+      }
+    } else {
+      matchedSlash = false;
+    }
+  }
+  if (end === -1) {
+    if (hasRoot) return "/";
+    return ".";
+  }
+  if (hasRoot && end === 1) return "//";
+  return path.slice(0, end);
+}
