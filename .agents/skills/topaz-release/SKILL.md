@@ -51,6 +51,55 @@ pnpm run build:release
 `pnpm run build:release` is the local mirror of the release workflow. Generated
 C warnings are expected unless `cc`, `pnpm`, or the final native compiler fails.
 
+## Final Release Notes Format
+
+Before publishing a non-RC final release such as `v0.1.2`, replace the draft
+placeholder body with structured release notes. Do not publish a final release
+whose notes are still the workflow placeholder such as "Draft native compiler
+artifact release for ...".
+
+Use this format, matching the `v0.1.1` release notes:
+
+````md
+Patch release for the Topaz single-binary MVP.
+
+## Changes
+
+- Summarize the release in 3-5 user-visible or maintainer-relevant bullets.
+- Prefer tag-diff themes over listing every phase commit.
+- Mention workflow, artifact, runtime, or diagnostic changes when they affect
+  how the release should be consumed or trusted.
+
+## Assets
+
+- `topaz-darwin-arm64`: native Topaz compiler for Apple Silicon macOS.
+- `SHA256SUMS`: checksum file for the compiler asset.
+
+## Verification
+
+Before publishing, the release asset was downloaded and verified with:
+
+```sh
+shasum -a 256 -c SHA256SUMS
+chmod +x ./topaz-darwin-arm64
+./topaz-darwin-arm64 <repo>/examples/fib.ts -o ./fib
+./fib
+```
+
+The checksum passed and `fib` printed `5702887`.
+
+## Notes
+
+The compiler binary does not require Node.js, pnpm, or a checked-out `runtime/`
+directory. It still invokes the platform C compiler (`cc`) when producing
+native output.
+````
+
+For a minor release, keep the same section structure but adjust the opening
+sentence from "Patch release ..." to the appropriate release type. If known
+limitations changed, add them under `## Notes` without removing the binary
+dependency note.
+
 ## RC Release Flow
 
 Use this for a release candidate such as `v0.1.0-rc.1`.
@@ -103,8 +152,12 @@ Use this after an RC has passed black-box validation.
 4. Verify the Actions artifact and release assets.
 5. Download the draft Release assets and repeat the checksum + black-box
    compiler smoke from the RC flow.
-6. Review release notes, known limitations, checksum, and docs.
-7. Publish the GitHub Release manually.
+6. Write or update the release notes using the final release notes format
+   above, then apply them with `gh release edit <tag> --notes-file <file>`.
+7. Read the release back with `gh release view <tag> --json body,isDraft,url`
+   and confirm the notes are structured, non-placeholder, and still draft.
+8. Review release notes, known limitations, checksum, and docs.
+9. Publish the GitHub Release manually.
 
 Do not auto-publish a non-draft release from Codex. If the user explicitly asks
 to publish, confirm that the draft assets, checksum, and release notes have
