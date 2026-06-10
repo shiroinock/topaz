@@ -39,9 +39,19 @@ recommended order is:
    overlap with future capability metadata.
 
 Do not migrate a helper just because its public TypeScript shape looks simple.
-For example, `String.prototype.slice` and `String.prototype.repeat` allocate
-new `topaz_string` buffers; they need substrate intrinsics before they can be
-faithfully expressed as runtime prelude code.
+Split string work into two buckets:
+
+- **Allocation primitives** such as `String.prototype.slice`,
+  `String.prototype.repeat`, string concatenation, and
+  `String.fromCharCode(...)` stay on the C substrate until Topaz has explicit
+  internal string-buffer intrinsics.
+- **Allocation clients** may move to the runtime prelude if their algorithmic
+  work is pure Topaz-subset control flow and they delegate the final string
+  allocation/copying to those existing primitives without changing behavior.
+
+The next concrete candidate is `String.prototype.trimStart()`: scan leading
+ASCII whitespace in prelude TS with `.length` and `charCodeAt`, then return
+`s.slice(start)` for the final allocation.
 
 ## Required Compiler Work
 
@@ -64,8 +74,15 @@ module id `runtime_prelude`. The first migrated helper is
 `__topaz_string_starts_with()`, followed by `__topaz_string_ends_with()`, which
 codegen targets for `String.prototype.startsWith(search)` and
 `String.prototype.endsWith(search)` while preserving the public method shape
-and diagnostics. Allocation-heavy helpers such as `slice` and `repeat` remain
-on the C substrate path until explicit string-buffer intrinsics exist.
+and diagnostics. The current string-allocation boundary is:
+
+- allocation primitives (`slice`, `repeat`, concat, `String.fromCharCode`) stay
+  on the C substrate path until explicit string-buffer intrinsics exist;
+- allocation clients such as `trimStart` may migrate to prelude TS if they keep
+  their observable behavior and delegate the final allocation to those existing
+  compiler-owned primitives.
+
+Prelude modules remain internal compiler modules, not a user import surface.
 
 ## Migration Rule
 
