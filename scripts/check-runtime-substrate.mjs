@@ -34,9 +34,11 @@ const NEXT = {
   LIBC_LIBM: "Pinned until Topaz has a replacement that preserves libc/libm parsing and formatting behavior.",
   EXCEPTION: "Pinned while exceptions depend on setjmp/longjmp and abort/panic C control transfer.",
   CONTAINER_MONOMORPH: "Needs a compiler-owned replacement for monomorphized container storage, hashing, and equality.",
-  STRING_BUFFER_INTRINSICS: "Empty after charCodeAt's hidden byte read became a compiler-owned generated-C intrinsic.",
+  STRING_BUFFER_INTRINSICS:
+    "Closed after the completed StringBuffer prelude migration; use string-buffer-intrinsic-family for active internal string-buffer substrate or record a new boundary decision.",
   STRING_BUFFER_INTRINSIC_FAMILY: "Compiler-owned internal string-buffer family that will replace the old byte-code boundary as prelude clients migrate.",
-  BIGINT_LIMB_INTRINSICS: "Needs explicit bigint limb storage and arithmetic intrinsics or generated monomorphs.",
+  BIGINT_LIMB_INTRINSICS:
+    "Closed after the completed BigInt prelude migration; use bigint-limb-intrinsic-family for active internal limb substrate or record a new boundary decision.",
   BIGINT_LIMB_INTRINSIC_FAMILY: "Compiler-owned internal BigIntBuffer limb family required before BigInt helpers migrate into the runtime prelude.",
   C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
 };
@@ -45,6 +47,11 @@ const CLOSED_MIGRATION_LANES = [
   MIGRATION.BIGINT_LIMB_INTRINSICS,
   MIGRATION.STRING_BUFFER_INTRINSICS,
 ];
+
+const CLOSED_MIGRATION_LANE_GUIDANCE = new Map([
+  [MIGRATION.BIGINT_LIMB_INTRINSICS, NEXT.BIGINT_LIMB_INTRINSICS],
+  [MIGRATION.STRING_BUFFER_INTRINSICS, NEXT.STRING_BUFFER_INTRINSICS],
+]);
 
 const inventory = {
   TOPAZ_RUNTIME_H: {
@@ -430,7 +437,10 @@ function validateClosedMigrationLanes(discovered) {
   const closed = new Set(CLOSED_MIGRATION_LANES);
   return [...discovered.keys()]
     .filter((name) => closed.has(inventory[name]?.migration))
-    .map((name) => ({ name, lane: inventory[name].migration }))
+    .map((name) => {
+      const lane = inventory[name].migration;
+      return { name, lane, next: CLOSED_MIGRATION_LANE_GUIDANCE.get(lane) ?? inventory[name].next };
+    })
     .sort((a, b) => a.lane.localeCompare(b.lane) || a.name.localeCompare(b.name));
 }
 
@@ -476,8 +486,8 @@ if (unclassified.length > 0 || stale.length > 0 || closedLaneViolations.length >
   }
   if (closedLaneViolations.length > 0) {
     console.error("runtime substrate inventory: closed migration lane symbols:");
-    for (const { name, lane } of closedLaneViolations) {
-      console.error(`  ${lane}: ${name}`);
+    for (const { name, lane, next } of closedLaneViolations) {
+      console.error(`  ${lane}: ${name} - ${next}`);
     }
   }
   process.exit(1);

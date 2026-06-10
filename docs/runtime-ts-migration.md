@@ -55,13 +55,14 @@ symbol should immediately move to TypeScript:
 
 The legacy `needs-string-buffer-intrinsics` and
 `needs-bigint-limb-intrinsics` lanes are closed checker invariants after Phase
-3.79. They describe completed migrations, not available backlog buckets: if a
-future runtime symbol is classified into either lane,
-`pnpm run check:runtime-substrate` fails and names the lane and symbol. Future
-runtime shrink work must either use the established
-`string-buffer-intrinsic-family` / `bigint-limb-intrinsic-family` substrate,
-introduce a new explicit boundary with an ADR, or stay in one of the remaining
-pinned lanes above.
+3.79, with Phase 3.80 aligning the checker guidance and this document. They
+describe completed migrations, not available backlog buckets: if a future
+runtime symbol is classified into either lane,
+`pnpm run check:runtime-substrate` fails and names the lane, symbol, and
+closed-lane guidance. Future runtime shrink work must either use the
+established `string-buffer-intrinsic-family` /
+`bigint-limb-intrinsic-family` substrate, introduce a new explicit boundary
+with an ADR, or stay in one of the remaining pinned lanes above.
 
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
@@ -72,64 +73,65 @@ reads `topaz_string.data[(size_t)i]`. The old byte-code string materialization
 bridge has also been removed; allocation and copying clients now use the
 compiler-owned internal `StringBuffer` intrinsic family.
 
-As of Phase 3.69, the next runtime migration target is not direct
-helper-by-helper C-to-TS copying for BigInt. The `needs-bigint-limb-intrinsics`
-lane first needs an internal-prelude-only limb intrinsic family so future
-helpers can inspect immutable `bigint` values and build fresh results without
+Historically, Phase 3.69 made the next runtime migration target not direct
+helper-by-helper C-to-TS copying for BigInt. That phase fixed an
+internal-prelude-only limb intrinsic family as the prerequisite for later
+helpers to inspect immutable `bigint` values and build fresh results without
 exposing representation mutation to user source.
 
-As of Phase 3.70, that hidden BigInt limb family exists as a compiler-owned
+In Phase 3.70, that hidden BigInt limb family was added as a compiler-owned
 substrate beside the legacy C BigInt helpers. The old
 `needs-bigint-limb-intrinsics` lane remained unchanged for the existing helper
 algorithms, while the eight new `BigIntBuffer` / limb-inspection helpers were
 tracked separately as `bigint-limb-intrinsic-family`.
 
-As of Phase 3.71, public BigInt `===` / `!==` is the first migrated consumer of
+In Phase 3.71, public BigInt `===` / `!==` became the first migrated consumer of
 the hidden limb-inspection family. It routes through runtime prelude
 `__topaz_bigint_eq(a, b)`, which compares signs, handles canonical zero, checks
 limb length, and then compares each little-endian limb. Ordering, arithmetic,
 literal parsing, and decimal formatting remain in the C substrate.
 
-As of Phase 3.72, public BigInt `<` / `<=` / `>` / `>=` also route through the
-runtime prelude. `__topaz_bigint_cmp(a, b)` preserves the old signed comparison
-result convention while using only sign, limb length, and immutable limb reads;
-arithmetic, literal parsing, and decimal formatting remain in the C substrate.
+In Phase 3.72, public BigInt `<` / `<=` / `>` / `>=` also moved to the runtime
+prelude. `__topaz_bigint_cmp(a, b)` preserves the old signed comparison result
+convention while using only sign, limb length, and immutable limb reads;
+arithmetic, literal parsing, and decimal formatting remained in the C
+substrate at that point.
 
-As of Phase 3.73, public BigInt unary `-` routes through runtime prelude
+In Phase 3.73, public BigInt unary `-` moved through runtime prelude
 `__topaz_bigint_neg(value)`. The helper preserves canonical zero and clones the
 absolute limb sequence with the opposite sign through the hidden BigInt buffer
-family. Binary `+` / `-` / `*`, literal parsing, and decimal formatting remain
-in the C substrate.
+family. Binary `+` / `-` / `*`, literal parsing, and decimal formatting
+remained in the C substrate at that point.
 
-As of Phase 3.74, public BigInt binary `+` / `-` also route through runtime
+In Phase 3.74, public BigInt binary `+` / `-` also moved through runtime
 prelude `__topaz_bigint_add(a, b)` and `__topaz_bigint_sub(a, b)`. The helpers
 perform absolute limb addition/subtraction with the hidden BigInt buffer family,
-while multiplication, decimal literal parsing, and decimal formatting remain in
-the C substrate.
+while multiplication, decimal literal parsing, and decimal formatting remained
+in the C substrate at that point.
 
-As of Phase 3.75, public BigInt binary `*` routes through runtime prelude
+In Phase 3.75, public BigInt binary `*` moved through runtime prelude
 `__topaz_bigint_mul(a, b)`. The helper keeps the previous sign, canonical zero,
 and little-endian limb semantics, but splits each 32-bit limb into 16-bit halves
 inside the multiply-add step so every `number` intermediate stays below the
 IEEE-754 exact-integer boundary. Decimal literal parsing and decimal formatting
-remain in the C substrate.
+remained in the C substrate at that point.
 
-As of Phase 3.76, decimal BigInt literals route through runtime prelude
+In Phase 3.76, decimal BigInt literals moved through runtime prelude
 `__topaz_bigint_from_decimal(digits)`. Codegen still validates decimal-only
 literal source text with `decimalBigIntDigits(...)`, then passes a normal Topaz
 string literal into the prelude helper. The helper scans ASCII digits left to
 right, updates a `BigIntBuffer` with multiply-by-10 and add-digit steps, and
 materializes through `__topaz_bigint_buffer_to_bigint(...)`. Decimal formatting
-still remains in C as `topaz_bigint_to_string(...)`.
+still remained in C as `topaz_bigint_to_string(...)` at that point.
 
-As of Phase 3.77, bigint allocation and normalization are no longer standalone
+In Phase 3.77, bigint allocation and normalization stopped being standalone
 `needs-bigint-limb-intrinsics` helpers. Their behavior is folded into the C ABI
 materialization boundary `topaz_bigint_buffer_to_bigint(...)`, which trims
 trailing zero limbs, allocates the immutable `topaz_bigint *`, copies normalized
-limbs, and canonicalizes zero. Decimal formatting remains the only standalone
-helper in that lane.
+limbs, and canonicalizes zero. Decimal formatting remained the only standalone
+helper in that lane at that point.
 
-As of Phase 3.78, decimal BigInt formatting routes through runtime prelude
+In Phase 3.78, decimal BigInt formatting moved through runtime prelude
 `__topaz_bigint_to_string(value)`. The helper copies absolute limbs into a
 `BigIntBuffer`, repeatedly divides by 1e9 using 16-bit chunks so every
 `number` intermediate stays exact, and materializes decimal bytes with

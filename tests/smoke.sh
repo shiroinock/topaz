@@ -64,6 +64,33 @@ if [[ "${closed_lane_err}" != *"needs-string-buffer-intrinsics: TOPAZ_RUNTIME_H"
   printf '%s\n' "${closed_lane_err}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${closed_lane_err}" != *"Closed after the completed StringBuffer prelude migration"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing string buffer closed lane guidance" >&2
+  printf '%s\n' "${closed_lane_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
+tmp_runtime_substrate_checker="build/runtime_substrate_closed_bigint_lane_probe.mjs"
+cp scripts/check-runtime-substrate.mjs "${tmp_runtime_substrate_checker}"
+perl -0pi -e 's/migration: MIGRATION\.C_ABI_TYPE,/migration: MIGRATION.BIGINT_LIMB_INTRINSICS,/' "${tmp_runtime_substrate_checker}"
+if closed_lane_err=$(node "${tmp_runtime_substrate_checker}" runtime/runtime.h 2>&1); then
+  echo "FAIL [runtime_substrate_inventory]: expected closed BigInt migration lane failure" >&2
+  exit 1
+fi
+if [[ "${closed_lane_err}" != *"needs-bigint-limb-intrinsics: TOPAZ_RUNTIME_H"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing closed BigInt lane diagnostic" >&2
+  printf '%s\n' "${closed_lane_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${closed_lane_err}" != *"Closed after the completed BigInt prelude migration"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing BigInt closed lane guidance" >&2
+  printf '%s\n' "${closed_lane_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${closed_lane_err}" == *"Needs explicit bigint limb storage and arithmetic intrinsics"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: stale BigInt closed lane guidance leaked" >&2
+  printf '%s\n' "${closed_lane_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
 echo "PASS [runtime_substrate_inventory]"
 
 # Phase 1.5-6e: topaz_parser を oracle (tsc + convertFromTsc) と JSON 等価比較。
