@@ -326,6 +326,31 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_string_slice]: stale String.slice C helper definition embedded" >&2
     exit 1
   fi
+  local string_slice_body
+  string_slice_body=$(awk '
+    /topaz_fn_runtime_prelude___topaz_string_slice\(topaz_string s, topaz_number rawStart, topaz_number rawEnd\)/ { in_fn = 1; depth = 0 }
+    in_fn {
+      print
+      for (i = 1; i <= length($0); i++) {
+        ch = substr($0, i, 1)
+        if (ch == "{") depth++
+        else if (ch == "}") depth--
+      }
+      if (depth == 0 && $0 ~ /}/) in_fn = 0
+    }
+  ' build/runtime_prelude_string_slice.c)
+  if [[ -z "$string_slice_body" ]]; then
+    echo "FAIL [runtime_prelude_string_slice]: could not extract generated String.slice body" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_string_buffer_" <<<"$string_slice_body"; then
+    echo "FAIL [runtime_prelude_string_slice]: generated String.slice body does not use StringBuffer" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_from_byte_codes\s*\(" <<<"$string_slice_body"; then
+    echo "FAIL [runtime_prelude_string_slice]: generated String.slice body still materializes byte codes" >&2
+    exit 1
+  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_slice.c -o build/runtime_prelude_string_slice
   local string_slice_out
   string_slice_out=$(./build/runtime_prelude_string_slice)

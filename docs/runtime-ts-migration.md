@@ -85,9 +85,11 @@ pushes the ASCII code, and materializes an immutable `string`. The next
 migrated clients are `__topaz_string_concat`, which preallocates one buffer,
 appends both immutable inputs, and `__topaz_string_repeat`, which preallocates
 one buffer and repeatedly appends the immutable source string. Both materialize
-the result through `__topaz_string_buffer_to_string`. The remaining replacement
-order is: the rest of the string byte materialization clients first
-(`__topaz_string_slice` and `__topaz_url_file_url_to_path`), raw byte reads second
+the result through `__topaz_string_buffer_to_string`. `__topaz_string_slice`
+now also allocates one buffer for the normalized byte range, pushes each source
+byte, and materializes through `__topaz_string_buffer_to_string`. The remaining
+replacement order is: the rest of the string byte materialization clients first
+(`__topaz_url_file_url_to_path`), raw byte reads second
 (`__topaz_string_char_code_at`), then removal or reclassification of
 `topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)` after no
 prelude client needs the old two-symbol boundary. This is still pre-v0.2.0
@@ -196,9 +198,9 @@ scanning now lives only in `__topaz_string_is_trim_start_code(...)`.
 
 The current string-allocation boundary is:
 
-- `String.prototype.slice` algorithmic behavior lives in the runtime prelude,
-  but final byte-string materialization still delegates to
-  `topaz_string_from_byte_codes(...)`;
+- `String.prototype.slice` algorithmic behavior lives in the runtime prelude
+  and now allocates its normalized byte range through the internal
+  `StringBuffer` family;
 - compiler-owned string concatenation lives in the runtime prelude and now
   allocates through the internal `StringBuffer` family instead of the old
   byte-code materialization bridge;
@@ -211,8 +213,8 @@ The current string-allocation boundary is:
 - `Array.prototype.slice` keeps monomorphized storage and copy in generated C,
   but its NaN-sentinel, negative-index, clamp, and truncation normalization now
   lives in `__topaz_slice_normalize(...)`;
-- byte-code string materialization stays on the C substrate path for remaining
-  prelude clients until they migrate to the explicit string-buffer intrinsics;
+- byte-code string materialization stays on the C substrate path for
+  fileURLToPath until it migrates to the explicit string-buffer intrinsics;
 - allocation clients may migrate to prelude TS if they keep their observable
   behavior and use the current compiler-owned allocation primitive for their
   phase; `trimStart`, `extname`, `String.fromCharCode`, and concat are migrated
@@ -278,13 +280,14 @@ auto-base prefix handling, digit scanning, and NaN-on-no-digit all live in
 Topaz-subset TS. `parseFloat(s)` remains C substrate because it intentionally
 delegates decimal/exponent parsing and roundoff behavior to libc `strtod`.
 
-`String.fromCharCode(n)`, compiler-owned string concat, and
-`String.prototype.repeat(count)` now follow the same split boundary for string
+`String.fromCharCode(n)`, compiler-owned string concat,
+`String.prototype.repeat(count)`, and `String.prototype.slice(start?, end?)`
+now follow the same split boundary for string
 allocation. The public call shapes and diagnostics remain codegen-owned; the
 prelude helpers allocate through the internal `StringBuffer` intrinsic family
 instead of the temporary `Array<number>`/`__topaz_string_from_byte_codes(Array<number>)`
 bridge. This exercises one-byte push and existing-string append without
-migrating slice, fileURLToPath, or charCodeAt yet.
+migrating fileURLToPath or charCodeAt yet.
 
 `String.prototype.charCodeAt(index)` now follows the scalar string-read split.
 The public call shape and diagnostics remain codegen-owned, while NaN input,

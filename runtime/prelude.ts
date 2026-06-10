@@ -99,13 +99,13 @@ function __topaz_string_slice(s: string, rawStart: number, rawEnd: number): stri
   hi = hi - (hi % 1);
   if (hi < lo) hi = lo;
 
-  const codes: Array<number> = [];
+  const buffer: StringBuffer = __topaz_string_buffer_new(hi - lo);
   let i: number = lo;
   while (i < hi) {
-    codes.push(s.charCodeAt(i));
+    __topaz_string_buffer_push_byte(buffer, s.charCodeAt(i));
     i = i + 1;
   }
-  return __topaz_string_from_byte_codes(codes);
+  return __topaz_string_buffer_to_string(buffer);
 }
 
 function __topaz_string_starts_with(s: string, search: string): boolean {
