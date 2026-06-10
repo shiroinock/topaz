@@ -266,11 +266,13 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.12 release versioning / runbook skill** — `0.x.y` SemVer、`v0.1.0 = single-binary MVP`、`v0.x.y-rc.N` release candidate、tag-triggered draft Release を方針として固定し、公開手順を `.agents/skills/topaz-release/SKILL.md` に skill 化した。決定ログは `docs/adr/0352-release-versioning-and-skill.md`。
 - [x] **3.13 embedded runtime header for release compiler** — RC1 black-box check で release compiler binary を repo 外へ置くと `runtime.h` が見つからない blocker を検出したため、生成 C に `runtime/runtime.h` 本文を埋め込み、`runtime/` directory なしで `cc` まで通る single-binary compiler artifact にした。決定ログは `docs/adr/0353-embedded-runtime-header.md`。
 - [x] **3.14 v0.1.1 release workflow stabilization** — `v0.1.0` final tag 後に残った GitHub Actions Node.js 20 deprecation annotation へ Node 24 対応済みの official action major 更新で対応し、README / MVP doc / release skill に checksum + downloaded binary black-box smoke を明記した。言語 surface / runtime semantics は変えない patch。決定ログは `docs/adr/0354-release-workflow-stabilization.md`。
+- [x] **3.15 runtime TS prelude boundary** — `runtime/runtime.h` の全面 TS 化ではなく、host ABI / raw memory / exception jump / container macro を tiny C substrate に残し、純粋 helper を internal Topaz runtime prelude へ段階移行する方針を固定した。決定ログは `docs/adr/0355-runtime-ts-prelude-boundary.md`、移行計画は `docs/runtime-ts-migration.md`。
 
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
 - `v0.1.1` — release artifact 安定化 patch。GitHub Actions の Node 24 対応 action major 更新、downloaded asset checksum / black-box smoke の手順補強、release skill の検査手順更新。言語 surface / runtime semantics は変えない。
+- `v0.1.2` — runtime TS prelude groundwork。internal prelude injection / stable C symbol / substrate intrinsic 境界を作り、最初の純粋 helper を移行する。言語 surface / runtime semantics は変えない。
 - `v0.1.y` — MVP-preserving patch。crash fix、diagnostic/doc/workflow 修正、self-host/release gate 安定化。言語 surface や runtime semantics の拡張はしない。
 - `v0.2.0` — capability/effect inference、manifest generation、`doctor` / `check` / `explain`。optional policy file と zero-config build の関係を実装へ進める。
 - `v0.3.0` — async/await / Promise execution。ADR `0327` の fiber-based design を実装 track に移す。
