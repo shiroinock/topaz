@@ -141,6 +141,45 @@ if [[ "${manifest_requirements_out}" == *"path.join"* || "${manifest_requirement
   exit 1
 fi
 echo "PASS [manifest_requirements]"
+doctor_report_out=$(pnpm run check:doctor-report)
+if [[ "${doctor_report_out}" != *"doctor report ok:"* ]]; then
+  echo "FAIL [doctor_report]: missing ok summary" >&2
+  printf '%s\n' "${doctor_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${doctor_report_out}" != *"topaz doctor report: build/doctor_report/main.ts"* ]]; then
+  echo "FAIL [doctor_report]: missing stable heading" >&2
+  printf '%s\n' "${doctor_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for effect in fs.read fs.write process.argv io.stdout io.stderr; do
+  if [[ "${doctor_report_out}" != *"  ${effect}: "* ]]; then
+    echo "FAIL [doctor_report]: missing capability summary ${effect}" >&2
+    printf '%s\n' "${doctor_report_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+if [[ "${doctor_report_out}" != *"build/doctor_report/main.ts:6:14"* ]]; then
+  echo "FAIL [doctor_report]: missing file:line:col occurrence" >&2
+  printf '%s\n' "${doctor_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${doctor_report_out}" != *"console.warn(...)"* ]]; then
+  echo "FAIL [doctor_report]: missing console.warn detail" >&2
+  printf '%s\n' "${doctor_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${doctor_report_out}" != *$'capabilities: none\nrequirements: none'* ]]; then
+  echo "FAIL [doctor_report]: missing no-effect report" >&2
+  printf '%s\n' "${doctor_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${doctor_report_out}" == *"path.join"* || "${doctor_report_out}" == *"std/path"* || "${doctor_report_out}" == *"join(...)"* ]]; then
+  echo "FAIL [doctor_report]: pure std/path leaked into report" >&2
+  printf '%s\n' "${doctor_report_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [doctor_report]"
 manifest_selfhost_out=$(pnpm run check:manifest-selfhost)
 if [[ "${manifest_selfhost_out}" != *"manifest selfhost ok:"* ]]; then
   echo "FAIL [manifest_selfhost]: missing ok summary" >&2
