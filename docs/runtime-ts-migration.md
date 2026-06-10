@@ -196,6 +196,41 @@ should not change Map/Set/Array representation as part of this policy lane.
 Until then, `pnpm run check:runtime-substrate` and smoke keep the lane visible
 as `container-monomorph-boundary: 13`.
 
+## Phase 3.87 Active Intrinsic Family Substrate Policy
+
+The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes
+are deliberately still active before v0.2.0. They are not ordinary runtime
+migration backlog lanes and they are intentionally separate from the closed
+legacy `needs-string-buffer-intrinsics` and `needs-bigint-limb-intrinsics`
+lanes.
+
+The StringBuffer family has exactly five entries: `topaz_string_buffer_new(...)`,
+`topaz_string_buffer_push_byte(...)`,
+`topaz_string_buffer_append_string(...)`,
+`topaz_string_buffer_byte_at(...)`, and
+`topaz_string_buffer_to_string(...)`. Runtime prelude algorithms use the hidden
+compiler-owned `StringBuffer` pseudo type and `__topaz_string_buffer_*`
+intrinsics as safe allocation, mutable byte-buffer append/read, and immutable
+string materialization substrate.
+
+The BigIntBuffer / immutable limb family has exactly eight entries:
+`topaz_bigint_buffer_new(...)`, `topaz_bigint_buffer_to_bigint(...)`,
+`topaz_bigint_buffer_len(...)`, `topaz_bigint_buffer_get_limb(...)`,
+`topaz_bigint_buffer_set_limb(...)`, `topaz_bigint_limb_len(...)`,
+`topaz_bigint_limb(...)`, and `topaz_bigint_sign(...)`. Runtime prelude
+BigInt algorithms use the hidden compiler-owned `BigIntBuffer` pseudo type and
+`__topaz_bigint_*` intrinsics as safe mutable limb-buffer allocation/write,
+immutable limb/sign inspection, and materialization substrate.
+
+Topaz source cannot currently express these substrates as ordinary
+`runtime/prelude.ts` helpers: it has no public or internal mutable byte buffer,
+mutable limb buffer, raw arena materialization, or immutable bigint limb storage
+model. Future movement requires an explicit compiler intrinsic/backend
+representation decision, or removal after all runtime prelude clients stop
+needing the family. Until then, `pnpm run check:runtime-substrate` and smoke
+keep the active lanes visible as `string-buffer-intrinsic-family: 5` and
+`bigint-limb-intrinsic-family: 8`.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has

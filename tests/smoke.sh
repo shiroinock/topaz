@@ -60,12 +60,12 @@ if [[ "${substrate_out}" != *"c-abi-type-boundary: 8"* ]]; then
   exit 1
 fi
 if [[ "${substrate_out}" != *"bigint-limb-intrinsic-family: 8"* ]]; then
-  echo "FAIL [runtime_substrate_inventory]: missing bigint intrinsic family lane" >&2
+  echo "FAIL [runtime_substrate_inventory]: active bigint intrinsic-family lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
 if [[ "${substrate_out}" != *"string-buffer-intrinsic-family: 5"* ]]; then
-  echo "FAIL [runtime_substrate_inventory]: missing string buffer intrinsic family lane" >&2
+  echo "FAIL [runtime_substrate_inventory]: active string buffer intrinsic-family lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
