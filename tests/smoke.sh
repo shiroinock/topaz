@@ -361,6 +361,33 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_path_basename]"
 
+  node dist/cli.js examples/node_path_join.ts --emit-c-only -o build/runtime_prelude_path_join > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_path_join_segments" build/runtime_prelude_path_join.c; then
+    echo "FAIL [runtime_prelude_path_join]: missing stable path join prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "topaz_path_join\\([0-9]" build/runtime_prelude_path_join.c; then
+    echo "FAIL [runtime_prelude_path_join]: unexpected topaz_path_join call site" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_path_join.c -o build/runtime_prelude_path_join
+  local path_join_out
+  path_join_out=$(./build/runtime_prelude_path_join)
+  if [[ "$path_join_out" != $'.\n.\nfoo/bar\n/foo/bar\n/bar\n../b\na/b/c/\na\n/\n.\n..\n/a/b/c\nfoo/bar\n/pkg/src/index' ]]; then
+    echo "FAIL [runtime_prelude_path_join]:" >&2
+    echo "  expected node_path_join output" >&2
+    printf '%s\n' "$path_join_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_path_join]"
+
+  node dist/cli.js examples/node_path_basic.ts --emit-c-only -o build/runtime_substrate_path_resolve > /dev/null
+  if ! grep -q "topaz_path_resolve(" build/runtime_substrate_path_resolve.c; then
+    echo "FAIL [runtime_substrate_path_resolve]: missing path resolve substrate call site" >&2
+    exit 1
+  fi
+  echo "PASS [runtime_substrate_path_resolve]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -514,6 +541,7 @@ run_fail_case runtime_prelude_path_dirname_hidden_fail examples/runtime_prelude_
 run_fail_case runtime_prelude_path_basename_hidden_fail examples/runtime_prelude_path_basename_hidden_fail.ts "unknown identifier '__topaz_path_basename'"
 run_fail_case runtime_prelude_path_basename_ext_hidden_fail examples/runtime_prelude_path_basename_ext_hidden_fail.ts "unknown identifier '__topaz_path_basename_ext'"
 run_fail_case runtime_prelude_string_eq_hidden_fail examples/runtime_prelude_string_eq_hidden_fail.ts "unknown identifier '__topaz_string_eq'"
+run_fail_case runtime_prelude_path_join_hidden_fail examples/runtime_prelude_path_join_hidden_fail.ts "unknown identifier '__topaz_path_join_segments'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

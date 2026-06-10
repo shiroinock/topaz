@@ -87,8 +87,11 @@ compiler-owned boolean stringification in template literal substitutions and
 `Array<boolean>.join(...)`. String byte equality is now available as
 `__topaz_string_eq(a, b)`, which codegen targets for non-container
 compiler-owned string `===` / `!==`, string `switch`, and
-`Array<string>.includes(...)`. These helpers keep the public stdlib import
-shape, language surface, and diagnostics unchanged.
+`Array<string>.includes(...)`. `__topaz_path_join_segments(segments)` now
+handles imported `node:path` / `std/path` `join(...segments)` after codegen
+packages the already checked variadic arguments into an internal
+`Array<string>`. These helpers keep the public stdlib import shape, language
+surface, and diagnostics unchanged.
 The current string-allocation boundary is:
 
 - allocation primitives (`slice`, `repeat`, concat, `String.fromCharCode`) stay
@@ -104,8 +107,11 @@ prelude lane because it is also a pure scan over one string and returns either a
 literal or `path.slice(0, end)`. `basename(path, ext?)` follows the same rule:
 the one-argument helper scans the last path segment, and the two-argument helper
 adds suffix matching before delegating final allocation to `path.slice(start,
-end)`. Helpers that need path normalization, host IO, varargs, or mutable
-buffers stay on the C substrate path until those boundaries are explicit.
+end)`. `join(...segments)` is the first array-parameter path helper on this
+lane: the public API remains variadic, but the internal helper receives the
+segments as `Array<string>` and performs POSIX normalization in Topaz-subset TS.
+Host-bound path helpers such as `resolve(...segments)` stay on the C substrate
+path until the host fallback boundary is explicit.
 Boolean stringification also qualifies for the prelude lane because it is a
 pure scalar-to-literal choice and does not allocate beyond returning string
 literals. Direct console boolean IO remains a substrate IO helper. String byte

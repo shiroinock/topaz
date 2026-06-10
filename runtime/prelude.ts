@@ -177,3 +177,108 @@ function __topaz_path_basename_ext(path: string, ext: string): string {
   if (end <= start) return "";
   return path.slice(start, end);
 }
+
+function __topaz_path_normalize_string(path: string, allowAboveRoot: boolean): string {
+  let res: string = "";
+  let lastSegmentLength: number = 0;
+  let lastSlash: number = -1;
+  let dots: number = 0;
+  let code: number = 0;
+  let i: number = 0;
+  while (i <= path.length) {
+    if (i < path.length) code = path.charCodeAt(i);
+    else if (code === 47) break;
+    else code = 47;
+
+    if (code === 47) {
+      if (lastSlash === i - 1 || dots === 1) {
+        // Empty segment or ".".
+      } else if (dots === 2) {
+        let handledParent: boolean = false;
+        const resLen: number = res.length;
+        if (
+          resLen < 2 ||
+          lastSegmentLength !== 2 ||
+          res.charCodeAt(resLen - 1) !== 46 ||
+          res.charCodeAt(resLen - 2) !== 46
+        ) {
+          if (resLen > 2) {
+            let lsi: number = -1;
+            for (let k: number = resLen - 1; k >= 0; k = k - 1) {
+              if (res.charCodeAt(k) === 47) {
+                lsi = k;
+                break;
+              }
+            }
+            if (lsi === -1) {
+              res = "";
+              lastSegmentLength = 0;
+            } else {
+              res = res.slice(0, lsi);
+              let lsi2: number = -1;
+              for (let k2: number = res.length - 1; k2 >= 0; k2 = k2 - 1) {
+                if (res.charCodeAt(k2) === 47) {
+                  lsi2 = k2;
+                  break;
+                }
+              }
+              lastSegmentLength = res.length - 1 - lsi2;
+            }
+            handledParent = true;
+          } else if (resLen !== 0) {
+            res = "";
+            lastSegmentLength = 0;
+            handledParent = true;
+          }
+        }
+        if (!handledParent && allowAboveRoot) {
+          if (res.length > 0) res = res + "/";
+          res = res + "..";
+          lastSegmentLength = 2;
+        }
+      } else {
+        const segStart: number = lastSlash + 1;
+        if (res.length > 0) res = res + "/";
+        res = res + path.slice(segStart, i);
+        lastSegmentLength = i - lastSlash - 1;
+      }
+      lastSlash = i;
+      dots = 0;
+    } else if (code === 46 && dots !== -1) {
+      dots = dots + 1;
+    } else {
+      dots = -1;
+    }
+    i = i + 1;
+  }
+  return res;
+}
+
+function __topaz_path_join_segments(segments: Array<string>): string {
+  if (segments.length === 0) return ".";
+
+  let joined: string = "";
+  let nonempty: number = 0;
+  for (let i: number = 0; i < segments.length; i = i + 1) {
+    const segment: string = segments[i];
+    if (segment.length === 0) continue;
+    if (nonempty > 0) joined = joined + "/";
+    joined = joined + segment;
+    nonempty = nonempty + 1;
+  }
+  if (nonempty === 0) return ".";
+
+  const absolute: boolean = joined.length > 0 && joined.charCodeAt(0) === 47;
+  const trailing: boolean = joined.length > 0 && joined.charCodeAt(joined.length - 1) === 47;
+  const norm: string = __topaz_path_normalize_string(joined, !absolute);
+  if (norm.length === 0) {
+    if (absolute) return "/";
+    if (trailing) return "./";
+    return ".";
+  }
+
+  let out: string = norm;
+  if (absolute) out = "/" + out;
+  if (trailing) out = out + "/";
+  return out;
+}

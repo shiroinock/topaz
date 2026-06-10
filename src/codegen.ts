@@ -10375,9 +10375,9 @@ class Emitter {
     return `${helper}(${path})`;
   }
 
-  // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic、引数 0 個も
-  // Node が `.` を返す仕様なので arity の下限は無し。全引数 string を要求し、
-  // resolve と同じく `topaz_path_join(n, seg0, seg1, ...)` に lower する。
+  // Phase 1.5-6 prep #23 / phase 3.40: node:path.join(...segments) は public
+  // surface では variadic。内部 lowering では各引数を一度だけ評価して
+  // Array<string> に梱包し、fixed-signature runtime prelude helper へ渡す。
   private checkNodePathJoinArgs(expr: CallExpr): Array<Expr> {
     const args = expr.args;
     for (const arg of args) {
@@ -10392,15 +10392,26 @@ class Emitter {
     return args;
   }
 
+  private emitNodePathJoinSegmentsArray(args: Array<Expr>): string {
+    const id = this.tmpCounter++;
+    const tmp = `__topaz_path_join_segments_${id}`;
+    const parts: string[] = [];
+    parts.push(`topaz_array_string *${tmp} = topaz_array_string_new();`);
+    if (args.length > 0) {
+      parts.push(`topaz_array_string_reserve(${tmp}, ${args.length});`);
+      for (const arg of args) {
+        parts.push(`topaz_array_string_push(${tmp}, ${this.emitWithExpected(arg, T_STRING)});`);
+      }
+    }
+    return `({ ${parts.join(" ")} ${tmp}; })`;
+  }
+
   private emitNodePathJoin(expr: CallExpr): string {
     const args = this.checkNodePathJoinArgs(expr);
-    const segs = args
-      .map((a) => this.emitWithExpected(a, T_STRING))
-      .join(", ");
-    if (args.length === 0) {
-      return `topaz_path_join(0)`;
-    }
-    return `topaz_path_join(${args.length}, ${segs})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_path_join_segments", {
+      pos: expr.pos,
+    });
+    return `${helper}(${this.emitNodePathJoinSegmentsArray(args)})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg
