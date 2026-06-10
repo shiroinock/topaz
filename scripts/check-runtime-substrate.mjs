@@ -193,30 +193,6 @@ const inventory = {
     category: CATEGORY.CONSOLE,
     reason: "stderr warning string IO helper.",
   },
-  topaz_console_log_number: {
-    category: CATEGORY.CONSOLE,
-    reason: "stdout number IO helper.",
-  },
-  topaz_console_error_number: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr number IO helper.",
-  },
-  topaz_console_warn_number: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr warning number IO helper.",
-  },
-  topaz_console_log_bigint: {
-    category: CATEGORY.CONSOLE,
-    reason: "stdout bigint IO helper.",
-  },
-  topaz_console_error_bigint: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr bigint IO helper.",
-  },
-  topaz_console_warn_bigint: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr warning bigint IO helper.",
-  },
   topaz_stdout_write: {
     category: CATEGORY.CONSOLE,
     reason: "process.stdout.write substrate.",

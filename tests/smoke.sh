@@ -289,6 +289,53 @@ TOPAZ
   fi
   echo "PASS [runtime_prelude_console_boolean]"
 
+  cat > build/runtime_numeric_console_string.ts <<'TOPAZ'
+function n(): number {
+  return 123;
+}
+
+console.log(n());
+console.error(1.5);
+console.warn(2);
+console.log(123n);
+console.error(-5n);
+console.warn(0n);
+TOPAZ
+  node dist/cli.js build/runtime_numeric_console_string.ts --emit-c-only -o build/runtime_numeric_console_string > /dev/null
+  if ! grep -Eq "\btopaz_number_to_string\b" build/runtime_numeric_console_string.c; then
+    echo "FAIL [runtime_numeric_console_string]: missing number stringification helper" >&2
+    exit 1
+  fi
+  if ! grep -Eq "\btopaz_bigint_to_string\b" build/runtime_numeric_console_string.c; then
+    echo "FAIL [runtime_numeric_console_string]: missing bigint stringification helper" >&2
+    exit 1
+  fi
+  if ! grep -Eq "\btopaz_console_(log|error|warn)_string\b" build/runtime_numeric_console_string.c; then
+    echo "FAIL [runtime_numeric_console_string]: missing string console IO helper" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_console_(log|error|warn)_(number|bigint)\b" build/runtime_numeric_console_string.c; then
+    echo "FAIL [runtime_numeric_console_string]: old numeric console helper still emitted or defined" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_numeric_console_string.c -o build/runtime_numeric_console_string
+  ./build/runtime_numeric_console_string > build/runtime_numeric_console_string.stdout 2> build/runtime_numeric_console_string.stderr
+  local numeric_console_stdout
+  numeric_console_stdout=$(< build/runtime_numeric_console_string.stdout)
+  local numeric_console_stderr
+  numeric_console_stderr=$(< build/runtime_numeric_console_string.stderr)
+  if [[ "$numeric_console_stdout" != $'123\n123' ]]; then
+    echo "FAIL [runtime_numeric_console_string stdout]:" >&2
+    printf '%s\n' "$numeric_console_stdout" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  if [[ "$numeric_console_stderr" != $'1.5\n2\n-5\n0' ]]; then
+    echo "FAIL [runtime_numeric_console_string stderr]:" >&2
+    printf '%s\n' "$numeric_console_stderr" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_numeric_console_string]"
+
   node dist/cli.js examples/string_basic.ts --emit-c-only -o build/runtime_prelude_string_eq > /dev/null
   local string_eq_calls
   string_eq_calls=$(grep -c "topaz_fn_runtime_prelude___topaz_string_eq(" build/runtime_prelude_string_eq.c || true)

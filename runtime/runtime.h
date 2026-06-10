@@ -647,9 +647,9 @@ static inline topaz_number topaz_parse_float(topaz_string s) {
 // Phase 1.2 / 1.5-3.5: ECMA-262 ToString(Number). Shortest round-trip via
 // snprintf(%.*e) + strtod precision search, then ECMA-262 formatting written
 // into an arena-allocated buffer. The returned `topaz_string` is owned by the
-// arena (released at process exit). `topaz_console_log_number` reuses this
-// function and appends '\n'. Phase 2 may swap the precision-search core for a
-// real Ryu port; correctness here rests on libc's correctly-rounded strtod.
+// arena (released at process exit). Phase 2 may swap the precision-search core
+// for a real Ryu port; correctness here rests on libc's correctly-rounded
+// strtod.
 static inline topaz_string topaz_number_to_string(topaz_number n) {
   if (isnan(n)) {
     topaz_string r = { "NaN", 3 };
@@ -740,38 +740,6 @@ static inline topaz_string topaz_number_to_string(topaz_number n) {
   buf[pos] = '\0';
   topaz_string r = { buf, (size_t)pos };
   return r;
-}
-
-static inline void topaz_console_log_number(topaz_number n) {
-  topaz_string s = topaz_number_to_string(n);
-  if (s.len) fwrite(s.data, 1, s.len, stdout);
-  putchar('\n');
-}
-
-static inline void topaz_console_error_number(topaz_number n) {
-  topaz_string s = topaz_number_to_string(n);
-  if (s.len) fwrite(s.data, 1, s.len, stderr);
-  putc('\n', stderr);
-}
-
-static inline void topaz_console_warn_number(topaz_number n) {
-  topaz_console_error_number(n);
-}
-
-static inline void topaz_console_log_bigint(topaz_bigint *n) {
-  topaz_string s = topaz_bigint_to_string(n);
-  if (s.len) fwrite(s.data, 1, s.len, stdout);
-  putchar('\n');
-}
-
-static inline void topaz_console_error_bigint(topaz_bigint *n) {
-  topaz_string s = topaz_bigint_to_string(n);
-  if (s.len) fwrite(s.data, 1, s.len, stderr);
-  putc('\n', stderr);
-}
-
-static inline void topaz_console_warn_bigint(topaz_bigint *n) {
-  topaz_console_error_bigint(n);
 }
 
 // Phase 1.3: monomorphized growable arrays. Reference semantics — variables

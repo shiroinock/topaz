@@ -9087,11 +9087,13 @@ class Emitter {
       const booleanToString = this.requireInternalPreludeFunctionCName("__topaz_boolean_to_string", { pos: arg.pos });
       return `topaz_console_${family}_string(${booleanToString}(${this.emitWithExpected(arg, T_BOOLEAN)}))`;
     }
-    const fn =
-      t.kind === "string" ? `topaz_console_${family}_string`
-      : t.kind === "bigint" ? `topaz_console_${family}_bigint`
-      : `topaz_console_${family}_number`;
-    return `${fn}(${this.emitExpression(arg)})`;
+    if (t.kind === "bigint") {
+      return `topaz_console_${family}_string(topaz_bigint_to_string(${this.emitExpression(arg)}))`;
+    }
+    if (t.kind === "number") {
+      return `topaz_console_${family}_string(topaz_number_to_string(${this.emitExpression(arg)}))`;
+    }
+    return `topaz_console_${family}_string(${this.emitWithExpected(arg, T_STRING)})`;
   }
 
   private emitCall(expr: CallExpr): string {
