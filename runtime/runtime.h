@@ -367,10 +367,6 @@ static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
   return memcmp(a.data, b.data, a.len) == 0;
 }
 
-static inline topaz_boolean topaz_string_is_trim_start_byte(unsigned char c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-
 #ifndef TOPAZ_STRING_REPEAT_MAX_BYTES
 #define TOPAZ_STRING_REPEAT_MAX_BYTES ((size_t)256u * 1024u * 1024u)
 #endif

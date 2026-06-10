@@ -314,6 +314,10 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_trim_start]: migrated trimStart helper definition still embedded" >&2
     exit 1
   fi
+  if grep -Eq "static inline topaz_boolean topaz_string_is_trim_start_byte\\(" build/runtime_prelude_trim_start.c; then
+    echo "FAIL [runtime_prelude_trim_start]: stale trimStart byte helper definition still embedded" >&2
+    exit 1
+  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_trim_start.c -o build/runtime_prelude_trim_start
   local trim_start_out
   trim_start_out=$(./build/runtime_prelude_trim_start)

@@ -97,7 +97,10 @@ definitions have been removed from the embedded runtime header; only
 remain on the C path boundary. The old C definitions for migrated
 `startsWith`, `endsWith`, `trimStart`, and compiler-owned boolean
 stringification are also removed from the embedded runtime header; their stable
-internal prelude helpers remain the only lowering targets.
+internal prelude helpers remain the only lowering targets. The stale
+trim-start byte predicate left behind by the old C `trimStart` implementation
+is removed from the embedded runtime header as part of that cleanup; trim
+scanning now lives only in `__topaz_string_is_trim_start_code(...)`.
 
 The current string-allocation boundary is:
 
