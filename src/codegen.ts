@@ -10341,7 +10341,10 @@ class Emitter {
   private emitNodePathExtname(expr: CallExpr): string {
     const pathArg = this.checkNodePathExtnameArgs(expr);
     const path = this.emitWithExpected(pathArg, T_STRING);
-    return `topaz_path_extname(${path})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_path_extname", {
+      pos: expr.pos,
+    });
+    return `${helper}(${path})`;
   }
 
   // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic、引数 0 個も

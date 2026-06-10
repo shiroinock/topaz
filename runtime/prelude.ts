@@ -34,3 +34,40 @@ function __topaz_string_trim_start(s: string): string {
   }
   return s.slice(start);
 }
+
+function __topaz_path_extname(path: string): string {
+  let startDot: number = -1;
+  let startPart: number = 0;
+  let end: number = -1;
+  let matchedSlash: boolean = true;
+  let preDotState: number = 0;
+  for (let i: number = path.length - 1; i >= 0; i = i - 1) {
+    const code: number = path.charCodeAt(i);
+    if (code === 47) {
+      if (!matchedSlash) {
+        startPart = i + 1;
+        break;
+      }
+      continue;
+    }
+    if (end === -1) {
+      matchedSlash = false;
+      end = i + 1;
+    }
+    if (code === 46) {
+      if (startDot === -1) startDot = i;
+      else if (preDotState !== 1) preDotState = 1;
+    } else if (startDot !== -1) {
+      preDotState = -1;
+    }
+  }
+  if (
+    startDot === -1 ||
+    end === -1 ||
+    preDotState === 0 ||
+    (preDotState === 1 && startDot === end - 1 && startDot === startPart + 1)
+  ) {
+    return "";
+  }
+  return path.slice(startDot, end);
+}

@@ -244,6 +244,22 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_trim_start]"
 
+  node dist/cli.js examples/node_path_extname.ts --emit-c-only -o build/runtime_prelude_path_extname > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_path_extname" build/runtime_prelude_path_extname.c; then
+    echo "FAIL [runtime_prelude_path_extname]: missing stable path extname prelude symbol" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_path_extname.c -o build/runtime_prelude_path_extname
+  local path_extname_out
+  path_extname_out=$(./build/runtime_prelude_path_extname)
+  if [[ "$path_extname_out" != $'.html\n.md\n.\ntrue\ntrue\n.md\n.ts\ntrue\n.gz\ntrue\ntrue\ntrue\n.tsx' ]]; then
+    echo "FAIL [runtime_prelude_path_extname]:" >&2
+    echo "  expected node_path_extname output" >&2
+    printf '%s\n' "$path_extname_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_path_extname]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -391,6 +407,7 @@ run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.t
 run_fail_case runtime_prelude_starts_with_hidden_fail examples/runtime_prelude_starts_with_hidden_fail.ts "unknown identifier '__topaz_string_starts_with'"
 run_fail_case runtime_prelude_ends_with_hidden_fail examples/runtime_prelude_ends_with_hidden_fail.ts "unknown identifier '__topaz_string_ends_with'"
 run_fail_case runtime_prelude_trim_start_hidden_fail examples/runtime_prelude_trim_start_hidden_fail.ts "unknown identifier '__topaz_string_trim_start'"
+run_fail_case runtime_prelude_path_extname_hidden_fail examples/runtime_prelude_path_extname_hidden_fail.ts "unknown identifier '__topaz_path_extname'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
