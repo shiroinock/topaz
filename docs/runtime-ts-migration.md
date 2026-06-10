@@ -43,8 +43,8 @@ symbol should immediately move to TypeScript:
   shapes that generated C and runtime helpers still share.
 - `raw-memory-boundary`: arena allocation, calloc/realloc, raw byte buffers,
   and representation-level storage.
-- `needs-string-buffer-intrinsics`: raw immutable string byte reads that still
-  need an explicit internal read intrinsic or another representation decision.
+- `needs-string-buffer-intrinsics`: legacy raw immutable string byte-read
+  helpers that have now been removed from the runtime header.
 - `needs-bigint-limb-intrinsics`: BigInt limb storage, arithmetic, parsing, and
   formatting that need explicit limb intrinsics or generated monomorphs first.
 - `container-monomorph-boundary`: Array/Map/Set macro families, hash slots,
@@ -57,12 +57,14 @@ symbol should immediately move to TypeScript:
 - `host-abi-boundary`: filesystem, process, URL/module path, child process,
   and raw stdout/stderr wrappers that cross the host ABI.
 
-As of Phase 3.67, `needs-string-buffer-intrinsics` is pinned to exactly
-`topaz_string_byte_at(...)`. This is the remaining raw immutable string
-byte-read substrate for `String.prototype.charCodeAt(index)`, not another
-ordinary helper-migration queue. The old byte-code string materialization
-bridge has been removed; allocation and copying clients now use the
-compiler-owned internal `StringBuffer` intrinsic family.
+As of Phase 3.68, `needs-string-buffer-intrinsics` is empty and reports
+`string buffer intrinsic boundary: <none>`. The former raw immutable string
+byte-read helper for `String.prototype.charCodeAt(index)` has moved out of the
+runtime header: hidden runtime-prelude-only `__topaz_string_byte_at(s, index)`
+now lowers directly to generated C that reads `topaz_string.data[(size_t)i]`.
+The old byte-code string materialization bridge has also been removed;
+allocation and copying clients now use the compiler-owned internal
+`StringBuffer` intrinsic family.
 
 ## Hidden String Buffer Intrinsics
 
@@ -90,10 +92,11 @@ byte, and materializes through `__topaz_string_buffer_to_string`. The remaining
 string byte materialization client, `__topaz_url_file_url_to_path`, now also
 allocates one buffer sized by the input URL, pushes either decoded percent bytes
 or ordinary URL bytes, and materializes through
-`__topaz_string_buffer_to_string`. The remaining replacement question is raw
-byte reads for `__topaz_string_char_code_at`; `topaz_string_byte_at(...)` is the
-sole old string-buffer-intrinsics boundary. This is still pre-v0.2.0 runtime
-prelude groundwork, not manifest, doctor, check, or explain work.
+`__topaz_string_buffer_to_string`. The former raw byte read for
+`__topaz_string_char_code_at` is now a compiler-owned direct `topaz_string`
+data access, so the old string-buffer-intrinsics boundary is empty. This is
+still pre-v0.2.0 runtime prelude groundwork, not manifest, doctor, check, or
+explain work.
 
 ## Topaz Prelude Candidates
 
@@ -183,7 +186,8 @@ allocation, reserve, and element copy loop. `__topaz_string_char_code_at(s,
 index)` now handles `String.prototype.charCodeAt(index)` after codegen keeps
 the public arity/type diagnostics; it performs the public NaN, negative,
 out-of-range, and fractional truncation behavior in Topaz-subset TS, then
-delegates only the raw in-range byte read to `__topaz_string_byte_at(...)`.
+uses hidden `__topaz_string_byte_at(...)` for the compiler-owned in-range
+generated-C byte read.
 These helpers keep the public
 stdlib import shape, language surface, and diagnostics unchanged. The migrated path helpers' old C definitions have
 been removed from the embedded runtime header; `topaz_process_cwd()` is the only
@@ -207,8 +211,8 @@ The current string-allocation boundary is:
   through the internal `StringBuffer` family, including the existing range,
   truncation, empty-output, and output-size checks;
 - `String.prototype.charCodeAt` public semantics live in the runtime prelude,
-  while C keeps only the raw `topaz_string_byte_at(...)` substrate used by the
-  hidden `__topaz_string_byte_at(...)` affordance;
+  while hidden `__topaz_string_byte_at(...)` lowers directly to generated C
+  that reads the immutable string's ABI-visible `.data` field;
 - `Array.prototype.slice` keeps monomorphized storage and copy in generated C,
   but its NaN-sentinel, negative-index, clamp, and truncation normalization now
   lives in `__topaz_slice_normalize(...)`;
@@ -292,12 +296,13 @@ removed, leaving no runtime prelude allocation client on that old substrate.
 `String.prototype.charCodeAt(index)` now follows the scalar string-read split.
 The public call shape and diagnostics remain codegen-owned, while NaN input,
 negative input, out-of-range input, and positive fractional truncation live in
-`__topaz_string_char_code_at(s, index)`. The only C read helper left for this
-path is `topaz_string_byte_at(...)`, a raw byte-read substrate reachable only
-through hidden internal prelude calls. Byte-code string materialization should
-not be reintroduced under another helper name; the accepted allocation/copying
-escape hatch for runtime prelude code is the hidden string-buffer intrinsic
-family, not a public API.
+`__topaz_string_char_code_at(s, index)`. The final in-range byte read is still
+written in the prelude as hidden `__topaz_string_byte_at(s, index)`, but codegen
+lowers that internal-only affordance to a direct generated-C
+`topaz_string.data[(size_t)i]` read instead of a runtime helper call. Byte-code
+string materialization should not be reintroduced under another helper name;
+the accepted allocation/copying escape hatch for runtime prelude code is the
+hidden string-buffer intrinsic family, not a public API.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

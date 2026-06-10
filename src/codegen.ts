@@ -10250,7 +10250,9 @@ class Emitter {
 
   private emitInternalPreludeStringByteAt(expr: CallExpr): string {
     const checked = this.checkInternalPreludeStringByteAtArgs(expr);
-    return `topaz_string_byte_at(${this.emitWithExpected(checked.sArg, T_STRING)}, ${this.emitWithExpected(checked.indexArg, T_NUMBER)})`;
+    const sExpr = this.emitWithExpected(checked.sArg, T_STRING);
+    const indexExpr = this.emitWithExpected(checked.indexArg, T_NUMBER);
+    return `((topaz_number)(unsigned char)(${sExpr}).data[(size_t)(${indexExpr})])`;
   }
 
   private checkInternalPreludeStringBufferNewArgs(expr: CallExpr): Expr {

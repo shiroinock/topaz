@@ -363,11 +363,6 @@ static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
   return memcmp(a.data, b.data, a.len) == 0;
 }
 
-static inline topaz_number topaz_string_byte_at(topaz_string s, topaz_number i) {
-  size_t idx = (size_t)i;
-  return (topaz_number)(unsigned char)s.data[idx];
-}
-
 static inline size_t string_buffer_number_to_size(topaz_number n, const char *label) {
   if (!isfinite(n) || n < 0 || floor(n) != n || n > (topaz_number)SIZE_MAX) {
     fputs(label, stderr);

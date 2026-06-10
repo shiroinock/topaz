@@ -14,8 +14,8 @@ if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"string buffer intrinsic boundary: topaz_string_byte_at"* ]]; then
-  echo "FAIL [runtime_substrate_inventory]: missing pinned string buffer intrinsic boundary" >&2
+if [[ "${substrate_out}" != *"string buffer intrinsic boundary: <none>"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing empty string buffer intrinsic boundary" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
@@ -305,8 +305,16 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_string_char_code_at]: missing stable String.charCodeAt prelude symbol" >&2
     exit 1
   fi
-  if ! grep -q "topaz_string_byte_at(" build/runtime_prelude_string_char_code_at.c; then
-    echo "FAIL [runtime_prelude_string_char_code_at]: missing raw string byte-read substrate" >&2
+  if grep -Eq "\btopaz_string_byte_at\s*\(" build/runtime_prelude_string_char_code_at.c; then
+    echo "FAIL [runtime_prelude_string_char_code_at]: stale raw string byte-read substrate call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_number topaz_string_byte_at\s*\(" build/runtime_prelude_string_char_code_at.c; then
+    echo "FAIL [runtime_prelude_string_char_code_at]: stale raw string byte-read substrate definition embedded" >&2
+    exit 1
+  fi
+  if ! grep -Fq ".data[(size_t)" build/runtime_prelude_string_char_code_at.c; then
+    echo "FAIL [runtime_prelude_string_char_code_at]: missing direct topaz_string byte read" >&2
     exit 1
   fi
   if grep -Eq "\btopaz_string_char_code_at\s*\(" build/runtime_prelude_string_char_code_at.c; then

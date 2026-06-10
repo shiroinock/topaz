@@ -33,13 +33,13 @@ const NEXT = {
   LIBC_LIBM: "Pinned until Topaz has a replacement that preserves libc/libm parsing and formatting behavior.",
   EXCEPTION: "Pinned while exceptions depend on setjmp/longjmp and abort/panic C control transfer.",
   CONTAINER_MONOMORPH: "Needs a compiler-owned replacement for monomorphized container storage, hashing, and equality.",
-  STRING_BUFFER_INTRINSICS: "Needs explicit string-buffer allocation, byte copy, and byte read intrinsics.",
+  STRING_BUFFER_INTRINSICS: "Empty after charCodeAt's hidden byte read became a compiler-owned generated-C intrinsic.",
   STRING_BUFFER_INTRINSIC_FAMILY: "Compiler-owned internal string-buffer family that will replace the old byte-code boundary as prelude clients migrate.",
   BIGINT_LIMB_INTRINSICS: "Needs explicit bigint limb storage and arithmetic intrinsics or generated monomorphs.",
   C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
 };
 
-const STRING_BUFFER_INTRINSIC_BOUNDARY = ["topaz_string_byte_at"];
+const STRING_BUFFER_INTRINSIC_BOUNDARY = [];
 
 const inventory = {
   TOPAZ_RUNTIME_H: {
@@ -218,12 +218,6 @@ const inventory = {
     reason: "string key equality substrate for Map/Set monomorphs.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
     next: NEXT.CONTAINER_MONOMORPH,
-  },
-  topaz_string_byte_at: {
-    category: CATEGORY.STRING,
-    reason: "raw byte-read substrate used only through runtime prelude string helpers.",
-    migration: MIGRATION.STRING_BUFFER_INTRINSICS,
-    next: NEXT.STRING_BUFFER_INTRINSICS,
   },
   topaz_string_buffer_new: {
     category: CATEGORY.STRING,
@@ -559,4 +553,6 @@ console.log("migration lanes:");
 for (const [migration, count] of [...migrationCounts.entries()].sort(([a], [b]) => a.localeCompare(b))) {
   console.log(`  ${migration}: ${count}`);
 }
-console.log(`string buffer intrinsic boundary: ${STRING_BUFFER_INTRINSIC_BOUNDARY.join(", ")}`);
+const stringBufferBoundaryLabel =
+  STRING_BUFFER_INTRINSIC_BOUNDARY.length === 0 ? "<none>" : STRING_BUFFER_INTRINSIC_BOUNDARY.join(", ");
+console.log(`string buffer intrinsic boundary: ${stringBufferBoundaryLabel}`);
