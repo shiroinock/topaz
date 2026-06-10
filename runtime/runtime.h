@@ -101,22 +101,6 @@ typedef struct {
   size_t cap;
 } topaz_bigint_buffer;
 
-static inline topaz_bigint *topaz_bigint_alloc(size_t len) {
-  topaz_bigint *out = (topaz_bigint *)topaz_arena_alloc(sizeof(*out));
-  out->limbs = len ? (uint32_t *)topaz_arena_calloc(len, sizeof(uint32_t)) : NULL;
-  out->len = len;
-  out->sign = 0;
-  return out;
-}
-
-static inline void topaz_bigint_normalize(topaz_bigint *x) {
-  while (x->len > 0 && x->limbs[x->len - 1] == 0) x->len--;
-  if (x->len == 0) {
-    x->limbs = NULL;
-    x->sign = 0;
-  }
-}
-
 static inline size_t bigint_buffer_number_to_size(topaz_number n, const char *label) {
   if (!isfinite(n) || n < 0 || floor(n) != n || n > (topaz_number)SIZE_MAX) {
     fputs(label, stderr);
@@ -157,15 +141,20 @@ static inline topaz_bigint_buffer *topaz_bigint_buffer_new(topaz_number capacity
 
 static inline topaz_bigint *topaz_bigint_buffer_to_bigint(topaz_bigint_buffer *buffer, topaz_number sign) {
   int s = bigint_buffer_number_to_sign(sign);
-  topaz_bigint *out = topaz_bigint_alloc(buffer->len);
-  if (buffer->len) memcpy(out->limbs, buffer->limbs, buffer->len * sizeof(uint32_t));
-  out->len = buffer->len;
-  out->sign = buffer->len == 0 ? 0 : s;
-  topaz_bigint_normalize(out);
-  if (out->len != 0 && out->sign == 0) {
+  size_t len = buffer->len;
+  while (len > 0 && buffer->limbs[len - 1] == 0) len--;
+  if (len != 0 && s == 0) {
     fputs("topaz: bigint buffer sign out of range\n", stderr);
     abort();
   }
+  topaz_bigint *out = (topaz_bigint *)topaz_arena_alloc(sizeof(*out));
+  out->limbs = NULL;
+  if (len) {
+    out->limbs = (uint32_t *)topaz_arena_alloc(len * sizeof(uint32_t));
+    memcpy(out->limbs, buffer->limbs, len * sizeof(uint32_t));
+  }
+  out->len = len;
+  out->sign = len == 0 ? 0 : s;
   return out;
 }
 

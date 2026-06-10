@@ -117,6 +117,13 @@ right, updates a `BigIntBuffer` with multiply-by-10 and add-digit steps, and
 materializes through `__topaz_bigint_buffer_to_bigint(...)`. Decimal formatting
 still remains in C as `topaz_bigint_to_string(...)`.
 
+As of Phase 3.77, bigint allocation and normalization are no longer standalone
+`needs-bigint-limb-intrinsics` helpers. Their behavior is folded into the C ABI
+materialization boundary `topaz_bigint_buffer_to_bigint(...)`, which trims
+trailing zero limbs, allocates the immutable `topaz_bigint *`, copies normalized
+limbs, and canonicalizes zero. Decimal formatting remains the only standalone
+helper in that lane.
+
 ## Hidden String Buffer Intrinsics
 
 The next implementation target is an internal-prelude-only intrinsic family:

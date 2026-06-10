@@ -19,7 +19,7 @@ if [[ "${substrate_out}" != *"string buffer intrinsic boundary: <none>"* ]]; the
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"needs-bigint-limb-intrinsics: 3"* ]]; then
+if [[ "${substrate_out}" != *"needs-bigint-limb-intrinsics: 1"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: bigint migration lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
@@ -648,6 +648,12 @@ TOPAZ
     topaz_bigint_sign; do
     if ! grep -Eq "\b${symbol}\s*\(" build/runtime_prelude_bigint_buffer.c; then
       echo "FAIL [runtime_prelude_bigint_buffer]: missing ${symbol} call" >&2
+      exit 1
+    fi
+  done
+  for symbol in topaz_bigint_alloc topaz_bigint_normalize; do
+    if grep -Eq "\b${symbol}\s*\(" build/runtime_prelude_bigint_buffer.c; then
+      echo "FAIL [runtime_prelude_bigint_buffer]: stale standalone ${symbol} emitted" >&2
       exit 1
     fi
   done

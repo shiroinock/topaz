@@ -112,18 +112,6 @@ const inventory = {
     next: NEXT.RAW_MEMORY,
   },
 
-  topaz_bigint_alloc: {
-    category: CATEGORY.BIGINT,
-    reason: "raw limb storage allocation for bigint values.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_normalize: {
-    category: CATEGORY.BIGINT,
-    reason: "canonicalizes raw bigint limb/sign representation.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
   topaz_bigint_to_string: {
     category: CATEGORY.BIGINT,
     reason: "bigint formatting over raw limb storage.",
