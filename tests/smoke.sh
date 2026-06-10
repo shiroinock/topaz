@@ -387,6 +387,11 @@ run_cli_smoke() {
     exit 1
   fi
   echo "PASS [runtime_substrate_path_resolve]"
+  if grep -Eq "static inline topaz_string topaz_path_(dirname|basename|basename_ext|extname|join)\\(" build/runtime_substrate_path_resolve.c; then
+    echo "FAIL [runtime_header_path_helper_cleanup]: migrated path helper definition still embedded" >&2
+    exit 1
+  fi
+  echo "PASS [runtime_header_path_helper_cleanup]"
 
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out

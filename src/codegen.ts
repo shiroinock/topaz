@@ -9228,9 +9228,8 @@ class Emitter {
       if (callee.name === "extname") {
         return this.emitNodePathExtname(expr);
       }
-      // Phase 1.5-6 prep #23: node:path.join(...segments) は variadic + posix
-      // normalize。resolve と同じ variadic lowering で `topaz_path_join(n,
-      // seg0, seg1, ...)` に降ろす。
+      // Phase 3.40: node:path.join(...segments) packages checked variadic
+      // arguments into an internal Array<string> for the runtime prelude.
       if (callee.name === "join") {
         return this.emitNodePathJoin(expr);
       }
