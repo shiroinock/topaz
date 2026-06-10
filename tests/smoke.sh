@@ -260,6 +260,20 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_string_from_char_code]: stale fromCharCode C helper definition embedded" >&2
     exit 1
   fi
+  local from_char_code_body
+  from_char_code_body=$(awk '
+    /^static __attribute__\(\(unused\)\) topaz_string topaz_fn_runtime_prelude___topaz_string_from_char_code\(topaz_number n\) \{/ { in_fn = 1 }
+    in_fn { print }
+    in_fn && /^}$/ { exit }
+  ' build/runtime_prelude_string_from_char_code.c)
+  if ! grep -q "topaz_string_buffer_" <<< "$from_char_code_body"; then
+    echo "FAIL [runtime_prelude_string_from_char_code]: missing string buffer intrinsic substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_from_byte_codes\s*\(" <<< "$from_char_code_body"; then
+    echo "FAIL [runtime_prelude_string_from_char_code]: old byte-code materialization helper still used" >&2
+    exit 1
+  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_from_char_code.c -o build/runtime_prelude_string_from_char_code
   local from_char_code_out
   from_char_code_out=$(./build/runtime_prelude_string_from_char_code)
@@ -994,6 +1008,7 @@ run_fail_case runtime_prelude_string_repeat_hidden_fail examples/runtime_prelude
 run_fail_case runtime_prelude_array_slice_normalize_hidden_fail examples/runtime_prelude_array_slice_normalize_hidden_fail.ts "unknown identifier '__topaz_slice_normalize'"
 run_fail_case runtime_prelude_string_char_code_at_hidden_fail examples/runtime_prelude_string_char_code_at_hidden_fail.ts "unknown identifier '__topaz_string_char_code_at'"
 run_fail_case runtime_prelude_string_byte_at_hidden_fail examples/runtime_prelude_string_byte_at_hidden_fail.ts "unknown identifier '__topaz_string_byte_at'"
+run_fail_case runtime_prelude_string_buffer_hidden_fail examples/runtime_prelude_string_buffer_hidden_fail.ts "unknown identifier '__topaz_string_buffer_new'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

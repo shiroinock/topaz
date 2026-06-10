@@ -75,6 +75,7 @@ type TopazType =
   | { kind: "bigint" }
   | { kind: "boolean" }
   | { kind: "string" }
+  | { kind: "string_buffer" }
   | { kind: "undefined" }
   | { kind: "unknown" }
   | { kind: "void" }
@@ -118,6 +119,7 @@ const T_NUMBER: TopazType = { kind: "number" };
 const T_BIGINT: TopazType = { kind: "bigint" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
 const T_STRING: TopazType = { kind: "string" };
+const T_STRING_BUFFER: TopazType = { kind: "string_buffer" };
 const T_UNDEFINED: TopazType = { kind: "undefined" };
 const T_UNKNOWN: TopazType = { kind: "unknown" };
 // Phase 1.5-6 prep: `void` is only valid as a function / method return type.
@@ -294,6 +296,7 @@ function typeEq(a: TopazType, b: TopazType): boolean {
   if (a.kind === "bigint") return b.kind === "bigint";
   if (a.kind === "boolean") return b.kind === "boolean";
   if (a.kind === "string") return b.kind === "string";
+  if (a.kind === "string_buffer") return b.kind === "string_buffer";
   if (a.kind === "undefined") return b.kind === "undefined";
   if (a.kind === "unknown") return b.kind === "unknown";
   if (a.kind === "void") return b.kind === "void";
@@ -478,6 +481,7 @@ function typeIdent(t: TopazType): string {
   if (t.kind === "bigint") return "topaz_bigint";
   if (t.kind === "boolean") return "topaz_boolean";
   if (t.kind === "string") return "topaz_string";
+  if (t.kind === "string_buffer") return "topaz_string_buffer";
   if (t.kind === "undefined") return "topaz_undefined";
   if (t.kind === "unknown") return "topaz_unknown";
   if (t.kind === "void") return "topaz_void";
@@ -629,6 +633,9 @@ function cTypeName(t: TopazType): string {
   }
   if (t.kind === "string_literal") {
     return "topaz_string";
+  }
+  if (t.kind === "string_buffer") {
+    return "topaz_string_buffer *";
   }
   if (t.kind === "bigint") {
     return "topaz_bigint *";
@@ -3839,6 +3846,12 @@ class Emitter {
       if (refName === "string") return T_STRING;
       if (refName === "undefined") return T_UNDEFINED;
       if (refName === "never") return T_VOID;
+      if (refName === "StringBuffer" && sf.isInternalModule && sf.stableModuleId === "runtime_prelude") {
+        if (node.typeArgs.length > 0) {
+          throw this.typeErr(nodeAnchor, "StringBuffer takes no type arguments");
+        }
+        return T_STRING_BUFFER;
+      }
       // Phase 1.4c-2: when emitting under an active type-parameter scope,
       // bare type references like `T` resolve through the substitution. Must
       // come before the class/interface lookup so that a class declared with
@@ -9223,6 +9236,21 @@ class Emitter {
         if (callee.name === "__topaz_string_byte_at") {
           return this.emitInternalPreludeStringByteAt(expr);
         }
+        if (callee.name === "__topaz_string_buffer_new") {
+          return this.emitInternalPreludeStringBufferNew(expr);
+        }
+        if (callee.name === "__topaz_string_buffer_push_byte") {
+          return this.emitInternalPreludeStringBufferPushByte(expr);
+        }
+        if (callee.name === "__topaz_string_buffer_append_string") {
+          return this.emitInternalPreludeStringBufferAppendString(expr);
+        }
+        if (callee.name === "__topaz_string_buffer_byte_at") {
+          return this.emitInternalPreludeStringBufferByteAt(expr);
+        }
+        if (callee.name === "__topaz_string_buffer_to_string") {
+          return this.emitInternalPreludeStringBufferToString(expr);
+        }
       }
       if (callee.name === "readFileSync") {
         return this.emitNodeFsReadFileSync(expr);
@@ -10251,6 +10279,111 @@ class Emitter {
   private emitInternalPreludeStringByteAt(expr: CallExpr): string {
     const checked = this.checkInternalPreludeStringByteAtArgs(expr);
     return `topaz_string_byte_at(${this.emitWithExpected(checked.sArg, T_STRING)}, ${this.emitWithExpected(checked.indexArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeStringBufferNewArgs(expr: CallExpr): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, "__topaz_string_buffer_new expects exactly one argument: (capacity: number)");
+    }
+    const capacityArg = expr.args[0];
+    const capacityType = this.inferType(capacityArg);
+    if (capacityType.kind !== "number") {
+      throw new CodegenError(
+        { pos: capacityArg.pos },
+        `__topaz_string_buffer_new capacity must be number, got ${typeIdent(capacityType)}`,
+      );
+    }
+    return capacityArg;
+  }
+
+  private emitInternalPreludeStringBufferNew(expr: CallExpr): string {
+    const capacityArg = this.checkInternalPreludeStringBufferNewArgs(expr);
+    return `topaz_string_buffer_new(${this.emitWithExpected(capacityArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeStringBufferByteArgs(
+    expr: CallExpr,
+    name: string,
+    argName: string,
+  ): { bufferArg: Expr; numberArg: Expr } {
+    if (expr.args.length !== 2) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        `${name} expects exactly two arguments: (buffer: StringBuffer, ${argName}: number)`,
+      );
+    }
+    const bufferArg = expr.args[0];
+    const bufferType = this.inferType(bufferArg);
+    if (!typeEq(bufferType, T_STRING_BUFFER)) {
+      throw new CodegenError({ pos: bufferArg.pos }, `${name} buffer must be StringBuffer, got ${typeIdent(bufferType)}`);
+    }
+    const numberArg = expr.args[1];
+    const numberType = this.inferType(numberArg);
+    if (numberType.kind !== "number") {
+      throw new CodegenError({ pos: numberArg.pos }, `${name} ${argName} must be number, got ${typeIdent(numberType)}`);
+    }
+    return { bufferArg, numberArg };
+  }
+
+  private emitInternalPreludeStringBufferPushByte(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeStringBufferByteArgs(expr, "__topaz_string_buffer_push_byte", "byte");
+    return `topaz_string_buffer_push_byte(${this.emitWithExpected(checked.bufferArg, T_STRING_BUFFER)}, ${this.emitWithExpected(checked.numberArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeStringBufferAppendStringArgs(expr: CallExpr): { bufferArg: Expr; valueArg: Expr } {
+    if (expr.args.length !== 2) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        "__topaz_string_buffer_append_string expects exactly two arguments: (buffer: StringBuffer, value: string)",
+      );
+    }
+    const bufferArg = expr.args[0];
+    const bufferType = this.inferType(bufferArg);
+    if (!typeEq(bufferType, T_STRING_BUFFER)) {
+      throw new CodegenError(
+        { pos: bufferArg.pos },
+        `__topaz_string_buffer_append_string buffer must be StringBuffer, got ${typeIdent(bufferType)}`,
+      );
+    }
+    const valueArg = expr.args[1];
+    const valueType = this.inferType(valueArg);
+    if (valueType.kind !== "string") {
+      throw new CodegenError(
+        { pos: valueArg.pos },
+        `__topaz_string_buffer_append_string value must be string, got ${typeIdent(valueType)}`,
+      );
+    }
+    return { bufferArg, valueArg };
+  }
+
+  private emitInternalPreludeStringBufferAppendString(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeStringBufferAppendStringArgs(expr);
+    return `topaz_string_buffer_append_string(${this.emitWithExpected(checked.bufferArg, T_STRING_BUFFER)}, ${this.emitWithExpected(checked.valueArg, T_STRING)})`;
+  }
+
+  private emitInternalPreludeStringBufferByteAt(expr: CallExpr): string {
+    const checked = this.checkInternalPreludeStringBufferByteArgs(expr, "__topaz_string_buffer_byte_at", "index");
+    return `topaz_string_buffer_byte_at(${this.emitWithExpected(checked.bufferArg, T_STRING_BUFFER)}, ${this.emitWithExpected(checked.numberArg, T_NUMBER)})`;
+  }
+
+  private checkInternalPreludeStringBufferToStringArgs(expr: CallExpr): Expr {
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, "__topaz_string_buffer_to_string expects exactly one argument: (buffer: StringBuffer)");
+    }
+    const bufferArg = expr.args[0];
+    const bufferType = this.inferType(bufferArg);
+    if (!typeEq(bufferType, T_STRING_BUFFER)) {
+      throw new CodegenError(
+        { pos: bufferArg.pos },
+        `__topaz_string_buffer_to_string buffer must be StringBuffer, got ${typeIdent(bufferType)}`,
+      );
+    }
+    return bufferArg;
+  }
+
+  private emitInternalPreludeStringBufferToString(expr: CallExpr): string {
+    const bufferArg = this.checkInternalPreludeStringBufferToStringArgs(expr);
+    return `topaz_string_buffer_to_string(${this.emitWithExpected(bufferArg, T_STRING_BUFFER)})`;
   }
 
   // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
@@ -11831,6 +11964,26 @@ class Emitter {
           if (callee.name === "__topaz_string_byte_at") {
             this.checkInternalPreludeStringByteAtArgs(expr);
             return T_NUMBER;
+          }
+          if (callee.name === "__topaz_string_buffer_new") {
+            this.checkInternalPreludeStringBufferNewArgs(expr);
+            return T_STRING_BUFFER;
+          }
+          if (callee.name === "__topaz_string_buffer_push_byte") {
+            this.checkInternalPreludeStringBufferByteArgs(expr, "__topaz_string_buffer_push_byte", "byte");
+            return T_VOID;
+          }
+          if (callee.name === "__topaz_string_buffer_append_string") {
+            this.checkInternalPreludeStringBufferAppendStringArgs(expr);
+            return T_VOID;
+          }
+          if (callee.name === "__topaz_string_buffer_byte_at") {
+            this.checkInternalPreludeStringBufferByteArgs(expr, "__topaz_string_buffer_byte_at", "index");
+            return T_NUMBER;
+          }
+          if (callee.name === "__topaz_string_buffer_to_string") {
+            this.checkInternalPreludeStringBufferToStringArgs(expr);
+            return T_STRING;
           }
         }
         if (callee.name === "readFileSync") {

@@ -80,6 +80,12 @@ typedef struct {
   size_t len;
 } topaz_string;
 
+typedef struct {
+  char *data;
+  size_t len;
+  size_t cap;
+} topaz_string_buffer;
+
 // Phase 2.4c: immutable arbitrary-precision bigint. Generated code only sees
 // `topaz_bigint *`; helpers allocate fresh arena objects for every result.
 // Limbs are little-endian base 2^32. `sign == 0` canonicalizes zero.
@@ -360,6 +366,75 @@ static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
 static inline topaz_number topaz_string_byte_at(topaz_string s, topaz_number i) {
   size_t idx = (size_t)i;
   return (topaz_number)(unsigned char)s.data[idx];
+}
+
+static inline size_t string_buffer_number_to_size(topaz_number n, const char *label) {
+  if (!isfinite(n) || n < 0 || floor(n) != n || n > (topaz_number)SIZE_MAX) {
+    fputs(label, stderr);
+    fputc('\n', stderr);
+    abort();
+  }
+  return (size_t)n;
+}
+
+static inline void string_buffer_ensure_capacity(topaz_string_buffer *buffer, size_t wanted) {
+  if (wanted <= buffer->cap) return;
+  size_t new_cap = buffer->cap ? buffer->cap : 16;
+  while (new_cap < wanted) {
+    if (new_cap > SIZE_MAX / 2) {
+      new_cap = wanted;
+      break;
+    }
+    new_cap *= 2;
+  }
+  buffer->data = (char *)topaz_arena_realloc(buffer->data, buffer->cap + 1, new_cap + 1);
+  buffer->cap = new_cap;
+}
+
+static inline topaz_string_buffer *topaz_string_buffer_new(topaz_number capacity) {
+  size_t cap = string_buffer_number_to_size(capacity, "topaz: string buffer capacity out of range");
+  topaz_string_buffer *buffer = (topaz_string_buffer *)topaz_arena_alloc(sizeof(*buffer));
+  buffer->data = cap ? (char *)topaz_arena_alloc(cap + 1) : NULL;
+  buffer->len = 0;
+  buffer->cap = cap;
+  if (buffer->data) buffer->data[0] = '\0';
+  return buffer;
+}
+
+static inline void topaz_string_buffer_push_byte(topaz_string_buffer *buffer, topaz_number byte) {
+  if (!isfinite(byte) || byte < 0 || byte > 255 || floor(byte) != byte) {
+    fputs("topaz: byte code out of range\n", stderr);
+    abort();
+  }
+  string_buffer_ensure_capacity(buffer, buffer->len + 1);
+  buffer->data[buffer->len] = (char)(unsigned char)byte;
+  buffer->len++;
+  buffer->data[buffer->len] = '\0';
+}
+
+static inline void topaz_string_buffer_append_string(topaz_string_buffer *buffer, topaz_string value) {
+  if (value.len == 0) return;
+  string_buffer_ensure_capacity(buffer, buffer->len + value.len);
+  memcpy(buffer->data + buffer->len, value.data, value.len);
+  buffer->len += value.len;
+  buffer->data[buffer->len] = '\0';
+}
+
+static inline topaz_number topaz_string_buffer_byte_at(topaz_string_buffer *buffer, topaz_number index) {
+  size_t i = string_buffer_number_to_size(index, "topaz: string buffer index out of range");
+  if (i >= buffer->len) {
+    fputs("topaz: string buffer index out of range\n", stderr);
+    abort();
+  }
+  return (topaz_number)(unsigned char)buffer->data[i];
+}
+
+static inline topaz_string topaz_string_buffer_to_string(topaz_string_buffer *buffer) {
+  char *data = (char *)topaz_arena_alloc(buffer->len + 1);
+  if (buffer->len) memcpy(data, buffer->data, buffer->len);
+  data[buffer->len] = '\0';
+  topaz_string out = { data, buffer->len };
+  return out;
 }
 
 // JS `%` is IEEE-754 remainder with truncated quotient = fmod.

@@ -22,9 +22,9 @@ function __topaz_string_from_char_code(n: number): string {
     return "";
   }
   const code: number = n - (n % 1);
-  const codes: Array<number> = [];
-  codes.push(code);
-  return __topaz_string_from_byte_codes(codes);
+  const buffer: StringBuffer = __topaz_string_buffer_new(1);
+  __topaz_string_buffer_push_byte(buffer, code);
+  return __topaz_string_buffer_to_string(buffer);
 }
 
 function __topaz_string_char_code_at(s: string, index: number): number {

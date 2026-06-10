@@ -22,6 +22,7 @@ const MIGRATION = {
   EXCEPTION: "exception-boundary",
   CONTAINER_MONOMORPH: "container-monomorph-boundary",
   STRING_BUFFER_INTRINSICS: "needs-string-buffer-intrinsics",
+  STRING_BUFFER_INTRINSIC_FAMILY: "string-buffer-intrinsic-family",
   BIGINT_LIMB_INTRINSICS: "needs-bigint-limb-intrinsics",
   C_ABI_TYPE: "c-abi-type-boundary",
 };
@@ -33,6 +34,7 @@ const NEXT = {
   EXCEPTION: "Pinned while exceptions depend on setjmp/longjmp and abort/panic C control transfer.",
   CONTAINER_MONOMORPH: "Needs a compiler-owned replacement for monomorphized container storage, hashing, and equality.",
   STRING_BUFFER_INTRINSICS: "Needs explicit string-buffer allocation, byte copy, and byte read intrinsics.",
+  STRING_BUFFER_INTRINSIC_FAMILY: "Compiler-owned internal string-buffer family that will replace the old byte-code boundary as prelude clients migrate.",
   BIGINT_LIMB_INTRINSICS: "Needs explicit bigint limb storage and arithmetic intrinsics or generated monomorphs.",
   C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
 };
@@ -228,6 +230,36 @@ const inventory = {
     reason: "internal runtime prelude byte-preserving string allocation primitive.",
     migration: MIGRATION.STRING_BUFFER_INTRINSICS,
     next: NEXT.STRING_BUFFER_INTRINSICS,
+  },
+  topaz_string_buffer_new: {
+    category: CATEGORY.STRING,
+    reason: "internal runtime prelude opaque string buffer allocation primitive.",
+    migration: MIGRATION.STRING_BUFFER_INTRINSIC_FAMILY,
+    next: NEXT.STRING_BUFFER_INTRINSIC_FAMILY,
+  },
+  topaz_string_buffer_push_byte: {
+    category: CATEGORY.STRING,
+    reason: "internal runtime prelude byte append primitive for StringBuffer.",
+    migration: MIGRATION.STRING_BUFFER_INTRINSIC_FAMILY,
+    next: NEXT.STRING_BUFFER_INTRINSIC_FAMILY,
+  },
+  topaz_string_buffer_append_string: {
+    category: CATEGORY.STRING,
+    reason: "internal runtime prelude string copy primitive for StringBuffer.",
+    migration: MIGRATION.STRING_BUFFER_INTRINSIC_FAMILY,
+    next: NEXT.STRING_BUFFER_INTRINSIC_FAMILY,
+  },
+  topaz_string_buffer_byte_at: {
+    category: CATEGORY.STRING,
+    reason: "internal runtime prelude byte read primitive for StringBuffer.",
+    migration: MIGRATION.STRING_BUFFER_INTRINSIC_FAMILY,
+    next: NEXT.STRING_BUFFER_INTRINSIC_FAMILY,
+  },
+  topaz_string_buffer_to_string: {
+    category: CATEGORY.STRING,
+    reason: "internal runtime prelude immutable string materialization primitive for StringBuffer.",
+    migration: MIGRATION.STRING_BUFFER_INTRINSIC_FAMILY,
+    next: NEXT.STRING_BUFFER_INTRINSIC_FAMILY,
   },
 
   topaz_fmod: {

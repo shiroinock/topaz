@@ -78,13 +78,15 @@ interface, importable symbol, structural type, `Array<number>`, or pointer
 escape; ordinary user modules must still fail hidden helper references with
 `unknown identifier '__topaz_*'`.
 
-A later implementation phase should first add type and lowering support for
-this pseudo type while keeping the helpers visible only to `runtime/prelude.ts`.
-The replacement order is: string byte materialization clients first
-(`__topaz_string_concat`, `__topaz_string_repeat`, `__topaz_string_slice`,
-`__topaz_string_from_char_code`, and `__topaz_url_file_url_to_path`), raw byte
-reads second (`__topaz_string_char_code_at`), then removal or reclassification
-of `topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)` after no
+The implementation now has type and lowering support for this pseudo type while
+keeping the helpers visible only to `runtime/prelude.ts`. The first migrated
+client is `__topaz_string_from_char_code`, which allocates a one-byte buffer,
+pushes the ASCII code, and materializes an immutable `string`. The remaining
+replacement order is: the rest of the string byte materialization clients first
+(`__topaz_string_concat`, `__topaz_string_repeat`, `__topaz_string_slice`, and
+`__topaz_url_file_url_to_path`), raw byte reads second
+(`__topaz_string_char_code_at`), then removal or reclassification of
+`topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)` after no
 prelude client needs the old two-symbol boundary. This is still pre-v0.2.0
 runtime prelude groundwork, not manifest, doctor, check, or explain work.
 
@@ -275,10 +277,11 @@ delegates decimal/exponent parsing and roundoff behavior to libc `strtod`.
 `String.fromCharCode(n)` now follows the same split boundary for one-byte ASCII
 strings. The public call shape and diagnostics remain codegen-owned, while the
 NaN / negative / `>= 128` rejection and valid fractional truncation live in
-`__topaz_string_from_char_code(n)`. Final allocation is still delegated to the
-byte-code C substrate through `__topaz_string_from_byte_codes(Array<number>)`,
-so the stale dedicated C `topaz_string_from_char_code(...)` helper is removed
-without broadening string allocation migration.
+`__topaz_string_from_char_code(n)`. Final allocation now uses the internal
+`StringBuffer` intrinsic family instead of the temporary
+`Array<number>`/`__topaz_string_from_byte_codes(Array<number>)` bridge, so this
+helper proves the new substrate without migrating concat, repeat, slice,
+fileURLToPath, or charCodeAt yet.
 
 `String.prototype.charCodeAt(index)` now follows the scalar string-read split.
 The public call shape and diagnostics remain codegen-owned, while NaN input,
