@@ -49,8 +49,8 @@ Split string work into two buckets:
   work is pure Topaz-subset control flow and they delegate the final string
   allocation/copying to those existing primitives without changing behavior.
 
-The next concrete candidate is `String.prototype.trimStart()`: scan leading
-ASCII whitespace in prelude TS with `.length` and `charCodeAt`, then return
+`String.prototype.trimStart()` now uses this pattern: scan leading ASCII
+whitespace in prelude TS with `.length` and `charCodeAt`, then return
 `s.slice(start)` for the final allocation.
 
 ## Required Compiler Work
@@ -73,14 +73,16 @@ source as an internal module before user modules and gives it the stable C
 module id `runtime_prelude`. The first migrated helper is
 `__topaz_string_starts_with()`, followed by `__topaz_string_ends_with()`, which
 codegen targets for `String.prototype.startsWith(search)` and
-`String.prototype.endsWith(search)` while preserving the public method shape
-and diagnostics. The current string-allocation boundary is:
+`String.prototype.endsWith(search)`, followed by
+`__topaz_string_trim_start()` for `String.prototype.trimStart()` while
+preserving the public method shape and diagnostics. The current
+string-allocation boundary is:
 
 - allocation primitives (`slice`, `repeat`, concat, `String.fromCharCode`) stay
   on the C substrate path until explicit string-buffer intrinsics exist;
-- allocation clients such as `trimStart` may migrate to prelude TS if they keep
-  their observable behavior and delegate the final allocation to those existing
-  compiler-owned primitives.
+- allocation clients may migrate to prelude TS if they keep their observable
+  behavior and delegate the final allocation to those existing compiler-owned
+  primitives; `trimStart` is the first migrated example.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

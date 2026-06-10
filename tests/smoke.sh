@@ -228,6 +228,22 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_ends_with]"
 
+  node dist/cli.js examples/string_trim_start.ts --emit-c-only -o build/runtime_prelude_trim_start > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_trim_start" build/runtime_prelude_trim_start.c; then
+    echo "FAIL [runtime_prelude_trim_start]: missing stable trimStart prelude symbol" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_trim_start.c -o build/runtime_prelude_trim_start
+  local trim_start_out
+  trim_start_out=$(./build/runtime_prelude_trim_start)
+  if [[ "$trim_start_out" != $'topaz\n5\nok\n2\nready\n5\n0\ntrue\npre-value\nbc\nxxx\nname' ]]; then
+    echo "FAIL [runtime_prelude_trim_start]:" >&2
+    echo "  expected string_trim_start output" >&2
+    printf '%s\n' "$trim_start_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_trim_start]"
+
   node dist/cli.js examples/fib.ts --output build/cli_output_probe > /dev/null
   local out
   out=$(./build/cli_output_probe)
@@ -374,6 +390,7 @@ run_module_case module_function_collision examples/module_function_collision_mai
 run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.ts "unknown identifier '__topaz_runtime_prelude_init'"
 run_fail_case runtime_prelude_starts_with_hidden_fail examples/runtime_prelude_starts_with_hidden_fail.ts "unknown identifier '__topaz_string_starts_with'"
 run_fail_case runtime_prelude_ends_with_hidden_fail examples/runtime_prelude_ends_with_hidden_fail.ts "unknown identifier '__topaz_string_ends_with'"
+run_fail_case runtime_prelude_trim_start_hidden_fail examples/runtime_prelude_trim_start_hidden_fail.ts "unknown identifier '__topaz_string_trim_start'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
