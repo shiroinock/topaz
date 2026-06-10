@@ -57,6 +57,14 @@ symbol should immediately move to TypeScript:
 - `host-abi-boundary`: filesystem, process, URL/module path, child process,
   and raw stdout/stderr wrappers that cross the host ABI.
 
+As of Phase 3.60, `needs-string-buffer-intrinsics` is pinned to exactly
+`topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)`. This is a
+terminal C boundary for the current runtime-prelude experiment, not another
+ordinary helper-migration queue. Moving either symbol now requires
+compiler-owned internal string-buffer intrinsics: opaque buffer allocation,
+byte append/copy/read operations, materialization to immutable `string`, and
+hidden lowering available only to runtime prelude modules.
+
 ## Topaz Prelude Candidates
 
 Migrate helpers only after their required substrate calls are explicit. The
@@ -255,7 +263,13 @@ negative input, out-of-range input, and positive fractional truncation live in
 `__topaz_string_char_code_at(s, index)`. The only C read helper left for this
 path is `topaz_string_byte_at(...)`, a raw byte-read substrate reachable only
 through hidden internal prelude calls. Byte-code string materialization still
-uses `topaz_string_from_byte_codes(...)`.
+uses `topaz_string_from_byte_codes(...)`. That materialization primitive should
+not be reimplemented in ordinary Topaz-subset TS through
+`String.fromCharCode`, concat, repeat, or slice because those helpers already
+delegate back through the same byte-code materialization lane. Keeping
+`Array<number>` as the internal byte carrier is intentionally temporary and
+inefficient; the replacement is a hidden string-buffer intrinsic family, not a
+public API.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

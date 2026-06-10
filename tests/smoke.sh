@@ -14,6 +14,11 @@ if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${substrate_out}" != *"string buffer intrinsic boundary: topaz_string_byte_at, topaz_string_from_byte_codes"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing pinned string buffer intrinsic boundary" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 mkdir -p build
 tmp_runtime_substrate="build/runtime_substrate_probe.h"
 cp runtime/runtime.h "${tmp_runtime_substrate}"

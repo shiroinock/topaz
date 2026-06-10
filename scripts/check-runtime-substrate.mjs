@@ -37,6 +37,8 @@ const NEXT = {
   C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
 };
 
+const STRING_BUFFER_INTRINSIC_BOUNDARY = ["topaz_string_byte_at", "topaz_string_from_byte_codes"];
+
 const inventory = {
   TOPAZ_RUNTIME_H: {
     category: CATEGORY.HEADER,
@@ -453,6 +455,16 @@ function validateInventory() {
   return invalid;
 }
 
+function validateStringBufferIntrinsicBoundary(discovered) {
+  const expected = new Set(STRING_BUFFER_INTRINSIC_BOUNDARY);
+  const actual = [...discovered.keys()]
+    .filter((name) => inventory[name]?.migration === MIGRATION.STRING_BUFFER_INTRINSICS)
+    .sort();
+  const missing = STRING_BUFFER_INTRINSIC_BOUNDARY.filter((name) => !actual.includes(name));
+  const unexpected = actual.filter((name) => !expected.has(name));
+  return { actual, missing, unexpected };
+}
+
 let source;
 try {
   source = fs.readFileSync(runtimePath, "utf8");
@@ -478,8 +490,9 @@ const unclassified = [...discovered.entries()]
 const stale = Object.keys(inventory)
   .filter((name) => !discovered.has(name) && !inventory[name].exempt)
   .sort();
+const stringBufferBoundary = validateStringBufferIntrinsicBoundary(discovered);
 
-if (unclassified.length > 0 || stale.length > 0) {
+if (unclassified.length > 0 || stale.length > 0 || stringBufferBoundary.missing.length > 0 || stringBufferBoundary.unexpected.length > 0) {
   if (unclassified.length > 0) {
     console.error("runtime substrate inventory: unclassified discovered symbols:");
     for (const [name, meta] of unclassified) {
@@ -490,6 +503,15 @@ if (unclassified.length > 0 || stale.length > 0) {
     console.error("runtime substrate inventory: stale classified symbols:");
     for (const name of stale) {
       console.error(`  ${name}`);
+    }
+  }
+  if (stringBufferBoundary.missing.length > 0 || stringBufferBoundary.unexpected.length > 0) {
+    console.error("runtime substrate inventory: string buffer intrinsic boundary changed:");
+    for (const name of stringBufferBoundary.missing) {
+      console.error(`  missing expected symbol: ${name}`);
+    }
+    for (const name of stringBufferBoundary.unexpected) {
+      console.error(`  unexpected symbol: ${name}`);
     }
   }
   process.exit(1);
@@ -511,3 +533,4 @@ console.log("migration lanes:");
 for (const [migration, count] of [...migrationCounts.entries()].sort(([a], [b]) => a.localeCompare(b))) {
   console.log(`  ${migration}: ${count}`);
 }
+console.log(`string buffer intrinsic boundary: ${STRING_BUFFER_INTRINSIC_BOUNDARY.join(", ")}`);
