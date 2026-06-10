@@ -23,6 +23,7 @@
     "check:effect-report": "node scripts/check-effect-report.mjs",
     "check:effect-selfhost": "node scripts/check-effect-selfhost.mjs",
     "check:manifest-requirements": "node scripts/check-manifest-requirements.mjs",
+    "check:manifest-selfhost": "node scripts/check-manifest-selfhost.mjs",
     "generate:runtime-header": "node scripts/generate-runtime-header.mjs",
     "generate:runtime-prelude": "node scripts/generate-runtime-prelude.mjs",
     "bench": "node scripts/bench.mjs",

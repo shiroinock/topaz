@@ -12,47 +12,63 @@ export type ManifestRequirement = {
 export function collectManifestRequirements(
   provenance: Array<BuiltinEffectProvenance>,
 ): Array<ManifestRequirement> {
-  const occurrencesByEffect = new Map<BuiltinEffect, Array<BuiltinEffectProvenance>>();
-  const firstSeenOrder: Array<BuiltinEffect> = [];
+  const grouped: Array<ManifestRequirement> = [];
   for (const record of provenance) {
-    let occurrences = occurrencesByEffect.get(record.effect);
-    if (occurrences === undefined) {
-      occurrences = [];
-      occurrencesByEffect.set(record.effect, occurrences);
-      firstSeenOrder.push(record.effect);
+    const requirement = findRequirement(grouped, record.effect);
+    if (requirement === undefined) {
+      const newRequirement: ManifestRequirement = { effect: record.effect, occurrences: [] };
+      grouped.push(newRequirement);
+      newRequirement.occurrences.push(record);
+    } else {
+      requirement.occurrences.push(record);
     }
-    occurrences.push(record);
   }
 
-  const requirements: Array<ManifestRequirement> = [];
-  const emitted = new Set<BuiltinEffect>();
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "fs.read");
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "fs.metadata");
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "fs.write");
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "process.argv");
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "process.exit");
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "io.stdout");
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "io.stderr");
-  appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, "process.spawn");
-  for (const effect of firstSeenOrder) {
-    if (emitted.has(effect)) continue;
-    appendRequirementIfPresent(requirements, emitted, occurrencesByEffect, effect);
-  }
-  return requirements;
+  return orderManifestRequirements(grouped);
 }
 
 export function collectManifestRequirementsForEntry(entry: string): Array<ManifestRequirement> {
   return collectManifestRequirements(collectBuiltinEffectProvenanceForEntry(entry));
 }
 
+function orderManifestRequirements(grouped: Array<ManifestRequirement>): Array<ManifestRequirement> {
+  const requirements: Array<ManifestRequirement> = [];
+  appendRequirementIfPresent(requirements, grouped, "fs.read");
+  appendRequirementIfPresent(requirements, grouped, "fs.metadata");
+  appendRequirementIfPresent(requirements, grouped, "fs.write");
+  appendRequirementIfPresent(requirements, grouped, "process.argv");
+  appendRequirementIfPresent(requirements, grouped, "process.exit");
+  appendRequirementIfPresent(requirements, grouped, "io.stdout");
+  appendRequirementIfPresent(requirements, grouped, "io.stderr");
+  appendRequirementIfPresent(requirements, grouped, "process.spawn");
+  for (const requirement of grouped) {
+    if (hasRequirement(requirements, requirement.effect)) continue;
+    requirements.push(requirement);
+  }
+  return requirements;
+}
+
+function findRequirement(
+  requirements: Array<ManifestRequirement>,
+  effect: BuiltinEffect,
+): ManifestRequirement | undefined {
+  for (const requirement of requirements) {
+    if (requirement.effect === effect) return requirement;
+  }
+  return undefined;
+}
+
+function hasRequirement(requirements: Array<ManifestRequirement>, effect: BuiltinEffect): boolean {
+  return findRequirement(requirements, effect) !== undefined;
+}
+
 function appendRequirementIfPresent(
   requirements: Array<ManifestRequirement>,
-  emitted: Set<BuiltinEffect>,
-  occurrencesByEffect: Map<BuiltinEffect, Array<BuiltinEffectProvenance>>,
+  grouped: Array<ManifestRequirement>,
   effect: BuiltinEffect,
 ): void {
-  const occurrences = occurrencesByEffect.get(effect);
-  if (occurrences === undefined) return;
-  requirements.push({ effect, occurrences });
-  emitted.add(effect);
+  const requirement = findRequirement(grouped, effect);
+  if (requirement === undefined) return;
+  if (hasRequirement(requirements, effect)) return;
+  requirements.push(requirement);
 }

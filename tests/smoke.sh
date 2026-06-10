@@ -141,6 +141,23 @@ if [[ "${manifest_requirements_out}" == *"path.join"* || "${manifest_requirement
   exit 1
 fi
 echo "PASS [manifest_requirements]"
+manifest_selfhost_out=$(pnpm run check:manifest-selfhost)
+if [[ "${manifest_selfhost_out}" != *"manifest selfhost ok:"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing ok summary" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${manifest_selfhost_out}" != *"src/manifest_requirements.ts"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing manifest requirements target" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${manifest_selfhost_out}" != *"Map<string, Array"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing former Map<string, Array blocker text" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [manifest_selfhost]"
 effect_selfhost_out=$(pnpm run check:effect-selfhost)
 if [[ "${effect_selfhost_out}" != *"effect selfhost ok:"* ]]; then
   echo "FAIL [effect_selfhost]: missing ok summary" >&2
