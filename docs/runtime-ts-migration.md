@@ -231,6 +231,25 @@ needing the family. Until then, `pnpm run check:runtime-substrate` and smoke
 keep the active lanes visible as `string-buffer-intrinsic-family: 5` and
 `bigint-limb-intrinsic-family: 8`.
 
+## Phase 3.88 Runtime Prelude Release Checkpoint
+
+Phase 3.88 treats the current runtime TS prelude lane as the v0.1.2 checkpoint,
+not as a future promise to move the first pure helper. The implemented state now
+includes internal runtime prelude injection and embedding, stable hidden prelude
+symbols for migrated pure helpers, and active compiler-owned `StringBuffer` and
+`BigIntBuffer` intrinsic substrate families used by those helpers.
+
+The remaining C runtime surface is deliberately classified before v0.2.0:
+number/libc-libm helpers, host ABI helpers, raw memory and arena helpers,
+exception/control-transfer helpers, generated-C ABI type substrate,
+container monomorph substrate, and the active intrinsic families. Future runtime
+shrink work starts from explicit substrate/backend decisions for those
+boundaries, or from removing a family after no runtime prelude client needs it,
+not from the old "move every `runtime.h` helper" framing.
+
+This checkpoint does not create a release tag, promise a release date, expand
+the public language surface, or change runtime semantics.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has

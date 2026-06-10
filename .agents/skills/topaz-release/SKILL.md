@@ -16,6 +16,11 @@ Topaz uses `0.x.y` SemVer while the language and packaging contract are still
 settling.
 
 - `v0.1.0`: single-binary MVP release.
+- `v0.1.2`: runtime TS prelude checkpoint covering internal prelude injection,
+  stable hidden prelude symbols for migrated pure helpers, active StringBuffer /
+  BigIntBuffer intrinsic substrate families, and pinned pre-v0.2 C substrate
+  boundaries. It does not expand the public language surface or runtime
+  semantics.
 - `v0.1.y`: MVP bugfixes, diagnostic/doc/workflow fixes, and self-host gate
   stabilization that do not expand the language surface.
 - `v0.2.0`: capability/effect inference, manifest generation, `doctor`,
