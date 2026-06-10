@@ -30,7 +30,8 @@ const MIGRATION = {
 
 const NEXT = {
   RAW_MEMORY: "Pinned until Topaz has explicit raw pointer, byte buffer, and arena allocation intrinsics.",
-  HOST_ABI: "Pinned to C until host ABI calls have capability-aware intrinsic or syscall wrappers.",
+  HOST_ABI:
+    "Pinned as the pre-v0.2 capability-aware host ABI substrate boundary for raw stdio writes, filesystem wrappers, process argv/cwd/exit/module URL wrappers, and child process spawn; moving any helper requires an explicit manifest/capability/doctor-aware host syscall or intrinsic decision.",
   LIBC_LIBM:
     "Pinned as the pre-v0.2 number substrate boundary for topaz_fmod (number % number via libm fmod), topaz_parse_float (parseFloat via strtod), and topaz_number_to_string (ECMA-262 formatting via snprintf plus strtod roundtrip); moving any helper requires an explicit replacement decision preserving current parse, roundoff, remainder, and formatting behavior.",
   EXCEPTION: "Pinned while exceptions depend on setjmp/longjmp and abort/panic C control transfer.",

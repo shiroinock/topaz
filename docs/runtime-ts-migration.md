@@ -83,6 +83,28 @@ coverage, not a helper-by-helper runtime prelude copy. Until then,
 `pnpm run check:runtime-substrate` and smoke keep the lane visible as
 `libc-libm-boundary: 3`.
 
+## Phase 3.82 Host ABI Substrate Policy
+
+The `host-abi-boundary` lane is deliberately still open with exactly twelve
+runtime substrate symbols before v0.2.0: raw stdio writes
+`topaz_stdout_write(...)` / `topaz_stderr_write(...)`, filesystem wrappers
+`topaz_fs_read_text_file(...)` / `topaz_fs_exists(...)` /
+`topaz_fs_write_text_file(...)` / `topaz_fs_mkdir_p(...)`, process and module
+wrappers `topaz_process_cwd(...)`, `topaz_runtime_init_argv(...)`,
+`topaz_process_argv(...)`, `topaz_process_exit(...)`,
+`topaz_runtime_module_url(...)`, and child process spawn
+`topaz_child_exec_inherit(...)`.
+
+These helpers are not ordinary pure Topaz-subset runtime prelude candidates.
+They cross filesystem, stdio, process, executable path, module URL, and child
+process ABI surfaces. v0.2 owns the manifest, capability, doctor, check, and
+explain implementation track, so the runtime migration track should keep this
+host lane small and explicit rather than copying wrappers helper by helper into
+the prelude. Future movement should be a capability-aware host syscall or
+intrinsic replacement ADR that explains effect metadata and authorization UX.
+Until then, `pnpm run check:runtime-substrate` and smoke keep the lane visible
+as `host-abi-boundary: 12`.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has
