@@ -85,6 +85,11 @@ the hidden limb-inspection family. It routes through runtime prelude
 limb length, and then compares each little-endian limb. Ordering, arithmetic,
 literal parsing, and decimal formatting remain in the C substrate.
 
+As of Phase 3.72, public BigInt `<` / `<=` / `>` / `>=` also route through the
+runtime prelude. `__topaz_bigint_cmp(a, b)` preserves the old signed comparison
+result convention while using only sign, limb length, and immutable limb reads;
+arithmetic, literal parsing, and decimal formatting remain in the C substrate.
+
 ## Hidden String Buffer Intrinsics
 
 The next implementation target is an internal-prelude-only intrinsic family:

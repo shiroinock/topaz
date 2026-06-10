@@ -136,12 +136,6 @@ const inventory = {
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },
-  topaz_bigint_cmp_abs: {
-    category: CATEGORY.BIGINT,
-    reason: "absolute limb comparator for bigint arithmetic.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
   topaz_bigint_mul_small_in_place: {
     category: CATEGORY.BIGINT,
     reason: "decimal parser limb multiply step.",
@@ -193,12 +187,6 @@ const inventory = {
   topaz_bigint_mul: {
     category: CATEGORY.BIGINT,
     reason: "public bigint multiplication lowering target.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_cmp: {
-    category: CATEGORY.BIGINT,
-    reason: "public bigint ordering lowering target.",
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },

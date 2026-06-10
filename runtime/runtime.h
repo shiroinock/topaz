@@ -222,18 +222,6 @@ static inline topaz_number topaz_bigint_sign(const topaz_bigint *value) {
   return (topaz_number)value->sign;
 }
 
-static inline int topaz_bigint_cmp_abs(const topaz_bigint *a, const topaz_bigint *b) {
-  if (a->len < b->len) return -1;
-  if (a->len > b->len) return 1;
-  size_t i = a->len;
-  while (i > 0) {
-    i--;
-    if (a->limbs[i] < b->limbs[i]) return -1;
-    if (a->limbs[i] > b->limbs[i]) return 1;
-  }
-  return 0;
-}
-
 static inline void topaz_bigint_mul_small_in_place(topaz_bigint *x, uint32_t m) {
   if (x->len == 0 || m == 1) return;
   if (m == 0) {
@@ -339,7 +327,25 @@ static inline topaz_bigint *topaz_bigint_add(const topaz_bigint *a, const topaz_
   if (a->sign == 0) return topaz_bigint_copy_abs(b, b->sign);
   if (b->sign == 0) return topaz_bigint_copy_abs(a, a->sign);
   if (a->sign == b->sign) return topaz_bigint_add_abs(a, b, a->sign);
-  int cmp = topaz_bigint_cmp_abs(a, b);
+  int cmp = 0;
+  if (a->len < b->len) {
+    cmp = -1;
+  } else if (a->len > b->len) {
+    cmp = 1;
+  } else {
+    size_t i = a->len;
+    while (i > 0) {
+      i--;
+      if (a->limbs[i] < b->limbs[i]) {
+        cmp = -1;
+        break;
+      }
+      if (a->limbs[i] > b->limbs[i]) {
+        cmp = 1;
+        break;
+      }
+    }
+  }
   if (cmp == 0) return topaz_bigint_zero();
   if (cmp > 0) return topaz_bigint_sub_abs(a, b, a->sign);
   return topaz_bigint_sub_abs(b, a, b->sign);
@@ -372,14 +378,6 @@ static inline topaz_bigint *topaz_bigint_mul(const topaz_bigint *a, const topaz_
   out->sign = a->sign == b->sign ? 1 : -1;
   topaz_bigint_normalize(out);
   return out;
-}
-
-static inline int topaz_bigint_cmp(const topaz_bigint *a, const topaz_bigint *b) {
-  if (a->sign < b->sign) return -1;
-  if (a->sign > b->sign) return 1;
-  if (a->sign == 0) return 0;
-  int cmp = topaz_bigint_cmp_abs(a, b);
-  return a->sign > 0 ? cmp : -cmp;
 }
 
 static inline topaz_string topaz_bigint_to_string(const topaz_bigint *x) {

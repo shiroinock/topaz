@@ -52,6 +52,35 @@ function __topaz_bigint_eq(a: bigint, b: bigint): boolean {
   return true;
 }
 
+function __topaz_bigint_cmp_abs(a: bigint, b: bigint): number {
+  const aLen: number = __topaz_bigint_limb_len(a);
+  const bLen: number = __topaz_bigint_limb_len(b);
+  if (aLen < bLen) return -1;
+  if (aLen > bLen) return 1;
+
+  let i: number = aLen;
+  while (i > 0) {
+    i = i - 1;
+    const av: number = __topaz_bigint_limb(a, i);
+    const bv: number = __topaz_bigint_limb(b, i);
+    if (av < bv) return -1;
+    if (av > bv) return 1;
+  }
+  return 0;
+}
+
+function __topaz_bigint_cmp(a: bigint, b: bigint): number {
+  const aSign: number = __topaz_bigint_sign(a);
+  const bSign: number = __topaz_bigint_sign(b);
+  if (aSign < bSign) return -1;
+  if (aSign > bSign) return 1;
+  if (aSign === 0) return 0;
+
+  const cmp: number = __topaz_bigint_cmp_abs(a, b);
+  if (aSign > 0) return cmp;
+  return 0 - cmp;
+}
+
 function __topaz_string_from_char_code(n: number): string {
   if (n !== n || n < 0 || n >= 128) {
     __topaz_panic("topaz: String.fromCharCode argument out of ASCII range");
