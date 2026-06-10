@@ -118,12 +118,6 @@ const inventory = {
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },
-  topaz_bigint_zero: {
-    category: CATEGORY.BIGINT,
-    reason: "canonical bigint zero constructor.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
   topaz_bigint_normalize: {
     category: CATEGORY.BIGINT,
     reason: "canonicalizes raw bigint limb/sign representation.",
@@ -145,12 +139,6 @@ const inventory = {
   topaz_bigint_from_decimal_cstr: {
     category: CATEGORY.BIGINT,
     reason: "bootstrap parser literal bridge from C strings to bigint limbs.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_mul: {
-    category: CATEGORY.BIGINT,
-    reason: "public bigint multiplication lowering target.",
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },

@@ -155,6 +155,82 @@ function __topaz_bigint_sub(a: bigint, b: bigint): bigint {
   return __topaz_bigint_add(a, __topaz_bigint_neg(b));
 }
 
+function __topaz_bigint_mul_add_limb(
+  buffer: BigIntBuffer,
+  index: number,
+  a: number,
+  b: number,
+  carry: number,
+): number {
+  const base16: number = 65536;
+  const a0: number = a % base16;
+  const a1: number = (a - a0) / base16;
+  const b0: number = b % base16;
+  const b1: number = (b - b0) / base16;
+  const out: number = __topaz_bigint_buffer_get_limb(buffer, index);
+  const o0: number = out % base16;
+  const o1: number = (out - o0) / base16;
+  const c0: number = carry % base16;
+  const c1: number = (carry - c0) / base16;
+
+  const s0: number = a0 * b0 + o0 + c0;
+  const r0: number = s0 % base16;
+  const k0: number = (s0 - r0) / base16;
+
+  const s1: number = a0 * b1 + a1 * b0 + o1 + c1 + k0;
+  const r1: number = s1 % base16;
+  const k1: number = (s1 - r1) / base16;
+
+  __topaz_bigint_buffer_set_limb(buffer, index, r0 + r1 * base16);
+  return a1 * b1 + k1;
+}
+
+function __topaz_bigint_mul(a: bigint, b: bigint): bigint {
+  const aSign: number = __topaz_bigint_sign(a);
+  const bSign: number = __topaz_bigint_sign(b);
+  if (aSign === 0 || bSign === 0) return 0n;
+
+  const aLen: number = __topaz_bigint_limb_len(a);
+  const bLen: number = __topaz_bigint_limb_len(b);
+  const outLen: number = aLen + bLen + 1;
+  const base: number = 4294967296;
+  const buffer: BigIntBuffer = __topaz_bigint_buffer_new(outLen);
+  let init: number = 0;
+  while (init < outLen) {
+    __topaz_bigint_buffer_set_limb(buffer, init, 0);
+    init = init + 1;
+  }
+
+  let i: number = 0;
+  while (i < aLen) {
+    let carry: number = 0;
+    let j: number = 0;
+    while (j < bLen) {
+      carry = __topaz_bigint_mul_add_limb(
+        buffer,
+        i + j,
+        __topaz_bigint_limb(a, i),
+        __topaz_bigint_limb(b, j),
+        carry,
+      );
+      j = j + 1;
+    }
+    let k: number = i + bLen;
+    while (carry !== 0) {
+      const existing: number = __topaz_bigint_buffer_get_limb(buffer, k);
+      const cur: number = existing + carry;
+      const limb: number = cur % base;
+      __topaz_bigint_buffer_set_limb(buffer, k, limb);
+      carry = (cur - limb) / base;
+      k = k + 1;
+    }
+    i = i + 1;
+  }
+
+  const sign: number = aSign === bSign ? 1 : -1;
+  return __topaz_bigint_buffer_to_bigint(buffer, sign);
+}
+
 function __topaz_string_from_char_code(n: number): string {
   if (n !== n || n < 0 || n >= 128) {
     __topaz_panic("topaz: String.fromCharCode argument out of ASCII range");

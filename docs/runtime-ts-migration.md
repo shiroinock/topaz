@@ -102,6 +102,13 @@ perform absolute limb addition/subtraction with the hidden BigInt buffer family,
 while multiplication, decimal literal parsing, and decimal formatting remain in
 the C substrate.
 
+As of Phase 3.75, public BigInt binary `*` routes through runtime prelude
+`__topaz_bigint_mul(a, b)`. The helper keeps the previous sign, canonical zero,
+and little-endian limb semantics, but splits each 32-bit limb into 16-bit halves
+inside the multiply-add step so every `number` intermediate stays below the
+IEEE-754 exact-integer boundary. Decimal literal parsing and decimal formatting
+remain in the C substrate.
+
 ## Hidden String Buffer Intrinsics
 
 The next implementation target is an internal-prelude-only intrinsic family:

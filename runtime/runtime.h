@@ -109,10 +109,6 @@ static inline topaz_bigint *topaz_bigint_alloc(size_t len) {
   return out;
 }
 
-static inline topaz_bigint *topaz_bigint_zero(void) {
-  return topaz_bigint_alloc(0);
-}
-
 static inline void topaz_bigint_normalize(topaz_bigint *x) {
   while (x->len > 0 && x->limbs[x->len - 1] == 0) x->len--;
   if (x->len == 0) {
@@ -267,30 +263,6 @@ static inline topaz_bigint *topaz_bigint_from_decimal_cstr(const char *digits) {
     topaz_bigint_mul_small_in_place(out, 10);
     topaz_bigint_add_small_in_place(out, (uint32_t)(c - '0'));
   }
-  topaz_bigint_normalize(out);
-  return out;
-}
-
-static inline topaz_bigint *topaz_bigint_mul(const topaz_bigint *a, const topaz_bigint *b) {
-  if (a->sign == 0 || b->sign == 0) return topaz_bigint_zero();
-  topaz_bigint *out = topaz_bigint_alloc(a->len + b->len + 1);
-  for (size_t i = 0; i < a->len; i++) {
-    uint64_t carry = 0;
-    for (size_t j = 0; j < b->len; j++) {
-      uint64_t cur = (uint64_t)out->limbs[i + j] + (uint64_t)a->limbs[i] * (uint64_t)b->limbs[j] + carry;
-      out->limbs[i + j] = (uint32_t)cur;
-      carry = cur >> 32;
-    }
-    size_t k = i + b->len;
-    while (carry) {
-      uint64_t cur = (uint64_t)out->limbs[k] + carry;
-      out->limbs[k] = (uint32_t)cur;
-      carry = cur >> 32;
-      k++;
-    }
-  }
-  out->len = a->len + b->len + 1;
-  out->sign = a->sign == b->sign ? 1 : -1;
   topaz_bigint_normalize(out);
   return out;
 }
