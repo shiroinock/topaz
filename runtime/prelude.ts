@@ -92,6 +92,69 @@ function __topaz_bigint_cmp(a: bigint, b: bigint): number {
   return 0 - cmp;
 }
 
+function __topaz_bigint_add_abs(a: bigint, b: bigint, sign: number): bigint {
+  const aLen: number = __topaz_bigint_limb_len(a);
+  const bLen: number = __topaz_bigint_limb_len(b);
+  const max: number = aLen > bLen ? aLen : bLen;
+  const base: number = 4294967296;
+  const buffer: BigIntBuffer = __topaz_bigint_buffer_new(max + 1);
+  let carry: number = 0;
+  let i: number = 0;
+  while (i < max) {
+    const av: number = i < aLen ? __topaz_bigint_limb(a, i) : 0;
+    const bv: number = i < bLen ? __topaz_bigint_limb(b, i) : 0;
+    const cur: number = av + bv + carry;
+    const limb: number = cur % base;
+    __topaz_bigint_buffer_set_limb(buffer, i, limb);
+    carry = (cur - limb) / base;
+    i = i + 1;
+  }
+  if (carry !== 0) {
+    __topaz_bigint_buffer_set_limb(buffer, max, carry);
+  }
+  return __topaz_bigint_buffer_to_bigint(buffer, sign);
+}
+
+function __topaz_bigint_sub_abs(a: bigint, b: bigint, sign: number): bigint {
+  const aLen: number = __topaz_bigint_limb_len(a);
+  const bLen: number = __topaz_bigint_limb_len(b);
+  const base: number = 4294967296;
+  const buffer: BigIntBuffer = __topaz_bigint_buffer_new(aLen);
+  let borrow: number = 0;
+  let i: number = 0;
+  while (i < aLen) {
+    const av: number = __topaz_bigint_limb(a, i);
+    const bv: number = i < bLen ? __topaz_bigint_limb(b, i) : 0;
+    const need: number = bv + borrow;
+    if (av < need) {
+      __topaz_bigint_buffer_set_limb(buffer, i, base + av - need);
+      borrow = 1;
+    } else {
+      __topaz_bigint_buffer_set_limb(buffer, i, av - need);
+      borrow = 0;
+    }
+    i = i + 1;
+  }
+  return __topaz_bigint_buffer_to_bigint(buffer, sign);
+}
+
+function __topaz_bigint_add(a: bigint, b: bigint): bigint {
+  const aSign: number = __topaz_bigint_sign(a);
+  const bSign: number = __topaz_bigint_sign(b);
+  if (aSign === 0) return __topaz_bigint_copy_with_sign(b, bSign);
+  if (bSign === 0) return __topaz_bigint_copy_with_sign(a, aSign);
+  if (aSign === bSign) return __topaz_bigint_add_abs(a, b, aSign);
+
+  const cmp: number = __topaz_bigint_cmp_abs(a, b);
+  if (cmp === 0) return 0n;
+  if (cmp > 0) return __topaz_bigint_sub_abs(a, b, aSign);
+  return __topaz_bigint_sub_abs(b, a, bSign);
+}
+
+function __topaz_bigint_sub(a: bigint, b: bigint): bigint {
+  return __topaz_bigint_add(a, __topaz_bigint_neg(b));
+}
+
 function __topaz_string_from_char_code(n: number): string {
   if (n !== n || n < 0 || n >= 128) {
     __topaz_panic("topaz: String.fromCharCode argument out of ASCII range");

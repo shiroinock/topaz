@@ -96,6 +96,12 @@ absolute limb sequence with the opposite sign through the hidden BigInt buffer
 family. Binary `+` / `-` / `*`, literal parsing, and decimal formatting remain
 in the C substrate.
 
+As of Phase 3.74, public BigInt binary `+` / `-` also route through runtime
+prelude `__topaz_bigint_add(a, b)` and `__topaz_bigint_sub(a, b)`. The helpers
+perform absolute limb addition/subtraction with the hidden BigInt buffer family,
+while multiplication, decimal literal parsing, and decimal formatting remain in
+the C substrate.
+
 ## Hidden String Buffer Intrinsics
 
 The next implementation target is an internal-prelude-only intrinsic family:
@@ -148,9 +154,10 @@ The generated-C ABI boundary remains `topaz_bigint *` backed by little-endian
 implementation slice added pseudo type and hidden lowering while keeping most
 existing C helpers, plus an internal `__topaz_bigint_clone(value)` compile
 evidence helper. Public equality now uses `__topaz_bigint_eq(value, other)`,
-ordering uses `__topaz_bigint_cmp(value, other)`, and unary negation uses
-`__topaz_bigint_neg(value)`. Later slices should migrate leaf and small helpers
-such as `topaz_bigint_zero` and `topaz_bigint_copy_abs` before add/sub/mul.
+ordering uses `__topaz_bigint_cmp(value, other)`, unary negation uses
+`__topaz_bigint_neg(value)`, and binary addition/subtraction use
+`__topaz_bigint_add(value, other)` / `__topaz_bigint_sub(value, other)`.
+Later slices should migrate multiplication, parse, and format helpers.
 Decimal parsing and decimal formatting should move last because they combine
 limb algorithms with C-string literal ingress, string allocation, and
 formatting behavior.

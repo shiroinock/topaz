@@ -130,12 +130,6 @@ const inventory = {
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },
-  topaz_bigint_copy_abs: {
-    category: CATEGORY.BIGINT,
-    reason: "limb-copy helper for bigint arithmetic.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
   topaz_bigint_mul_small_in_place: {
     category: CATEGORY.BIGINT,
     reason: "decimal parser limb multiply step.",
@@ -151,30 +145,6 @@ const inventory = {
   topaz_bigint_from_decimal_cstr: {
     category: CATEGORY.BIGINT,
     reason: "bootstrap parser literal bridge from C strings to bigint limbs.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_add_abs: {
-    category: CATEGORY.BIGINT,
-    reason: "absolute limb addition core.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_sub_abs: {
-    category: CATEGORY.BIGINT,
-    reason: "absolute limb subtraction core.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_add: {
-    category: CATEGORY.BIGINT,
-    reason: "public bigint addition lowering target.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
-  topaz_bigint_sub: {
-    category: CATEGORY.BIGINT,
-    reason: "public bigint subtraction lowering target.",
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },

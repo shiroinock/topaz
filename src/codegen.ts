@@ -2122,6 +2122,16 @@ class Emitter {
     return `${helper}(${value})`;
   }
 
+  private emitRuntimePreludeBigIntAdd(lhs: string, rhs: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_bigint_add", anchor);
+    return `${helper}(${lhs}, ${rhs})`;
+  }
+
+  private emitRuntimePreludeBigIntSub(lhs: string, rhs: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_bigint_sub", anchor);
+    return `${helper}(${lhs}, ${rhs})`;
+  }
+
   private emitRuntimePreludeStringConcat(lhs: string, rhs: string, anchor: { pos: number }): string {
     const helper = this.requireInternalPreludeFunctionCName("__topaz_string_concat", anchor);
     return `${helper}(${lhs}, ${rhs})`;
@@ -8403,8 +8413,8 @@ class Emitter {
         if (lt.kind === "bigint" && rt.kind === "bigint") {
           const lhs = this.emitExpression(expr.lhs);
           const rhs = this.emitExpression(expr.rhs);
-          if (tok === "+") return `topaz_bigint_add(${lhs}, ${rhs})`;
-          if (tok === "-") return `topaz_bigint_sub(${lhs}, ${rhs})`;
+          if (tok === "+") return this.emitRuntimePreludeBigIntAdd(lhs, rhs, { pos: expr.pos });
+          if (tok === "-") return this.emitRuntimePreludeBigIntSub(lhs, rhs, { pos: expr.pos });
           if (tok === "*") return `topaz_bigint_mul(${lhs}, ${rhs})`;
           if (tok === "<") return `${this.emitRuntimePreludeBigIntCmp(lhs, rhs, { pos: expr.pos })} < 0`;
           if (tok === "<=") return `${this.emitRuntimePreludeBigIntCmp(lhs, rhs, { pos: expr.pos })} <= 0`;
