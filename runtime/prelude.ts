@@ -6,6 +6,16 @@ function __topaz_boolean_to_string(value: boolean): string {
   return "false";
 }
 
+function __topaz_string_eq(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let i: number = 0;
+  while (i < a.length) {
+    if (a.charCodeAt(i) !== b.charCodeAt(i)) return false;
+    i = i + 1;
+  }
+  return true;
+}
+
 function __topaz_string_starts_with(s: string, search: string): boolean {
   if (search.length > s.length) return false;
   let i: number = 0;

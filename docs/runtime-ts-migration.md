@@ -84,8 +84,11 @@ The next helpers on the same allocation-client lane are
 codegen targets for imported `basename(path, ext?)`. The next scalar literal
 client is `__topaz_boolean_to_string(value)`, which codegen targets for
 compiler-owned boolean stringification in template literal substitutions and
-`Array<boolean>.join(...)`. These helpers keep the public stdlib import shape,
-language surface, and diagnostics unchanged.
+`Array<boolean>.join(...)`. String byte equality is now available as
+`__topaz_string_eq(a, b)`, which codegen targets for non-container
+compiler-owned string `===` / `!==`, string `switch`, and
+`Array<string>.includes(...)`. These helpers keep the public stdlib import
+shape, language surface, and diagnostics unchanged.
 The current string-allocation boundary is:
 
 - allocation primitives (`slice`, `repeat`, concat, `String.fromCharCode`) stay
@@ -105,7 +108,10 @@ end)`. Helpers that need path normalization, host IO, varargs, or mutable
 buffers stay on the C substrate path until those boundaries are explicit.
 Boolean stringification also qualifies for the prelude lane because it is a
 pure scalar-to-literal choice and does not allocate beyond returning string
-literals. Direct console boolean IO remains a substrate IO helper.
+literals. Direct console boolean IO remains a substrate IO helper. String byte
+equality qualifies because it is pure length and byte scanning over existing
+string intrinsics, but Map/Set string key equality remains on the C substrate
+until container monomorphization has a replacement.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

@@ -228,6 +228,55 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_boolean_to_string]"
 
+  node dist/cli.js examples/string_basic.ts --emit-c-only -o build/runtime_prelude_string_eq > /dev/null
+  local string_eq_calls
+  string_eq_calls=$(grep -c "topaz_fn_runtime_prelude___topaz_string_eq(" build/runtime_prelude_string_eq.c || true)
+  if (( string_eq_calls < 4 )); then
+    echo "FAIL [runtime_prelude_string_eq]: missing string equality prelude call sites" >&2
+    echo "  found calls: $string_eq_calls" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_eq.c -o build/runtime_prelude_string_eq
+  local string_eq_out
+  string_eq_out=$(./build/runtime_prelude_string_eq)
+  if [[ "$string_eq_out" != $'hello, topaz!\n13\nabcdef\ntrue\ntrue\nwoof' ]]; then
+    echo "FAIL [runtime_prelude_string_eq]:" >&2
+    echo "  expected string_basic output" >&2
+    printf '%s\n' "$string_eq_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_string_eq]"
+
+  node dist/cli.js examples/array_method_includes.ts --emit-c-only -o build/runtime_prelude_string_includes > /dev/null
+  local string_includes_calls
+  string_includes_calls=$(grep -c "topaz_fn_runtime_prelude___topaz_string_eq(" build/runtime_prelude_string_includes.c || true)
+  if (( string_includes_calls < 3 )); then
+    echo "FAIL [runtime_prelude_string_includes]: missing string includes prelude call site" >&2
+    echo "  found calls: $string_includes_calls" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_includes.c -o build/runtime_prelude_string_includes
+  local string_includes_out
+  string_includes_out=$(./build/runtime_prelude_string_includes)
+  if [[ "$string_includes_out" != $'true\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse' ]]; then
+    echo "FAIL [runtime_prelude_string_includes]:" >&2
+    echo "  expected array_method_includes output" >&2
+    printf '%s\n' "$string_includes_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_string_includes]"
+
+  node dist/cli.js examples/map_set_basic.ts --emit-c-only -o build/runtime_substrate_string_map_set > /dev/null
+  if ! grep -q "TOPAZ_MAP_DEFINE(string_.*topaz_string_eq" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing substrate string map equality helper" >&2
+    exit 1
+  fi
+  if ! grep -q "TOPAZ_SET_DEFINE(string,.*topaz_string_eq" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing substrate string set equality helper" >&2
+    exit 1
+  fi
+  echo "PASS [runtime_substrate_string_map_set]"
+
   node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_ends_with > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_ends_with" build/runtime_prelude_ends_with.c; then
     echo "FAIL [runtime_prelude_ends_with]: missing stable endsWith prelude symbol" >&2
@@ -464,6 +513,7 @@ run_fail_case runtime_prelude_path_extname_hidden_fail examples/runtime_prelude_
 run_fail_case runtime_prelude_path_dirname_hidden_fail examples/runtime_prelude_path_dirname_hidden_fail.ts "unknown identifier '__topaz_path_dirname'"
 run_fail_case runtime_prelude_path_basename_hidden_fail examples/runtime_prelude_path_basename_hidden_fail.ts "unknown identifier '__topaz_path_basename'"
 run_fail_case runtime_prelude_path_basename_ext_hidden_fail examples/runtime_prelude_path_basename_ext_hidden_fail.ts "unknown identifier '__topaz_path_basename_ext'"
+run_fail_case runtime_prelude_string_eq_hidden_fail examples/runtime_prelude_string_eq_hidden_fail.ts "unknown identifier '__topaz_string_eq'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

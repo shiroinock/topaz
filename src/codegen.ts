@@ -2083,6 +2083,11 @@ class Emitter {
     return sig.cName;
   }
 
+  private emitRuntimePreludeStringEq(lhs: string, rhs: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_string_eq", anchor);
+    return `${helper}(${lhs}, ${rhs})`;
+  }
+
   private internalPreludeInitCName(): string | undefined {
     return this.internalPreludeFunctionSig("__topaz_runtime_prelude_init")?.cName;
   }
@@ -7817,7 +7822,7 @@ class Emitter {
     this.pushLoopCtx("switch", breakLabel, undefined);
     const cmp = (rhs: string): string =>
       discType.kind === "string"
-        ? `topaz_string_eq(${tmp}, ${rhs})`
+        ? this.emitRuntimePreludeStringEq(tmp, rhs, { pos: stmt.discriminant.pos })
         : `${tmp} == ${rhs}`;
     let first = true;
     let groupIndex = 0;
@@ -8366,7 +8371,11 @@ class Emitter {
         hasStringValueRepresentation(this.inferType(expr.lhs)) &&
         hasStringValueRepresentation(this.inferType(expr.rhs))
       ) {
-        const inner = `topaz_string_eq(${this.emitExpression(expr.lhs)}, ${this.emitExpression(expr.rhs)})`;
+        const inner = this.emitRuntimePreludeStringEq(
+          this.emitExpression(expr.lhs),
+          this.emitExpression(expr.rhs),
+          { pos: expr.pos },
+        );
         return tok === "===" ? inner : `(!${inner})`;
       }
       // Phase 1.5-3.5c: `a ?? b` lowers to a stmt-expression that snapshots
@@ -9698,7 +9707,7 @@ class Emitter {
       return `(${lhs}) == (${tVar})`;
     }
     if (elem.kind === "string") {
-      return `topaz_string_eq((${lhs}), (${tVar}))`;
+      return this.emitRuntimePreludeStringEq(`(${lhs})`, `(${tVar})`, anchor);
     }
     if (isClassType(elem)) {
       return `(${lhs}) == (${tVar})`;
