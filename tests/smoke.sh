@@ -267,8 +267,12 @@ TOPAZ
     echo "FAIL [runtime_prelude_console_boolean]: old boolean console helper still emitted" >&2
     exit 1
   fi
-  if ! grep -Eq "\btopaz_console_(log|error|warn)_string\b" build/runtime_prelude_console_boolean.c; then
-    echo "FAIL [runtime_prelude_console_boolean]: missing string console IO helper" >&2
+  if ! grep -Eq "\btopaz_stdout_write\b" build/runtime_prelude_console_boolean.c || ! grep -Eq "\btopaz_stderr_write\b" build/runtime_prelude_console_boolean.c; then
+    echo "FAIL [runtime_prelude_console_boolean]: missing raw stdout/stderr write substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_console_(log|error|warn)_string\b" build/runtime_prelude_console_boolean.c; then
+    echo "FAIL [runtime_prelude_console_boolean]: old string console helper still emitted or defined" >&2
     exit 1
   fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_console_boolean.c -o build/runtime_prelude_console_boolean
@@ -310,11 +314,11 @@ TOPAZ
     echo "FAIL [runtime_numeric_console_string]: missing bigint stringification helper" >&2
     exit 1
   fi
-  if ! grep -Eq "\btopaz_console_(log|error|warn)_string\b" build/runtime_numeric_console_string.c; then
-    echo "FAIL [runtime_numeric_console_string]: missing string console IO helper" >&2
+  if ! grep -Eq "\btopaz_stdout_write\b" build/runtime_numeric_console_string.c || ! grep -Eq "\btopaz_stderr_write\b" build/runtime_numeric_console_string.c; then
+    echo "FAIL [runtime_numeric_console_string]: missing raw stdout/stderr write substrate" >&2
     exit 1
   fi
-  if grep -Eq "\btopaz_console_(log|error|warn)_(number|bigint)\b" build/runtime_numeric_console_string.c; then
+  if grep -Eq "\btopaz_console_(log|error|warn)_(string|number|bigint)\b" build/runtime_numeric_console_string.c; then
     echo "FAIL [runtime_numeric_console_string]: old numeric console helper still emitted or defined" >&2
     exit 1
   fi
@@ -343,12 +347,12 @@ console.warn(2.5);
 console.warn(0n);
 TOPAZ
   node dist/cli.js build/runtime_console_warn_string.ts --emit-c-only -o build/runtime_console_warn_string > /dev/null
-  if ! grep -Eq "\btopaz_console_error_string\b" build/runtime_console_warn_string.c; then
-    echo "FAIL [runtime_console_warn_string]: missing stderr string helper for console.warn" >&2
+  if ! grep -Eq "\btopaz_stderr_write\b" build/runtime_console_warn_string.c; then
+    echo "FAIL [runtime_console_warn_string]: missing stderr write substrate for console.warn" >&2
     exit 1
   fi
-  if grep -Eq "\btopaz_console_warn_string\b" build/runtime_console_warn_string.c; then
-    echo "FAIL [runtime_console_warn_string]: stale console.warn string wrapper emitted or defined" >&2
+  if grep -Eq "\btopaz_console_(warn|error)_string\b" build/runtime_console_warn_string.c; then
+    echo "FAIL [runtime_console_warn_string]: stale console string wrapper emitted or defined" >&2
     exit 1
   fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_console_warn_string.c -o build/runtime_console_warn_string
@@ -366,6 +370,49 @@ TOPAZ
     exit 1
   fi
   echo "PASS [runtime_console_warn_string]"
+
+  cat > build/runtime_console_line_io_wrappers.ts <<'TOPAZ'
+import { writeError } from "std/process";
+
+console.log("out");
+console.log(true);
+console.error("err");
+console.warn(3);
+writeError("line");
+process.stdout.write("raw");
+process.stdout.write("\n");
+process.stderr.write("rawerr\n");
+TOPAZ
+  node dist/cli.js build/runtime_console_line_io_wrappers.ts --emit-c-only -o build/runtime_console_line_io_wrappers > /dev/null
+  if ! grep -Eq "\btopaz_stdout_write\b" build/runtime_console_line_io_wrappers.c; then
+    echo "FAIL [runtime_console_line_io_wrappers]: missing stdout write substrate" >&2
+    exit 1
+  fi
+  if ! grep -Eq "\btopaz_stderr_write\b" build/runtime_console_line_io_wrappers.c; then
+    echo "FAIL [runtime_console_line_io_wrappers]: missing stderr write substrate" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_console_(log|error)_string\b" build/runtime_console_line_io_wrappers.c; then
+    echo "FAIL [runtime_console_line_io_wrappers]: stale console line wrapper emitted or defined" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_console_line_io_wrappers.c -o build/runtime_console_line_io_wrappers
+  ./build/runtime_console_line_io_wrappers > build/runtime_console_line_io_wrappers.stdout 2> build/runtime_console_line_io_wrappers.stderr
+  printf 'out\ntrue\nraw\n' > build/runtime_console_line_io_wrappers.expected_stdout
+  printf 'err\n3\nline\nrawerr\n' > build/runtime_console_line_io_wrappers.expected_stderr
+  if ! cmp -s build/runtime_console_line_io_wrappers.expected_stdout build/runtime_console_line_io_wrappers.stdout; then
+    echo "FAIL [runtime_console_line_io_wrappers stdout]:" >&2
+    sed 's/^/  expected: /' build/runtime_console_line_io_wrappers.expected_stdout >&2
+    sed 's/^/  got: /' build/runtime_console_line_io_wrappers.stdout >&2
+    exit 1
+  fi
+  if ! cmp -s build/runtime_console_line_io_wrappers.expected_stderr build/runtime_console_line_io_wrappers.stderr; then
+    echo "FAIL [runtime_console_line_io_wrappers stderr]:" >&2
+    sed 's/^/  expected: /' build/runtime_console_line_io_wrappers.expected_stderr >&2
+    sed 's/^/  got: /' build/runtime_console_line_io_wrappers.stderr >&2
+    exit 1
+  fi
+  echo "PASS [runtime_console_line_io_wrappers]"
 
   node dist/cli.js examples/string_basic.ts --emit-c-only -o build/runtime_prelude_string_eq > /dev/null
   local string_eq_calls

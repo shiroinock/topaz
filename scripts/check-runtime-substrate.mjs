@@ -181,14 +181,6 @@ const inventory = {
     reason: "snprintf/strtod round-trip formatting substrate.",
   },
 
-  topaz_console_log_string: {
-    category: CATEGORY.CONSOLE,
-    reason: "stdout string IO helper.",
-  },
-  topaz_console_error_string: {
-    category: CATEGORY.CONSOLE,
-    reason: "stderr string IO helper.",
-  },
   topaz_stdout_write: {
     category: CATEGORY.CONSOLE,
     reason: "process.stdout.write substrate.",

@@ -412,18 +412,6 @@ static inline topaz_number topaz_string_char_code_at(topaz_string s, topaz_numbe
   return (topaz_number)(unsigned char)s.data[idx];
 }
 
-static inline void topaz_console_log_string(topaz_string s) {
-  if (s.len) fwrite(s.data, 1, s.len, stdout);
-  putchar('\n');
-}
-
-// Phase 1.5-6 prep #26: console.error mirrors console.log but writes to stderr
-// (Node sends console.error to fd 2). Same `\n`-terminated, one-argument shape.
-static inline void topaz_console_error_string(topaz_string s) {
-  if (s.len) fwrite(s.data, 1, s.len, stderr);
-  putc('\n', stderr);
-}
-
 // JS `%` is IEEE-754 remainder with truncated quotient = fmod.
 // C's `%` is integer-only, so all topaz_number `%` lowers to this helper.
 static inline topaz_number topaz_fmod(topaz_number a, topaz_number b) {

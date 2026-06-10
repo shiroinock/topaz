@@ -145,7 +145,12 @@ string stdout/stderr helpers, and the dedicated number/BigInt console wrappers
 are removed. `console.warn(...)` now lowers directly to the same stderr string
 IO substrate as `console.error(...)`, so the duplicate
 `topaz_console_warn_string(...)` wrapper is also removed while preserving the
-public `console.warn` call shape and diagnostics. String byte equality
+public `console.warn` call shape and diagnostics. The remaining
+`topaz_console_log_string(...)` / `topaz_console_error_string(...)` line
+wrappers are removed after codegen takes ownership of line composition by
+emitting raw `topaz_stdout_write(...)` / `topaz_stderr_write(...)` plus a
+compiler-owned newline string; raw stdout/stderr writes remain C substrate.
+String byte equality
 qualifies because it is pure length and byte scanning over existing string
 intrinsics, but Map/Set string key equality remains on the C substrate until
 container monomorphization has a replacement.

@@ -9076,21 +9076,26 @@ class Emitter {
     return arg;
   }
 
+  private emitLineWrite(fn: string, value: string, anchor: { pos: number }): string {
+    const newline = this.emitStringLiteralText("\n", anchor);
+    return `(${fn}(${value}), ${fn}(${newline}))`;
+  }
+
   private emitConsoleCall(expr: CallExpr, method: string): string {
     const arg = this.checkConsoleCallArgs(expr, method);
     const t = this.inferType(arg);
-    const family = method === "log" ? "log" : "error";
+    const fn = method === "log" ? "topaz_stdout_write" : "topaz_stderr_write";
     if (t.kind === "boolean") {
       const booleanToString = this.requireInternalPreludeFunctionCName("__topaz_boolean_to_string", { pos: arg.pos });
-      return `topaz_console_${family}_string(${booleanToString}(${this.emitWithExpected(arg, T_BOOLEAN)}))`;
+      return this.emitLineWrite(fn, `${booleanToString}(${this.emitWithExpected(arg, T_BOOLEAN)})`, { pos: expr.pos });
     }
     if (t.kind === "bigint") {
-      return `topaz_console_${family}_string(topaz_bigint_to_string(${this.emitExpression(arg)}))`;
+      return this.emitLineWrite(fn, `topaz_bigint_to_string(${this.emitExpression(arg)})`, { pos: expr.pos });
     }
     if (t.kind === "number") {
-      return `topaz_console_${family}_string(topaz_number_to_string(${this.emitExpression(arg)}))`;
+      return this.emitLineWrite(fn, `topaz_number_to_string(${this.emitExpression(arg)})`, { pos: expr.pos });
     }
-    return `topaz_console_${family}_string(${this.emitWithExpected(arg, T_STRING)})`;
+    return this.emitLineWrite(fn, this.emitWithExpected(arg, T_STRING), { pos: expr.pos });
   }
 
   private emitCall(expr: CallExpr): string {
@@ -10232,7 +10237,7 @@ class Emitter {
 
   private emitStdProcessWriteError(expr: CallExpr): string {
     const arg = this.checkStdProcessWriteErrorArgs(expr);
-    return `topaz_console_error_string(${this.emitWithExpected(arg, T_STRING)})`;
+    return this.emitLineWrite("topaz_stderr_write", this.emitWithExpected(arg, T_STRING), { pos: expr.pos });
   }
 
   // Phase 1.5-6e-2: `import.meta.url` validation / bare-meta rejection now live
