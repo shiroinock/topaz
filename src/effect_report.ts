@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import {
   BuiltinEffectProvenance,
   collectBuiltinEffectProvenanceForEntry,
@@ -9,7 +7,7 @@ export function formatBuiltinEffectReport(
   entry: string,
   provenance: Array<BuiltinEffectProvenance>,
 ): string {
-  const lines = [`topaz builtin effect report: ${displayPath(entry)}`];
+  const lines = [`topaz builtin effect report: ${entry}`];
   if (provenance.length === 0) {
     lines.push("effects: none");
     lines.push("requirements: none");
@@ -25,17 +23,15 @@ export function formatBuiltinEffectReport(
     }
     effectCounts.set(record.effect, effectCounts.get(record.effect)! + 1);
   }
-  effectOrder.sort();
 
   lines.push("effects:");
-  for (const effect of effectOrder) {
-    lines.push(`  ${effect}: ${effectCounts.get(effect)}`);
-  }
+  appendEffectSummaryLines(lines, effectCounts, effectOrder);
 
   lines.push("requirements:");
   for (const record of provenance) {
+    const source = effectSourceLabel(record.source);
     lines.push(
-      `  ${displayPath(record.file)}:${record.line}:${record.col} [${record.effect}] ${record.semanticName} via ${record.source} - ${record.detail}`,
+      `  ${record.file}:${record.line}:${record.col} [${record.effect}] ${record.semanticName} via ${source} - ${record.detail}`,
     );
   }
   return lines.join("\n");
@@ -45,9 +41,38 @@ export function formatBuiltinEffectReportForEntry(entry: string): string {
   return formatBuiltinEffectReport(entry, collectBuiltinEffectProvenanceForEntry(entry));
 }
 
-function displayPath(filePath: string): string {
-  const relative = path.relative(process.cwd(), filePath);
-  if (relative.length === 0) return ".";
-  if (relative.startsWith("..") || path.isAbsolute(relative)) return filePath;
-  return relative;
+function appendEffectSummaryLines(
+  lines: Array<string>,
+  effectCounts: Map<string, number>,
+  effectOrder: Array<string>,
+): void {
+  const effectSummaryOrder = [
+    "fs.read",
+    "fs.metadata",
+    "fs.write",
+    "process.argv",
+    "process.exit",
+    "io.stdout",
+    "io.stderr",
+    "process.spawn",
+  ];
+  const emitted = new Set<string>();
+  for (const effect of effectSummaryOrder) {
+    const count = effectCounts.get(effect);
+    if (count === undefined) continue;
+    lines.push(`  ${effect}: ${count}`);
+    emitted.add(effect);
+  }
+  for (const effect of effectOrder) {
+    if (emitted.has(effect)) continue;
+    const count = effectCounts.get(effect);
+    if (count === undefined) continue;
+    lines.push(`  ${effect}: ${count}`);
+  }
+}
+
+function effectSourceLabel(source: "import" | "call" | "value"): string {
+  if (source === "import") return "import";
+  if (source === "call") return "call";
+  return "value";
 }

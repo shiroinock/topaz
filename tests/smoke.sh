@@ -112,6 +112,27 @@ if [[ "${effect_report_out}" == *"path.join"* || "${effect_report_out}" == *"std
   exit 1
 fi
 echo "PASS [effect_report]"
+effect_selfhost_out=$(pnpm run check:effect-selfhost)
+if [[ "${effect_selfhost_out}" != *"effect selfhost ok:"* ]]; then
+  echo "FAIL [effect_selfhost]: missing ok summary" >&2
+  printf '%s\n' "${effect_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for target in src/effect_provenance.ts src/effect_report.ts; do
+  if [[ "${effect_selfhost_out}" != *"${target}"* ]]; then
+    echo "FAIL [effect_selfhost]: missing target ${target}" >&2
+    printf '%s\n' "${effect_selfhost_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+for former_blocker in "unknown template escape" "default import from stdlib specifier 'node:path'"; do
+  if [[ "${effect_selfhost_out}" != *"${former_blocker}"* ]]; then
+    echo "FAIL [effect_selfhost]: missing former blocker ${former_blocker}" >&2
+    printf '%s\n' "${effect_selfhost_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+echo "PASS [effect_selfhost]"
 release_workflow=".github/workflows/release-artifact.yml"
 if ! grep -Fq 'release_flags=(--draft)' "${release_workflow}"; then
   echo "FAIL [release_workflow_prerelease]: missing draft release flag baseline" >&2

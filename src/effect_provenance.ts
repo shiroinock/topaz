@@ -6,7 +6,7 @@ import {
   builtinImportDescriptors,
   builtinSyntheticGlobalDescriptors,
 } from "./builtin_descriptors.js";
-import { Expr, ImportDecl, ModuleItem, SourceModule, Stmt } from "./ast.js";
+import { CallExpr, Expr, IdentExpr, ImportDecl, ModuleItem, SourceModule, Stmt } from "./ast.js";
 import { loadModuleGraph, ModuleGraph } from "./loader.js";
 
 export type BuiltinEffectSource = "import" | "call" | "value";
@@ -108,9 +108,8 @@ function collectModuleItemUses(
     case "class_decl":
       for (const member of decl.members) {
         if (member.kind === "class_field") {
-          if (member.initializer !== undefined) {
-            collectExprUses(mod, member.initializer, importedBindings, syntheticDescriptorByName, sink);
-          }
+          const initializer = member.initializer;
+          if (initializer !== undefined) collectExprUses(mod, initializer, importedBindings, syntheticDescriptorByName, sink);
         } else {
           collectStmtUses(mod, member.body, importedBindings, syntheticDescriptorByName, sink);
         }
@@ -135,7 +134,8 @@ function collectStmtUses(
       collectExprUses(mod, stmt.expr, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "var_decl":
-      if (stmt.init !== undefined) collectExprUses(mod, stmt.init, importedBindings, syntheticDescriptorByName, sink);
+      const init = stmt.init;
+      if (init !== undefined) collectExprUses(mod, init, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "var_destr_decl":
       collectExprUses(mod, stmt.init, importedBindings, syntheticDescriptorByName, sink);
@@ -146,7 +146,8 @@ function collectStmtUses(
     case "if_stmt":
       collectExprUses(mod, stmt.cond, importedBindings, syntheticDescriptorByName, sink);
       collectStmtUses(mod, stmt.thenBranch, importedBindings, syntheticDescriptorByName, sink);
-      if (stmt.elseBranch !== undefined) collectStmtUses(mod, stmt.elseBranch, importedBindings, syntheticDescriptorByName, sink);
+      const elseBranch = stmt.elseBranch;
+      if (elseBranch !== undefined) collectStmtUses(mod, elseBranch, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "while_stmt":
       collectExprUses(mod, stmt.cond, importedBindings, syntheticDescriptorByName, sink);
@@ -157,15 +158,18 @@ function collectStmtUses(
       collectExprUses(mod, stmt.cond, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "for_stmt":
-      if (stmt.init !== undefined) {
-        if (stmt.init.kind === "for_init_decl") {
-          collectStmtUses(mod, stmt.init.decl, importedBindings, syntheticDescriptorByName, sink);
+      const forInit = stmt.init;
+      if (forInit !== undefined) {
+        if (forInit.kind === "for_init_decl") {
+          collectStmtUses(mod, forInit.decl, importedBindings, syntheticDescriptorByName, sink);
         } else {
-          collectExprUses(mod, stmt.init.expr, importedBindings, syntheticDescriptorByName, sink);
+          collectExprUses(mod, forInit.expr, importedBindings, syntheticDescriptorByName, sink);
         }
       }
-      if (stmt.cond !== undefined) collectExprUses(mod, stmt.cond, importedBindings, syntheticDescriptorByName, sink);
-      if (stmt.update !== undefined) collectExprUses(mod, stmt.update, importedBindings, syntheticDescriptorByName, sink);
+      const cond = stmt.cond;
+      if (cond !== undefined) collectExprUses(mod, cond, importedBindings, syntheticDescriptorByName, sink);
+      const update = stmt.update;
+      if (update !== undefined) collectExprUses(mod, update, importedBindings, syntheticDescriptorByName, sink);
       collectStmtUses(mod, stmt.body, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "for_of_stmt":
@@ -175,17 +179,21 @@ function collectStmtUses(
     case "switch_stmt":
       collectExprUses(mod, stmt.discriminant, importedBindings, syntheticDescriptorByName, sink);
       for (const switchCase of stmt.cases) {
-        if (switchCase.test !== undefined) collectExprUses(mod, switchCase.test, importedBindings, syntheticDescriptorByName, sink);
+        const test = switchCase.test;
+        if (test !== undefined) collectExprUses(mod, test, importedBindings, syntheticDescriptorByName, sink);
         for (const child of switchCase.stmts) collectStmtUses(mod, child, importedBindings, syntheticDescriptorByName, sink);
       }
       return;
     case "try_stmt":
       collectStmtUses(mod, stmt.tryBlock, importedBindings, syntheticDescriptorByName, sink);
-      if (stmt.catchClause !== undefined) collectStmtUses(mod, stmt.catchClause.body, importedBindings, syntheticDescriptorByName, sink);
-      if (stmt.finallyBlock !== undefined) collectStmtUses(mod, stmt.finallyBlock, importedBindings, syntheticDescriptorByName, sink);
+      const catchClause = stmt.catchClause;
+      if (catchClause !== undefined) collectStmtUses(mod, catchClause.body, importedBindings, syntheticDescriptorByName, sink);
+      const finallyBlock = stmt.finallyBlock;
+      if (finallyBlock !== undefined) collectStmtUses(mod, finallyBlock, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "return_stmt":
-      if (stmt.value !== undefined) collectExprUses(mod, stmt.value, importedBindings, syntheticDescriptorByName, sink);
+      const value = stmt.value;
+      if (value !== undefined) collectExprUses(mod, value, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "throw_stmt":
       collectExprUses(mod, stmt.value, importedBindings, syntheticDescriptorByName, sink);
@@ -245,7 +253,7 @@ function collectExprUses(
       return;
     case "prop_access": {
       const name = qualifiedName(expr);
-      if (name === "process.argv") {
+      if (name !== undefined && name === "process.argv") {
         const desc = syntheticDescriptorByName.get(name);
         if (desc !== undefined) recordDescriptorEffects(mod, expr.pos, desc, "value", name, sink);
       }
@@ -257,13 +265,24 @@ function collectExprUses(
       collectExprUses(mod, expr.index, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "prefix_op":
+      collectExprUses(mod, expr.operand, importedBindings, syntheticDescriptorByName, sink);
+      return;
     case "postfix_op":
+      collectExprUses(mod, expr.operand, importedBindings, syntheticDescriptorByName, sink);
+      return;
     case "typeof_expr":
+      collectExprUses(mod, expr.operand, importedBindings, syntheticDescriptorByName, sink);
+      return;
     case "non_null":
+      collectExprUses(mod, expr.operand, importedBindings, syntheticDescriptorByName, sink);
+      return;
     case "spread_expr":
       collectExprUses(mod, expr.operand, importedBindings, syntheticDescriptorByName, sink);
       return;
     case "bin_op":
+      collectExprUses(mod, expr.lhs, importedBindings, syntheticDescriptorByName, sink);
+      collectExprUses(mod, expr.rhs, importedBindings, syntheticDescriptorByName, sink);
+      return;
     case "instanceof_expr":
       collectExprUses(mod, expr.lhs, importedBindings, syntheticDescriptorByName, sink);
       collectExprUses(mod, expr.rhs, importedBindings, syntheticDescriptorByName, sink);
@@ -277,19 +296,24 @@ function collectExprUses(
       collectExprUses(mod, expr.target, importedBindings, syntheticDescriptorByName, sink);
       collectExprUses(mod, expr.value, importedBindings, syntheticDescriptorByName, sink);
       return;
-    case "arrow_expr":
-      if (expr.body.kind === "arrow_expr_body") {
-        collectExprUses(mod, expr.body.expr, importedBindings, syntheticDescriptorByName, sink);
-      } else {
-        for (const stmt of expr.body.stmts) collectStmtUses(mod, stmt, importedBindings, syntheticDescriptorByName, sink);
+    case "arrow_expr": {
+      const body = expr.body;
+      switch (body.kind) {
+        case "arrow_expr_body":
+          collectExprUses(mod, body.expr, importedBindings, syntheticDescriptorByName, sink);
+          return;
+        case "arrow_block_body":
+          for (const stmt of body.stmts) collectStmtUses(mod, stmt, importedBindings, syntheticDescriptorByName, sink);
+          return;
       }
       return;
+    }
   }
 }
 
 function collectCallUse(
   mod: SourceModule,
-  expr: Extract<Expr, { kind: "call_expr" }>,
+  expr: CallExpr,
   importedBindings: Map<string, ImportedBuiltinBinding>,
   syntheticDescriptorByName: Map<string, BuiltinSyntheticGlobalDescriptor>,
   sink: ProvenanceSink,
@@ -317,7 +341,7 @@ function collectCallUse(
 
 function collectImportedValueUse(
   mod: SourceModule,
-  expr: Extract<Expr, { kind: "ident" }>,
+  expr: IdentExpr,
   importedBindings: Map<string, ImportedBuiltinBinding>,
   sink: ProvenanceSink,
 ): void {
@@ -359,7 +383,7 @@ function qualifiedName(expr: Expr): string | undefined {
 }
 
 function importDescriptorKey(specifier: string, importedName: string): string {
-  return `${specifier}\u0000${importedName}`;
+  return `${specifier} :: ${importedName}`;
 }
 
 function posToLineCol(module: SourceModule, pos: number): { line: number; col: number } {
