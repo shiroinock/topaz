@@ -22,10 +22,12 @@ export function formatDoctorReport(
   lines.push("requirements:");
   for (const requirement of requirements) {
     for (const occurrence of requirement.occurrences) {
+      const source = doctorSourceLabel(occurrence.source);
+      const status = doctorStatusLabel(occurrence.status);
       lines.push(
         `  ${occurrence.file}:${occurrence.line}:${occurrence.col} ` +
           `[${occurrence.effect}] ${occurrence.semanticName} ` +
-          `via ${occurrence.source} ${occurrence.status} - ${occurrence.detail}`,
+          `via ${source} ${status} - ${occurrence.detail}`,
       );
     }
   }
@@ -34,4 +36,16 @@ export function formatDoctorReport(
 
 export function formatDoctorReportForEntry(entry: string): string {
   return formatDoctorReport(entry, collectManifestRequirementsForEntry(entry));
+}
+
+function doctorSourceLabel(source: "import" | "call" | "value"): string {
+  if (source === "import") return "import";
+  if (source === "call") return "call";
+  return "value";
+}
+
+function doctorStatusLabel(status: "public" | "compat" | "synthetic_compat"): string {
+  if (status === "public") return "public";
+  if (status === "compat") return "compat";
+  return "synthetic_compat";
 }

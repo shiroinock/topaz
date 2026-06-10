@@ -25,6 +25,7 @@
     "check:manifest-requirements": "node scripts/check-manifest-requirements.mjs",
     "check:manifest-selfhost": "node scripts/check-manifest-selfhost.mjs",
     "check:doctor-report": "node scripts/check-doctor-report.mjs",
+    "check:doctor-selfhost": "node scripts/check-doctor-selfhost.mjs",
     "generate:runtime-header": "node scripts/generate-runtime-header.mjs",
     "generate:runtime-prelude": "node scripts/generate-runtime-prelude.mjs",
     "bench": "node scripts/bench.mjs",

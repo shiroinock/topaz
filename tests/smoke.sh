@@ -180,6 +180,23 @@ if [[ "${doctor_report_out}" == *"path.join"* || "${doctor_report_out}" == *"std
   exit 1
 fi
 echo "PASS [doctor_report]"
+doctor_selfhost_out=$(pnpm run check:doctor-selfhost)
+if [[ "${doctor_selfhost_out}" != *"doctor selfhost ok:"* ]]; then
+  echo "FAIL [doctor_selfhost]: missing ok summary" >&2
+  printf '%s\n' "${doctor_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${doctor_selfhost_out}" != *"src/doctor_report.ts"* ]]; then
+  echo "FAIL [doctor_selfhost]: missing doctor report target" >&2
+  printf '%s\n' "${doctor_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${doctor_selfhost_out}" != *"literal union source/status template blocker cleared"* ]]; then
+  echo "FAIL [doctor_selfhost]: missing former literal-union blocker text" >&2
+  printf '%s\n' "${doctor_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [doctor_selfhost]"
 manifest_selfhost_out=$(pnpm run check:manifest-selfhost)
 if [[ "${manifest_selfhost_out}" != *"manifest selfhost ok:"* ]]; then
   echo "FAIL [manifest_selfhost]: missing ok summary" >&2
