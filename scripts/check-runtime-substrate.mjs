@@ -41,7 +41,10 @@ const NEXT = {
   C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
 };
 
-const STRING_BUFFER_INTRINSIC_BOUNDARY = [];
+const CLOSED_MIGRATION_LANES = [
+  MIGRATION.BIGINT_LIMB_INTRINSICS,
+  MIGRATION.STRING_BUFFER_INTRINSICS,
+];
 
 const inventory = {
   TOPAZ_RUNTIME_H: {
@@ -423,14 +426,12 @@ function validateInventory() {
   return invalid;
 }
 
-function validateStringBufferIntrinsicBoundary(discovered) {
-  const expected = new Set(STRING_BUFFER_INTRINSIC_BOUNDARY);
-  const actual = [...discovered.keys()]
-    .filter((name) => inventory[name]?.migration === MIGRATION.STRING_BUFFER_INTRINSICS)
-    .sort();
-  const missing = STRING_BUFFER_INTRINSIC_BOUNDARY.filter((name) => !actual.includes(name));
-  const unexpected = actual.filter((name) => !expected.has(name));
-  return { actual, missing, unexpected };
+function validateClosedMigrationLanes(discovered) {
+  const closed = new Set(CLOSED_MIGRATION_LANES);
+  return [...discovered.keys()]
+    .filter((name) => closed.has(inventory[name]?.migration))
+    .map((name) => ({ name, lane: inventory[name].migration }))
+    .sort((a, b) => a.lane.localeCompare(b.lane) || a.name.localeCompare(b.name));
 }
 
 let source;
@@ -458,9 +459,9 @@ const unclassified = [...discovered.entries()]
 const stale = Object.keys(inventory)
   .filter((name) => !discovered.has(name) && !inventory[name].exempt)
   .sort();
-const stringBufferBoundary = validateStringBufferIntrinsicBoundary(discovered);
+const closedLaneViolations = validateClosedMigrationLanes(discovered);
 
-if (unclassified.length > 0 || stale.length > 0 || stringBufferBoundary.missing.length > 0 || stringBufferBoundary.unexpected.length > 0) {
+if (unclassified.length > 0 || stale.length > 0 || closedLaneViolations.length > 0) {
   if (unclassified.length > 0) {
     console.error("runtime substrate inventory: unclassified discovered symbols:");
     for (const [name, meta] of unclassified) {
@@ -473,13 +474,10 @@ if (unclassified.length > 0 || stale.length > 0 || stringBufferBoundary.missing.
       console.error(`  ${name}`);
     }
   }
-  if (stringBufferBoundary.missing.length > 0 || stringBufferBoundary.unexpected.length > 0) {
-    console.error("runtime substrate inventory: string buffer intrinsic boundary changed:");
-    for (const name of stringBufferBoundary.missing) {
-      console.error(`  missing expected symbol: ${name}`);
-    }
-    for (const name of stringBufferBoundary.unexpected) {
-      console.error(`  unexpected symbol: ${name}`);
+  if (closedLaneViolations.length > 0) {
+    console.error("runtime substrate inventory: closed migration lane symbols:");
+    for (const { name, lane } of closedLaneViolations) {
+      console.error(`  ${lane}: ${name}`);
     }
   }
   process.exit(1);
@@ -501,6 +499,7 @@ console.log("migration lanes:");
 for (const [migration, count] of [...migrationCounts.entries()].sort(([a], [b]) => a.localeCompare(b))) {
   console.log(`  ${migration}: ${count}`);
 }
-const stringBufferBoundaryLabel =
-  STRING_BUFFER_INTRINSIC_BOUNDARY.length === 0 ? "<none>" : STRING_BUFFER_INTRINSIC_BOUNDARY.join(", ");
-console.log(`string buffer intrinsic boundary: ${stringBufferBoundaryLabel}`);
+console.log("closed migration lanes:");
+for (const lane of [...CLOSED_MIGRATION_LANES].sort()) {
+  console.log(`  ${lane}: closed`);
+}

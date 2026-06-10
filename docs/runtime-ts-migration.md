@@ -43,12 +43,6 @@ symbol should immediately move to TypeScript:
   shapes that generated C and runtime helpers still share.
 - `raw-memory-boundary`: arena allocation, calloc/realloc, raw byte buffers,
   and representation-level storage.
-- `needs-string-buffer-intrinsics`: legacy raw immutable string byte-read
-  helpers that have now been removed from the runtime header.
-- `needs-bigint-limb-intrinsics`: legacy BigInt helper algorithms that needed
-  the internal-prelude-only BigInt limb intrinsic family before they could move
-  to Topaz-subset TS; this lane is now empty after decimal formatting moved to
-  the runtime prelude.
 - `container-monomorph-boundary`: Array/Map/Set macro families, hash slots,
   hashing, and key equality until compiler-owned monomorphization replaces the
   C substrate.
@@ -59,14 +53,24 @@ symbol should immediately move to TypeScript:
 - `host-abi-boundary`: filesystem, process, URL/module path, child process,
   and raw stdout/stderr wrappers that cross the host ABI.
 
-As of Phase 3.68, `needs-string-buffer-intrinsics` is empty and reports
-`string buffer intrinsic boundary: <none>`. The former raw immutable string
-byte-read helper for `String.prototype.charCodeAt(index)` has moved out of the
-runtime header: hidden runtime-prelude-only `__topaz_string_byte_at(s, index)`
-now lowers directly to generated C that reads `topaz_string.data[(size_t)i]`.
-The old byte-code string materialization bridge has also been removed;
-allocation and copying clients now use the compiler-owned internal
-`StringBuffer` intrinsic family.
+The legacy `needs-string-buffer-intrinsics` and
+`needs-bigint-limb-intrinsics` lanes are closed checker invariants after Phase
+3.79. They describe completed migrations, not available backlog buckets: if a
+future runtime symbol is classified into either lane,
+`pnpm run check:runtime-substrate` fails and names the lane and symbol. Future
+runtime shrink work must either use the established
+`string-buffer-intrinsic-family` / `bigint-limb-intrinsic-family` substrate,
+introduce a new explicit boundary with an ADR, or stay in one of the remaining
+pinned lanes above.
+
+As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
+3.79 it reports as a closed lane in the substrate checker. The former raw
+immutable string byte-read helper for `String.prototype.charCodeAt(index)` has
+moved out of the runtime header: hidden runtime-prelude-only
+`__topaz_string_byte_at(s, index)` now lowers directly to generated C that
+reads `topaz_string.data[(size_t)i]`. The old byte-code string materialization
+bridge has also been removed; allocation and copying clients now use the
+compiler-owned internal `StringBuffer` intrinsic family.
 
 As of Phase 3.69, the next runtime migration target is not direct
 helper-by-helper C-to-TS copying for BigInt. The `needs-bigint-limb-intrinsics`
@@ -134,6 +138,12 @@ that stable internal prelude symbol, while the standalone C
 `topaz_bigint_to_string(...)` helper and the old `needs-bigint-limb-intrinsics`
 migration lane are gone. The eight-symbol `bigint-limb-intrinsic-family`
 remains as the compiler-owned substrate for internal prelude BigInt algorithms.
+
+As of Phase 3.79, both closed legacy lanes are explicit substrate-checker
+invariants rather than silently empty ordinary lanes. The remaining runtime work
+is pinned by explicit raw-memory, libc/libm, container-monomorph, host ABI,
+exception, and C ABI boundaries, plus the active compiler-owned StringBuffer
+and BigIntBuffer intrinsic families.
 
 ## Hidden String Buffer Intrinsics
 

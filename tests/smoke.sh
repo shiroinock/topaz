@@ -14,18 +14,28 @@ if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"string buffer intrinsic boundary: <none>"* ]]; then
-  echo "FAIL [runtime_substrate_inventory]: missing empty string buffer intrinsic boundary" >&2
+if [[ "${substrate_out}" != *"closed migration lanes:"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing closed migration lane summary" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" == *"needs-bigint-limb-intrinsics"* ]]; then
-  echo "FAIL [runtime_substrate_inventory]: stale bigint migration lane remains" >&2
+if [[ "${substrate_out}" != *"needs-string-buffer-intrinsics: closed"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: string buffer migration lane is not closed" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${substrate_out}" != *"needs-bigint-limb-intrinsics: closed"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: bigint migration lane is not closed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
 if [[ "${substrate_out}" != *"bigint-limb-intrinsic-family: 8"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing bigint intrinsic family lane" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${substrate_out}" != *"string-buffer-intrinsic-family: 5"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing string buffer intrinsic family lane" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
@@ -40,6 +50,18 @@ fi
 if [[ "${substrate_err}" != *"topaz_unclassified_probe"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing unclassified helper name" >&2
   printf '%s\n' "${substrate_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
+tmp_runtime_substrate_checker="build/runtime_substrate_closed_lane_probe.mjs"
+cp scripts/check-runtime-substrate.mjs "${tmp_runtime_substrate_checker}"
+perl -0pi -e 's/migration: MIGRATION\.C_ABI_TYPE,/migration: MIGRATION.STRING_BUFFER_INTRINSICS,/' "${tmp_runtime_substrate_checker}"
+if closed_lane_err=$(node "${tmp_runtime_substrate_checker}" runtime/runtime.h 2>&1); then
+  echo "FAIL [runtime_substrate_inventory]: expected closed migration lane failure" >&2
+  exit 1
+fi
+if [[ "${closed_lane_err}" != *"needs-string-buffer-intrinsics: TOPAZ_RUNTIME_H"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing closed lane diagnostic" >&2
+  printf '%s\n' "${closed_lane_err}" | sed 's/^/    /' >&2
   exit 1
 fi
 echo "PASS [runtime_substrate_inventory]"
