@@ -9230,9 +9230,6 @@ class Emitter {
         if (callee.name === "__topaz_panic") {
           return this.emitInternalPreludePanic(expr);
         }
-        if (callee.name === "__topaz_string_from_byte_codes") {
-          return this.emitInternalPreludeStringFromByteCodes(expr);
-        }
         if (callee.name === "__topaz_string_byte_at") {
           return this.emitInternalPreludeStringByteAt(expr);
         }
@@ -10226,31 +10223,6 @@ class Emitter {
   private emitInternalPreludePanic(expr: CallExpr): string {
     const arg = this.checkInternalPreludePanicArgs(expr);
     return `topaz_panic(${this.emitWithExpected(arg, T_STRING)})`;
-  }
-
-  private checkInternalPreludeStringFromByteCodesArgs(expr: CallExpr): Expr {
-    if (expr.args.length !== 1) {
-      throw new CodegenError(
-        { pos: expr.pos },
-        "__topaz_string_from_byte_codes expects exactly one argument: (codes: Array<number>)",
-      );
-    }
-    const arg = expr.args[0];
-    const expected = arrayOf(T_NUMBER)!;
-    const t = this.inferType(arg);
-    if (!typeEq(t, expected)) {
-      throw new CodegenError(
-        { pos: arg.pos },
-        `__topaz_string_from_byte_codes codes must be Array<number>, got ${typeIdent(t)}`,
-      );
-    }
-    this.recordArrayMonomorph(expected);
-    return arg;
-  }
-
-  private emitInternalPreludeStringFromByteCodes(expr: CallExpr): string {
-    const arg = this.checkInternalPreludeStringFromByteCodesArgs(expr);
-    return `topaz_string_from_byte_codes(${this.emitWithExpected(arg, arrayOf(T_NUMBER)!)})`;
   }
 
   private checkInternalPreludeStringByteAtArgs(expr: CallExpr): { sArg: Expr; indexArg: Expr } {
@@ -11956,10 +11928,6 @@ class Emitter {
           if (callee.name === "__topaz_panic") {
             this.checkInternalPreludePanicArgs(expr);
             return T_VOID;
-          }
-          if (callee.name === "__topaz_string_from_byte_codes") {
-            this.checkInternalPreludeStringFromByteCodesArgs(expr);
-            return T_STRING;
           }
           if (callee.name === "__topaz_string_byte_at") {
             this.checkInternalPreludeStringByteAtArgs(expr);

@@ -43,8 +43,8 @@ symbol should immediately move to TypeScript:
   shapes that generated C and runtime helpers still share.
 - `raw-memory-boundary`: arena allocation, calloc/realloc, raw byte buffers,
   and representation-level storage.
-- `needs-string-buffer-intrinsics`: string allocation/copying primitives and
-  byte reads that need explicit internal string-buffer intrinsics first.
+- `needs-string-buffer-intrinsics`: raw immutable string byte reads that still
+  need an explicit internal read intrinsic or another representation decision.
 - `needs-bigint-limb-intrinsics`: BigInt limb storage, arithmetic, parsing, and
   formatting that need explicit limb intrinsics or generated monomorphs first.
 - `container-monomorph-boundary`: Array/Map/Set macro families, hash slots,
@@ -57,13 +57,12 @@ symbol should immediately move to TypeScript:
 - `host-abi-boundary`: filesystem, process, URL/module path, child process,
   and raw stdout/stderr wrappers that cross the host ABI.
 
-As of Phase 3.60, `needs-string-buffer-intrinsics` is pinned to exactly
-`topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)`. This is a
-terminal C boundary for the current runtime-prelude experiment, not another
-ordinary helper-migration queue. Moving either symbol now requires
-compiler-owned internal string-buffer intrinsics: opaque buffer allocation,
-byte append/copy/read operations, materialization to immutable `string`, and
-hidden lowering available only to runtime prelude modules.
+As of Phase 3.67, `needs-string-buffer-intrinsics` is pinned to exactly
+`topaz_string_byte_at(...)`. This is the remaining raw immutable string
+byte-read substrate for `String.prototype.charCodeAt(index)`, not another
+ordinary helper-migration queue. The old byte-code string materialization
+bridge has been removed; allocation and copying clients now use the
+compiler-owned internal `StringBuffer` intrinsic family.
 
 ## Hidden String Buffer Intrinsics
 
@@ -91,11 +90,10 @@ byte, and materializes through `__topaz_string_buffer_to_string`. The remaining
 string byte materialization client, `__topaz_url_file_url_to_path`, now also
 allocates one buffer sized by the input URL, pushes either decoded percent bytes
 or ordinary URL bytes, and materializes through
-`__topaz_string_buffer_to_string`. The remaining replacement order is: raw byte
-reads first (`__topaz_string_char_code_at`), then removal or reclassification of
-`topaz_string_byte_at(...)` and `topaz_string_from_byte_codes(...)` after no
-prelude client needs the old two-symbol boundary. This is still pre-v0.2.0
-runtime prelude groundwork, not manifest, doctor, check, or explain work.
+`__topaz_string_buffer_to_string`. The remaining replacement question is raw
+byte reads for `__topaz_string_char_code_at`; `topaz_string_byte_at(...)` is the
+sole old string-buffer-intrinsics boundary. This is still pre-v0.2.0 runtime
+prelude groundwork, not manifest, doctor, check, or explain work.
 
 ## Topaz Prelude Candidates
 
@@ -114,13 +112,12 @@ Split string work into two buckets:
 
 - **Allocation primitives** such as byte-buffer materializing helpers stay on
   the C substrate until Topaz has explicit internal string-buffer intrinsics.
-  `String.prototype.slice`, compiler-owned string concatenation, and
-  `String.prototype.repeat` are the current string exceptions: their
-  normalization/copy loops now live in the runtime prelude and delegate final
-  materialization to the hidden `__topaz_string_from_byte_codes(...)` substrate
-  affordance. `Array.prototype.slice` now also delegates only its numeric index
-  normalization to the runtime prelude while keeping monomorphized array
-  allocation, reserve, and element copy in generated C.
+  The temporary byte-code materialization helper is gone; `String.fromCharCode`,
+  `String.prototype.slice`, compiler-owned string concatenation,
+  `String.prototype.repeat`, and `fileURLToPath` now allocate through the
+  hidden `StringBuffer` family. `Array.prototype.slice` delegates only its
+  numeric index normalization to the runtime prelude while keeping monomorphized
+  array allocation, reserve, and element copy in generated C.
 - **Allocation clients** may move to the runtime prelude if their algorithmic
   work is pure Topaz-subset control flow and they delegate the final string
   allocation/copying to those existing primitives without changing behavior.
@@ -129,7 +126,7 @@ Split string work into two buckets:
 whitespace in prelude TS with `.length` and `charCodeAt`, then return
 `s.slice(start)` for the final allocation. That final `slice` call targets the
 internal `__topaz_string_slice(...)` prelude helper, whose output is materialized
-through `__topaz_string_from_byte_codes(...)`.
+through `StringBuffer`.
 
 ## Required Compiler Work
 
@@ -289,22 +286,18 @@ delegates decimal/exponent parsing and roundoff behavior to libc `strtod`.
 allocation. The public call shapes and diagnostics remain codegen-owned; the
 prelude helpers allocate through the internal `StringBuffer` intrinsic family
 instead of the temporary `Array<number>`/`__topaz_string_from_byte_codes(Array<number>)`
-bridge. This exercises one-byte push and existing-string append without
-migrating charCodeAt yet.
+bridge. The byte-code materialization helper and its hidden lowering have been
+removed, leaving no runtime prelude allocation client on that old substrate.
 
 `String.prototype.charCodeAt(index)` now follows the scalar string-read split.
 The public call shape and diagnostics remain codegen-owned, while NaN input,
 negative input, out-of-range input, and positive fractional truncation live in
 `__topaz_string_char_code_at(s, index)`. The only C read helper left for this
 path is `topaz_string_byte_at(...)`, a raw byte-read substrate reachable only
-through hidden internal prelude calls. Byte-code string materialization still
-uses `topaz_string_from_byte_codes(...)`. That materialization primitive should
-not be reimplemented in ordinary Topaz-subset TS through
-repeat or slice because those helpers still delegate back through the same
-byte-code materialization lane. Keeping
-`Array<number>` as the internal byte carrier is intentionally temporary and
-inefficient; the replacement is a hidden string-buffer intrinsic family, not a
-public API.
+through hidden internal prelude calls. Byte-code string materialization should
+not be reintroduced under another helper name; the accepted allocation/copying
+escape hatch for runtime prelude code is the hidden string-buffer intrinsic
+family, not a public API.
 
 Prelude modules remain internal compiler modules, not a user import surface.
 

@@ -39,7 +39,7 @@ const NEXT = {
   C_ABI_TYPE: "Pinned because generated C and runtime helpers share these ABI-visible type and optional wrapper shapes.",
 };
 
-const STRING_BUFFER_INTRINSIC_BOUNDARY = ["topaz_string_byte_at", "topaz_string_from_byte_codes"];
+const STRING_BUFFER_INTRINSIC_BOUNDARY = ["topaz_string_byte_at"];
 
 const inventory = {
   TOPAZ_RUNTIME_H: {
@@ -222,12 +222,6 @@ const inventory = {
   topaz_string_byte_at: {
     category: CATEGORY.STRING,
     reason: "raw byte-read substrate used only through runtime prelude string helpers.",
-    migration: MIGRATION.STRING_BUFFER_INTRINSICS,
-    next: NEXT.STRING_BUFFER_INTRINSICS,
-  },
-  topaz_string_from_byte_codes: {
-    category: CATEGORY.STRING,
-    reason: "internal runtime prelude byte-preserving string allocation primitive.",
     migration: MIGRATION.STRING_BUFFER_INTRINSICS,
     next: NEXT.STRING_BUFFER_INTRINSICS,
   },

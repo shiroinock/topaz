@@ -792,21 +792,6 @@ static inline void topaz_panic(topaz_string message) {
   abort();
 }
 
-static inline topaz_string topaz_string_from_byte_codes(topaz_array_number *codes) {
-  char *buf = (char *)topaz_arena_alloc(codes->len + 1);
-  for (size_t i = 0; i < codes->len; i++) {
-    topaz_number n = codes->data[i];
-    if (!isfinite(n) || n < 0 || n > 255 || floor(n) != n) {
-      fputs("topaz: byte code out of range\n", stderr);
-      abort();
-    }
-    buf[i] = (char)(unsigned char)n;
-  }
-  buf[codes->len] = '\0';
-  topaz_string r = { buf, codes->len };
-  return r;
-}
-
 // Phase 1.5-6 prep #24: node:child_process.execFileSync(cmd, args,
 // { stdio: "inherit" }) -> void. fork + execvp + waitpid; stdio inherits the
 // parent (no pipe handling required). argv is built into the arena from the

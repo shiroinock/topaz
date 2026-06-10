@@ -14,7 +14,7 @@ if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"string buffer intrinsic boundary: topaz_string_byte_at, topaz_string_from_byte_codes"* ]]; then
+if [[ "${substrate_out}" != *"string buffer intrinsic boundary: topaz_string_byte_at"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing pinned string buffer intrinsic boundary" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
@@ -150,6 +150,19 @@ run_cc_warnfree_case() {
   echo "PASS [$name cc-warnfree]"
 }
 
+assert_no_byte_code_string_substrate() {
+  local file="$1"
+  local label="$2"
+  if grep -Eq "static inline topaz_string topaz_string_from_byte_codes\s*\(" "$file"; then
+    echo "FAIL [$label]: stale byte-code string helper definition embedded" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_from_byte_codes\s*\(" "$file"; then
+    echo "FAIL [$label]: stale byte-code string helper call emitted" >&2
+    exit 1
+  fi
+}
+
 run_cli_fail_case() {
   local label="$1"
   local expected_substring="$2"
@@ -248,6 +261,7 @@ run_cli_smoke() {
   echo "PASS [runtime_prelude_parse_int]"
 
   node dist/cli.js examples/string_from_char_code.ts --emit-c-only -o build/runtime_prelude_string_from_char_code > /dev/null
+  assert_no_byte_code_string_substrate build/runtime_prelude_string_from_char_code.c runtime_prelude_string_from_char_code
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_from_char_code" build/runtime_prelude_string_from_char_code.c; then
     echo "FAIL [runtime_prelude_string_from_char_code]: missing stable fromCharCode prelude symbol" >&2
     exit 1
@@ -286,6 +300,7 @@ run_cli_smoke() {
   echo "PASS [runtime_prelude_string_from_char_code]"
 
   node dist/cli.js examples/string_method.ts --emit-c-only -o build/runtime_prelude_string_char_code_at > /dev/null
+  assert_no_byte_code_string_substrate build/runtime_prelude_string_char_code_at.c runtime_prelude_string_char_code_at
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_char_code_at" build/runtime_prelude_string_char_code_at.c; then
     echo "FAIL [runtime_prelude_string_char_code_at]: missing stable String.charCodeAt prelude symbol" >&2
     exit 1
@@ -314,6 +329,7 @@ run_cli_smoke() {
   echo "PASS [runtime_prelude_string_char_code_at]"
 
   node dist/cli.js examples/string_method.ts --emit-c-only -o build/runtime_prelude_string_slice > /dev/null
+  assert_no_byte_code_string_substrate build/runtime_prelude_string_slice.c runtime_prelude_string_slice
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_slice" build/runtime_prelude_string_slice.c; then
     echo "FAIL [runtime_prelude_string_slice]: missing stable String.slice prelude symbol" >&2
     exit 1
@@ -386,6 +402,7 @@ run_cli_smoke() {
   echo "PASS [runtime_prelude_array_slice_normalize]"
 
   node dist/cli.js examples/template_literal.ts --emit-c-only -o build/runtime_prelude_string_concat > /dev/null
+  assert_no_byte_code_string_substrate build/runtime_prelude_string_concat.c runtime_prelude_string_concat
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_concat" build/runtime_prelude_string_concat.c; then
     echo "FAIL [runtime_prelude_string_concat]: missing stable string concat prelude symbol" >&2
     exit 1
@@ -424,6 +441,7 @@ run_cli_smoke() {
   echo "PASS [runtime_prelude_string_concat]"
 
   node dist/cli.js examples/string_repeat.ts --emit-c-only -o build/runtime_prelude_string_repeat > /dev/null
+  assert_no_byte_code_string_substrate build/runtime_prelude_string_repeat.c runtime_prelude_string_repeat
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_repeat" build/runtime_prelude_string_repeat.c; then
     echo "FAIL [runtime_prelude_string_repeat]: missing stable String.repeat prelude symbol" >&2
     exit 1
@@ -869,6 +887,7 @@ TOPAZ
   echo "PASS [runtime_header_path_helper_cleanup]"
 
   node dist/cli.js examples/node_url_basic.ts --emit-c-only -o build/runtime_prelude_file_url > /dev/null
+  assert_no_byte_code_string_substrate build/runtime_prelude_file_url.c runtime_prelude_file_url
   if ! grep -q "topaz_fn_runtime_prelude___topaz_url_file_url_to_path" build/runtime_prelude_file_url.c; then
     echo "FAIL [runtime_prelude_file_url]: missing stable fileURLToPath prelude symbol" >&2
     exit 1
@@ -1073,7 +1092,6 @@ run_fail_case runtime_prelude_string_eq_hidden_fail examples/runtime_prelude_str
 run_fail_case runtime_prelude_path_join_hidden_fail examples/runtime_prelude_path_join_hidden_fail.ts "unknown identifier '__topaz_path_join_segments'"
 run_fail_case runtime_prelude_path_resolve_hidden_fail examples/runtime_prelude_path_resolve_hidden_fail.ts "unknown identifier '__topaz_path_resolve_segments'"
 run_fail_case runtime_prelude_panic_hidden_fail examples/runtime_prelude_panic_hidden_fail.ts "unknown identifier '__topaz_panic'"
-run_fail_case runtime_prelude_byte_codes_hidden_fail examples/runtime_prelude_byte_codes_hidden_fail.ts "unknown identifier '__topaz_string_from_byte_codes'"
 run_fail_case runtime_prelude_parse_int_hidden_fail examples/runtime_prelude_parse_int_hidden_fail.ts "unknown identifier '__topaz_parse_int'"
 run_fail_case runtime_prelude_string_from_char_code_hidden_fail examples/runtime_prelude_string_from_char_code_hidden_fail.ts "unknown identifier '__topaz_string_from_char_code'"
 run_fail_case runtime_prelude_string_slice_hidden_fail examples/runtime_prelude_string_slice_hidden_fail.ts "unknown identifier '__topaz_string_slice'"
