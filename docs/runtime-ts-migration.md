@@ -75,10 +75,12 @@ Split string work into two buckets:
 - **Allocation primitives** such as byte-buffer materializing helpers stay on
   the C substrate until Topaz has explicit internal string-buffer intrinsics.
   `String.prototype.slice`, compiler-owned string concatenation, and
-  `String.prototype.repeat` are the current exceptions: their
+  `String.prototype.repeat` are the current string exceptions: their
   normalization/copy loops now live in the runtime prelude and delegate final
   materialization to the hidden `__topaz_string_from_byte_codes(...)` substrate
-  affordance.
+  affordance. `Array.prototype.slice` now also delegates only its numeric index
+  normalization to the runtime prelude while keeping monomorphized array
+  allocation, reserve, and element copy in generated C.
 - **Allocation clients** may move to the runtime prelude if their algorithmic
   work is pure Topaz-subset control flow and they delegate the final string
   allocation/copying to those existing primitives without changing behavior.
@@ -137,8 +139,11 @@ string `+=`, and template literal concat chains while keeping public type
 checking unchanged. `__topaz_string_repeat(s, count)` now handles
 `String.prototype.repeat(count)` while codegen keeps the public arity/type
 diagnostics and the prelude preserves the range, truncation, and output-size
-checks. These helpers keep the public stdlib import shape, language
-surface, and diagnostics unchanged. The migrated path helpers' old C definitions have
+checks. `__topaz_slice_normalize(n, len, def)` now handles the numeric
+normalization shared by `Array.prototype.slice(start?, end?)` while codegen
+keeps the receiver snapshot, raw bound temps, `hi < lo` clamp, destination
+allocation, reserve, and element copy loop. These helpers keep the public
+stdlib import shape, language surface, and diagnostics unchanged. The migrated path helpers' old C definitions have
 been removed from the embedded runtime header; `topaz_process_cwd()` is the only
 remaining C path fallback for `resolve`. The old C definitions for migrated
 `startsWith`, `endsWith`, `trimStart`, and compiler-owned boolean
@@ -158,6 +163,9 @@ The current string-allocation boundary is:
 - `String.prototype.repeat` lives in the runtime prelude as an allocation
   client over `charCodeAt` and `__topaz_string_from_byte_codes(...)`, including
   the existing range and output-size checks;
+- `Array.prototype.slice` keeps monomorphized storage and copy in generated C,
+  but its NaN-sentinel, negative-index, clamp, and truncation normalization now
+  lives in `__topaz_slice_normalize(...)`;
 - byte-code string materialization stays on the C substrate path until explicit
   string-buffer intrinsics exist;
 - allocation clients may migrate to prelude TS if they keep their observable

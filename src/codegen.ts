@@ -9534,13 +9534,16 @@ class Emitter {
       const dstVar = `__topaz_slice_dst_${id}`;
       const idxVar = `__topaz_slice_i_${id}`;
       const srcTy = cTypeName(baseType);
+      const normalize = this.requireInternalPreludeFunctionCName("__topaz_slice_normalize", {
+        pos: expr.pos,
+      });
       return (
         `({ ${srcTy} ${srcVar} = ${base}; ` +
         `double ${rawStartVar} = ${startExpr}; ` +
         `double ${rawEndVar} = ${endExpr}; ` +
         `size_t ${lenVar} = ${srcVar}->len; ` +
-        `size_t ${loVar} = topaz_slice_normalize(${rawStartVar}, ${lenVar}, 0); ` +
-        `size_t ${hiVar} = topaz_slice_normalize(${rawEndVar}, ${lenVar}, ${lenVar}); ` +
+        `size_t ${loVar} = (size_t)${normalize}((topaz_number)${rawStartVar}, (topaz_number)${lenVar}, (topaz_number)0); ` +
+        `size_t ${hiVar} = (size_t)${normalize}((topaz_number)${rawEndVar}, (topaz_number)${lenVar}, (topaz_number)${lenVar}); ` +
         `if (${hiVar} < ${loVar}) ${hiVar} = ${loVar}; ` +
         `${srcTy} ${dstVar} = topaz_array_${name}_new(); ` +
         `topaz_array_${name}_reserve(${dstVar}, ${hiVar} - ${loVar}); ` +
@@ -9554,9 +9557,9 @@ class Emitter {
         throw new CodegenError({ pos: expr.pos }, "Array.includes expects exactly one argument");
       }
       if (expr.args.length > 1) {
-        // Second `fromIndex` argument is unsupported (would need to negative-
-        // index normalize via topaz_slice_normalize, which is not yet wired
-        // up — defer to 1.5-3.5f-slice).
+        // Second `fromIndex` argument is still unsupported; it needs its own
+        // Array.includes surface and diagnostics rather than piggybacking on
+        // the Array.slice migration.
         const fromIndexArg = expr.args[1];
         throw new CodegenError({ pos: fromIndexArg.pos }, "Array.includes `fromIndex` argument is unsupported");
       }

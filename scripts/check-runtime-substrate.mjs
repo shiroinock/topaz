@@ -221,12 +221,6 @@ const inventory = {
     migration: MIGRATION.STRING_BUFFER_INTRINSICS,
     next: NEXT.STRING_BUFFER_INTRINSICS,
   },
-  topaz_slice_normalize: {
-    category: CATEGORY.STRING,
-    reason: "Array.slice index normalization substrate.",
-    migration: MIGRATION.STRING_BUFFER_INTRINSICS,
-    next: NEXT.STRING_BUFFER_INTRINSICS,
-  },
   topaz_string_from_byte_codes: {
     category: CATEGORY.STRING,
     reason: "internal runtime prelude byte-preserving string allocation primitive.",

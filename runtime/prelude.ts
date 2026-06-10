@@ -68,6 +68,15 @@ function __topaz_string_repeat(s: string, count: number): string {
   return __topaz_string_from_byte_codes(codes);
 }
 
+function __topaz_slice_normalize(n: number, len: number, def: number): number {
+  if (n !== n) return def;
+  let r: number = n;
+  if (n < 0) r = len + n;
+  if (r < 0) return 0;
+  if (r > len) return len;
+  return r - (r % 1);
+}
+
 function __topaz_string_slice(s: string, rawStart: number, rawEnd: number): string {
   let lo: number = 0;
   if (rawStart !== rawStart) {

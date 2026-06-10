@@ -1,5 +1,5 @@
 // Phase 1.5-3.5f-slice: Array.slice(start?, end?). lowering snapshots recv,
-// normalizes raw start / end via topaz_slice_normalize (NaN = default,
+// normalizes raw start / end via __topaz_slice_normalize (NaN = default,
 // negative = len + n, clamp to [0, len]), then copies range to a fresh dst
 // of the same monomorph.
 

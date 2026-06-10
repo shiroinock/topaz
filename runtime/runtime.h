@@ -373,18 +373,6 @@ static inline topaz_number topaz_fmod(topaz_number a, topaz_number b) {
   return fmod(a, b);
 }
 
-// Phase 1.5-3.5f-slice: index normalization for Array.prototype.slice
-// (and future .indexOf / .lastIndexOf fromIndex). NaN sentinel encodes the
-// `undefined` default (caller passes 0/0 when the argument was omitted in
-// source). Negative inputs offset from len; out-of-range clamps to [0, len].
-static inline size_t topaz_slice_normalize(double n, size_t len, size_t def) {
-  if (isnan(n)) return def;  // `undefined` default sentinel
-  double r = n < 0 ? (double)len + n : n;
-  if (r < 0) return 0;
-  if (r > (double)len) return len;
-  return (size_t)r;
-}
-
 // Phase 1.5-6 prep #13: node:fs.readFileSync(path, "utf8") -> topaz_string.
 // fopen + ftell + fread; the buffer lives in the arena and is reclaimed at
 // process exit. Topaz strings are ASCII-only, so a UTF-8 file with any

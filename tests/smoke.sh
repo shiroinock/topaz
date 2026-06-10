@@ -279,10 +279,6 @@ run_cli_smoke() {
     echo "FAIL [runtime_prelude_string_slice]: stale String.slice C helper definition embedded" >&2
     exit 1
   fi
-  if ! grep -q "topaz_slice_normalize" build/runtime_prelude_string_slice.c; then
-    echo "FAIL [runtime_prelude_string_slice]: missing Array.slice normalization substrate" >&2
-    exit 1
-  fi
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_slice.c -o build/runtime_prelude_string_slice
   local string_slice_out
   string_slice_out=$(./build/runtime_prelude_string_slice)
@@ -292,6 +288,30 @@ run_cli_smoke() {
     exit 1
   fi
   echo "PASS [runtime_prelude_string_slice]"
+
+  node dist/cli.js examples/array_method_slice.ts --emit-c-only -o build/runtime_prelude_array_slice_normalize > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_slice_normalize" build/runtime_prelude_array_slice_normalize.c; then
+    echo "FAIL [runtime_prelude_array_slice_normalize]: missing stable Array.slice normalize prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_slice_normalize\s*\(" build/runtime_prelude_array_slice_normalize.c; then
+    echo "FAIL [runtime_prelude_array_slice_normalize]: stale Array.slice normalize C helper call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline size_t topaz_slice_normalize\s*\(" build/runtime_prelude_array_slice_normalize.c; then
+    echo "FAIL [runtime_prelude_array_slice_normalize]: stale Array.slice normalize C helper definition embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_array_slice_normalize.c -o build/runtime_prelude_array_slice_normalize
+  local array_slice_normalize_out
+  array_slice_normalize_out=$(./build/runtime_prelude_array_slice_normalize)
+  if [[ "$array_slice_normalize_out" != $'3\n20\n40\n3\n30\n50\n5\n10\n50\n2\n40\n50\n4\n10\n40\n2\n30\n40\n0\n0\n2\n40\n50\n0\n2\nbeta\ngamma\n1\n99\n777\n2\n20\n30\n2\n20\n30\n3\n4\n99' ]]; then
+    echo "FAIL [runtime_prelude_array_slice_normalize]:" >&2
+    echo "  expected array_method_slice output" >&2
+    printf '%s\n' "$array_slice_normalize_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_array_slice_normalize]"
 
   node dist/cli.js examples/template_literal.ts --emit-c-only -o build/runtime_prelude_string_concat > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_string_concat" build/runtime_prelude_string_concat.c; then
@@ -938,6 +958,7 @@ run_fail_case runtime_prelude_string_from_char_code_hidden_fail examples/runtime
 run_fail_case runtime_prelude_string_slice_hidden_fail examples/runtime_prelude_string_slice_hidden_fail.ts "unknown identifier '__topaz_string_slice'"
 run_fail_case runtime_prelude_string_concat_hidden_fail examples/runtime_prelude_string_concat_hidden_fail.ts "unknown identifier '__topaz_string_concat'"
 run_fail_case runtime_prelude_string_repeat_hidden_fail examples/runtime_prelude_string_repeat_hidden_fail.ts "unknown identifier '__topaz_string_repeat'"
+run_fail_case runtime_prelude_array_slice_normalize_hidden_fail examples/runtime_prelude_array_slice_normalize_hidden_fail.ts "unknown identifier '__topaz_slice_normalize'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'
