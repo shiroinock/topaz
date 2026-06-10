@@ -8,7 +8,12 @@ pnpm run check:runtime-header > /dev/null
 echo "PASS [runtime_header_fresh]"
 pnpm run check:runtime-prelude > /dev/null
 echo "PASS [runtime_prelude_fresh]"
-pnpm run check:runtime-substrate > /dev/null
+substrate_out=$(pnpm run check:runtime-substrate)
+if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing migration lane summary" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 mkdir -p build
 tmp_runtime_substrate="build/runtime_substrate_probe.h"
 cp runtime/runtime.h "${tmp_runtime_substrate}"

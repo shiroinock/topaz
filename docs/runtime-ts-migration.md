@@ -28,8 +28,34 @@ These are substrate, not public user APIs.
 `pnpm run check:runtime-substrate` classifies each remaining `topaz_*` static
 helper and substrate macro (`TOPAZ_*` / `topaz_opt_*`) in `runtime/runtime.h`.
 New C helpers or macros must either be added to that inventory with a substrate
-category/reason or moved to the runtime prelude instead of silently growing the
-header.
+`category`, `reason`, `migration`, and `next` field or moved to the runtime
+prelude instead of silently growing the header. The checker prints deterministic
+category counts and migration-lane counts; smoke asserts the lane summary is
+present so future runtime cleanup work can see whether the remaining C surface
+is shrinking in the intended lane.
+
+## Remaining Migration Lanes
+
+The inventory migration lane is the next work boundary, not a promise that the
+symbol should immediately move to TypeScript:
+
+- `c-abi-type-boundary`: ABI-visible typedefs, optional wrappers, and header
+  shapes that generated C and runtime helpers still share.
+- `raw-memory-boundary`: arena allocation, calloc/realloc, raw byte buffers,
+  and representation-level storage.
+- `needs-string-buffer-intrinsics`: string allocation/copying primitives and
+  byte reads that need explicit internal string-buffer intrinsics first.
+- `needs-bigint-limb-intrinsics`: BigInt limb storage, arithmetic, parsing, and
+  formatting that need explicit limb intrinsics or generated monomorphs first.
+- `container-monomorph-boundary`: Array/Map/Set macro families, hash slots,
+  hashing, and key equality until compiler-owned monomorphization replaces the
+  C substrate.
+- `libc-libm-boundary`: `fmod`, `strtod`, `snprintf`, and numeric formatting
+  behavior that currently depends on libc/libm compatibility.
+- `exception-boundary`: `setjmp` / `longjmp`, panic, and abort-based control
+  transfer.
+- `host-abi-boundary`: filesystem, process, URL/module path, child process,
+  and raw stdout/stderr wrappers that cross the host ABI.
 
 ## Topaz Prelude Candidates
 
