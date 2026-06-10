@@ -31,7 +31,8 @@ const MIGRATION = {
 const NEXT = {
   RAW_MEMORY: "Pinned until Topaz has explicit raw pointer, byte buffer, and arena allocation intrinsics.",
   HOST_ABI: "Pinned to C until host ABI calls have capability-aware intrinsic or syscall wrappers.",
-  LIBC_LIBM: "Pinned until Topaz has a replacement that preserves libc/libm parsing and formatting behavior.",
+  LIBC_LIBM:
+    "Pinned as the pre-v0.2 number substrate boundary for topaz_fmod (number % number via libm fmod), topaz_parse_float (parseFloat via strtod), and topaz_number_to_string (ECMA-262 formatting via snprintf plus strtod roundtrip); moving any helper requires an explicit replacement decision preserving current parse, roundoff, remainder, and formatting behavior.",
   EXCEPTION: "Pinned while exceptions depend on setjmp/longjmp and abort/panic C control transfer.",
   CONTAINER_MONOMORPH: "Needs a compiler-owned replacement for monomorphized container storage, hashing, and equality.",
   STRING_BUFFER_INTRINSICS:

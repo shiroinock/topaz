@@ -64,6 +64,25 @@ established `string-buffer-intrinsic-family` /
 `bigint-limb-intrinsic-family` substrate, introduce a new explicit boundary
 with an ADR, or stay in one of the remaining pinned lanes above.
 
+## Phase 3.81 Number Substrate Policy
+
+The `libc-libm-boundary` lane is deliberately still open with exactly three
+number substrate helpers before v0.2.0: `topaz_fmod(...)` for public
+`number % number` remainder behavior through libm `fmod`,
+`topaz_parse_float(...)` for public `parseFloat(s)` behavior through `strtod`,
+and `topaz_number_to_string(...)` for ECMA-262 number formatting through
+`snprintf` precision search plus `strtod` roundtrip checks.
+
+These helpers are different from the ordinary pure Topaz-subset runtime
+prelude migrations. The closed string and BigInt lanes moved algorithms once
+their compiler-owned allocation or limb substrates existed; the remaining
+number helpers are themselves the substrate for parse, roundoff, remainder,
+and shortest-roundtrip formatting behavior. Moving any of them requires a
+future explicit number-substrate replacement ADR with focused behavior
+coverage, not a helper-by-helper runtime prelude copy. Until then,
+`pnpm run check:runtime-substrate` and smoke keep the lane visible as
+`libc-libm-boundary: 3`.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has
