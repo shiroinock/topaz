@@ -54,6 +54,30 @@ if [[ "${builtin_effect_err}" != *"unknown effect 'fs.delete'"* ]]; then
   exit 1
 fi
 echo "PASS [builtin_effect_inventory]"
+effect_provenance_out=$(pnpm run check:effect-provenance)
+if [[ "${effect_provenance_out}" != *"effect provenance ok:"* ]]; then
+  echo "FAIL [effect_provenance]: missing ok summary" >&2
+  printf '%s\n' "${effect_provenance_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for effect in fs.read fs.write process.argv io.stdout io.stderr; do
+  if [[ "${effect_provenance_out}" != *" | ${effect} | "* ]]; then
+    echo "FAIL [effect_provenance]: missing effect ${effect}" >&2
+    printf '%s\n' "${effect_provenance_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+if [[ "${effect_provenance_out}" != *"console.warn(...)"* ]]; then
+  echo "FAIL [effect_provenance]: missing console.warn detail" >&2
+  printf '%s\n' "${effect_provenance_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${effect_provenance_out}" == *"path.join"* ]]; then
+  echo "FAIL [effect_provenance]: pure std/path leaked into provenance" >&2
+  printf '%s\n' "${effect_provenance_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [effect_provenance]"
 release_workflow=".github/workflows/release-artifact.yml"
 if ! grep -Fq 'release_flags=(--draft)' "${release_workflow}"; then
   echo "FAIL [release_workflow_prerelease]: missing draft release flag baseline" >&2
