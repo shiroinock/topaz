@@ -64,6 +64,8 @@ Each migrated helper must keep the observable generated program behavior:
 - Existing examples and smoke cases must pass.
 - The helper's old C path and new prelude path must be covered by a focused
   positive case when the behavior is user-visible.
+- `pnpm run check:runtime-header` must pass so the embedded C substrate in
+  `src/runtime_header.ts` matches `runtime/runtime.h`.
 - `pnpm run build:release` must still pass the self-host fixed-point and
   binary-only release smoke.
 

@@ -13,6 +13,14 @@ pnpm run build
 pnpm test
 ```
 
+When `runtime/runtime.h` changes, refresh the embedded compiler copy before
+testing:
+
+```sh
+pnpm run generate:runtime-header
+pnpm run check:runtime-header
+```
+
 ## Compile And Run
 
 The MVP entry path is zero-config: give Topaz a `.ts` entry file and it emits
@@ -38,7 +46,8 @@ The self-hosted compiler can be built as a native binary:
 pnpm run build:release
 ```
 
-This runs the self-host fixed-point gate, then writes:
+This first checks that `src/runtime_header.ts` is fresh, then runs the self-host
+fixed-point gate and writes:
 
 - `dist-release/topaz-darwin-arm64` on Apple Silicon macOS.
 - `dist-release/SHA256SUMS`.

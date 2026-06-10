@@ -267,6 +267,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **3.13 embedded runtime header for release compiler** — RC1 black-box check で release compiler binary を repo 外へ置くと `runtime.h` が見つからない blocker を検出したため、生成 C に `runtime/runtime.h` 本文を埋め込み、`runtime/` directory なしで `cc` まで通る single-binary compiler artifact にした。決定ログは `docs/adr/0353-embedded-runtime-header.md`。
 - [x] **3.14 v0.1.1 release workflow stabilization** — `v0.1.0` final tag 後に残った GitHub Actions Node.js 20 deprecation annotation へ Node 24 対応済みの official action major 更新で対応し、README / MVP doc / release skill に checksum + downloaded binary black-box smoke を明記した。言語 surface / runtime semantics は変えない patch。決定ログは `docs/adr/0354-release-workflow-stabilization.md`。
 - [x] **3.15 runtime TS prelude boundary** — `runtime/runtime.h` の全面 TS 化ではなく、host ABI / raw memory / exception jump / container macro を tiny C substrate に残し、純粋 helper を internal Topaz runtime prelude へ段階移行する方針を固定した。決定ログは `docs/adr/0355-runtime-ts-prelude-boundary.md`、移行計画は `docs/runtime-ts-migration.md`。
+- [x] **3.29 runtime header freshness check** — `src/runtime_header.ts` が `runtime/runtime.h` から再生成済みかを既存 generator の `--check` で検証し、通常 smoke と release artifact build の前段 gate に組み込んだ。決定ログは `docs/adr/0356-runtime-header-freshness-check.md`。
 
 Release/version allocation:
 

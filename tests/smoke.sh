@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 pnpm run build > /dev/null
+pnpm run check:runtime-header > /dev/null
+echo "PASS [runtime_header_fresh]"
 
 mkdir -p build
 
