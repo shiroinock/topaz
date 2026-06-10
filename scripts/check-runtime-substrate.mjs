@@ -35,7 +35,8 @@ const NEXT = {
     "Pinned as the pre-v0.2 capability-aware host ABI substrate boundary for raw stdio writes, filesystem wrappers, process argv/cwd/exit/module URL wrappers, and child process spawn; moving any helper requires an explicit manifest/capability/doctor-aware host syscall or intrinsic decision.",
   LIBC_LIBM:
     "Pinned as the pre-v0.2 number substrate boundary for topaz_fmod (number % number via libm fmod), topaz_parse_float (parseFloat via strtod), and topaz_number_to_string (ECMA-262 formatting via snprintf plus strtod roundtrip); moving any helper requires an explicit replacement decision preserving current parse, roundoff, remainder, and formatting behavior.",
-  EXCEPTION: "Pinned while exceptions depend on setjmp/longjmp and abort/panic C control transfer.",
+  EXCEPTION:
+    "Pinned as the pre-v0.2 exception/control-transfer substrate boundary for topaz_try_push, topaz_try_pop, topaz_throw, and topaz_panic because they depend on setjmp/longjmp, jmp_buf frame lifetime, panic diagnostics, and abort/panic control transfer; moving any helper requires a future explicit exception runtime/backend design rather than helper-by-helper runtime prelude migration.",
   CONTAINER_MONOMORPH: "Needs a compiler-owned replacement for monomorphized container storage, hashing, and equality.",
   STRING_BUFFER_INTRINSICS:
     "Closed after the completed StringBuffer prelude migration; use string-buffer-intrinsic-family for active internal string-buffer substrate or record a new boundary decision.",

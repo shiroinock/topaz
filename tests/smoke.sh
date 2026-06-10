@@ -44,6 +44,11 @@ if [[ "${substrate_out}" != *"host-abi-boundary: 12"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${substrate_out}" != *"exception-boundary: 4"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: exception substrate lane count changed" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 if [[ "${substrate_out}" != *"bigint-limb-intrinsic-family: 8"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing bigint intrinsic family lane" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2

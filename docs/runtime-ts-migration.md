@@ -125,6 +125,27 @@ Future movement requires an explicit compiler-owned memory intrinsic or backend
 storage replacement ADR. Until then, `pnpm run check:runtime-substrate` and
 smoke keep the lane visible as `raw-memory-boundary: 3`.
 
+## Phase 3.84 Exception Substrate Policy
+
+The `exception-boundary` lane is deliberately still open with exactly four
+runtime substrate symbols before v0.2.0: `topaz_try_push(...)`,
+`topaz_try_pop(...)`, `topaz_throw(...)`, and `topaz_panic(...)`.
+
+These helpers are not ordinary pure Topaz-subset runtime prelude candidates.
+They encode C control transfer rather than expression-level helper logic:
+`topaz_try_push(...)` and `topaz_try_pop(...)` manage `jmp_buf` frame lifetime
+around generated `setjmp` regions, `topaz_throw(...)` performs `longjmp`
+exception dispatch, and `topaz_panic(...)` owns internal panic diagnostics and
+abort-based process termination. Topaz source currently cannot express
+`jmp_buf`, non-local jumps, or aborting process control transfer.
+
+Future movement requires an explicit exception runtime/backend design that
+replaces the current C control-transfer substrate as a unit. It should not be a
+helper-by-helper runtime prelude migration, and `topaz_panic(...)` remains an
+internal substrate boundary rather than a public TypeScript helper. Until then,
+`pnpm run check:runtime-substrate` and smoke keep the lane visible as
+`exception-boundary: 4`.
+
 As of Phase 3.68, `needs-string-buffer-intrinsics` became empty; after Phase
 3.79 it reports as a closed lane in the substrate checker. The former raw
 immutable string byte-read helper for `String.prototype.charCodeAt(index)` has
