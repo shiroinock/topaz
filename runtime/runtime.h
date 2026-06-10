@@ -279,11 +279,6 @@ static inline topaz_bigint *topaz_bigint_from_decimal_cstr(const char *digits) {
   return out;
 }
 
-static inline topaz_bigint *topaz_bigint_neg(const topaz_bigint *x) {
-  if (x->sign == 0) return topaz_bigint_zero();
-  return topaz_bigint_copy_abs(x, -x->sign);
-}
-
 static inline topaz_bigint *topaz_bigint_add_abs(const topaz_bigint *a, const topaz_bigint *b, int sign) {
   size_t max = a->len > b->len ? a->len : b->len;
   topaz_bigint *out = topaz_bigint_alloc(max + 1);
@@ -352,7 +347,7 @@ static inline topaz_bigint *topaz_bigint_add(const topaz_bigint *a, const topaz_
 }
 
 static inline topaz_bigint *topaz_bigint_sub(const topaz_bigint *a, const topaz_bigint *b) {
-  topaz_bigint *nb = topaz_bigint_neg(b);
+  topaz_bigint *nb = topaz_bigint_copy_abs(b, -b->sign);
   return topaz_bigint_add(a, nb);
 }
 

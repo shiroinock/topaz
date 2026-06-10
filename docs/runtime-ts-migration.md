@@ -90,6 +90,12 @@ runtime prelude. `__topaz_bigint_cmp(a, b)` preserves the old signed comparison
 result convention while using only sign, limb length, and immutable limb reads;
 arithmetic, literal parsing, and decimal formatting remain in the C substrate.
 
+As of Phase 3.73, public BigInt unary `-` routes through runtime prelude
+`__topaz_bigint_neg(value)`. The helper preserves canonical zero and clones the
+absolute limb sequence with the opposite sign through the hidden BigInt buffer
+family. Binary `+` / `-` / `*`, literal parsing, and decimal formatting remain
+in the C substrate.
+
 ## Hidden String Buffer Intrinsics
 
 The next implementation target is an internal-prelude-only intrinsic family:
@@ -141,12 +147,13 @@ The generated-C ABI boundary remains `topaz_bigint *` backed by little-endian
 32-bit limbs plus `sign` until a later implementation ADR changes it. The first
 implementation slice added pseudo type and hidden lowering while keeping most
 existing C helpers, plus an internal `__topaz_bigint_clone(value)` compile
-evidence helper. Public equality now uses `__topaz_bigint_eq(value, other)`.
-Later slices should migrate leaf and small helpers such as `topaz_bigint_zero`,
-`topaz_bigint_neg`, `topaz_bigint_copy_abs`, and signed comparison before
-add/sub/mul. Decimal parsing and decimal formatting should move last because
-they combine limb algorithms with C-string literal ingress, string allocation,
-and formatting behavior.
+evidence helper. Public equality now uses `__topaz_bigint_eq(value, other)`,
+ordering uses `__topaz_bigint_cmp(value, other)`, and unary negation uses
+`__topaz_bigint_neg(value)`. Later slices should migrate leaf and small helpers
+such as `topaz_bigint_zero` and `topaz_bigint_copy_abs` before add/sub/mul.
+Decimal parsing and decimal formatting should move last because they combine
+limb algorithms with C-string literal ingress, string allocation, and
+formatting behavior.
 
 ## Topaz Prelude Candidates
 

@@ -2117,6 +2117,11 @@ class Emitter {
     return `${helper}(${lhs}, ${rhs})`;
   }
 
+  private emitRuntimePreludeBigIntNeg(value: string, anchor: { pos: number }): string {
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_bigint_neg", anchor);
+    return `${helper}(${value})`;
+  }
+
   private emitRuntimePreludeStringConcat(lhs: string, rhs: string, anchor: { pos: number }): string {
     const helper = this.requireInternalPreludeFunctionCName("__topaz_string_concat", anchor);
     return `${helper}(${lhs}, ${rhs})`;
@@ -8254,7 +8259,7 @@ class Emitter {
     if (expr.kind === "prefix_op") {
       this.inferType(expr); // type-check
       if (expr.op === "-" && this.inferType(expr.operand).kind === "bigint") {
-        return `topaz_bigint_neg(${this.emitExpression(expr.operand)})`;
+        return this.emitRuntimePreludeBigIntNeg(this.emitExpression(expr.operand), { pos: expr.pos });
       }
       const op = this.prefixOp(expr);
       return `(${op}${this.emitExpression(expr.operand)})`;

@@ -154,12 +154,6 @@ const inventory = {
     migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
     next: NEXT.BIGINT_LIMB_INTRINSICS,
   },
-  topaz_bigint_neg: {
-    category: CATEGORY.BIGINT,
-    reason: "sign manipulation over raw bigint representation.",
-    migration: MIGRATION.BIGINT_LIMB_INTRINSICS,
-    next: NEXT.BIGINT_LIMB_INTRINSICS,
-  },
   topaz_bigint_add_abs: {
     category: CATEGORY.BIGINT,
     reason: "absolute limb addition core.",

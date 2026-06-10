@@ -17,7 +17,12 @@ function __topaz_string_eq(a: string, b: string): boolean {
 }
 
 function __topaz_bigint_clone(value: bigint): bigint {
+  return __topaz_bigint_copy_with_sign(value, __topaz_bigint_sign(value));
+}
+
+function __topaz_bigint_copy_with_sign(value: bigint, sign: number): bigint {
   const len: number = __topaz_bigint_limb_len(value);
+  if (len === 0 || sign === 0) return 0n;
   const buffer: BigIntBuffer = __topaz_bigint_buffer_new(len);
   let i: number = 0;
   while (i < len) {
@@ -33,7 +38,13 @@ function __topaz_bigint_clone(value: bigint): bigint {
     __topaz_panic("topaz: bigint buffer length mismatch");
     return 0n;
   }
-  return __topaz_bigint_buffer_to_bigint(buffer, __topaz_bigint_sign(value));
+  return __topaz_bigint_buffer_to_bigint(buffer, sign);
+}
+
+function __topaz_bigint_neg(value: bigint): bigint {
+  const sign: number = __topaz_bigint_sign(value);
+  if (sign === 0) return 0n;
+  return __topaz_bigint_copy_with_sign(value, 0 - sign);
 }
 
 function __topaz_bigint_eq(a: bigint, b: bigint): boolean {
