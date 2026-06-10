@@ -10266,9 +10266,10 @@ class Emitter {
     return `${helper}(${path})`;
   }
 
-  // Phase 1.5-6 prep #18: node:path.resolve(...segments) は variadic。1 個以上の
-  // string 引数を要求し、`topaz_path_resolve(n, seg0, seg1, ...)` に lower する
-  // (runtime 側で getcwd フォールバック + 正規化)。
+  // Phase 1.5-6 prep #18 / phase 3.44: node:path.resolve(...segments) は
+  // variadic。public diagnostics は維持しつつ、内部 lowering では各引数を
+  // 一度だけ評価して Array<string> に梱包し、cwd substrate とともに fixed
+  // signature runtime prelude helper へ渡す。
   private checkNodePathResolveArgs(expr: CallExpr): Array<Expr> {
     if (expr.args.length < 1) {
       throw new CodegenError(
@@ -10291,10 +10292,10 @@ class Emitter {
 
   private emitNodePathResolve(expr: CallExpr): string {
     const args = this.checkNodePathResolveArgs(expr);
-    const segs = args
-      .map((a) => this.emitWithExpected(a, T_STRING))
-      .join(", ");
-    return `topaz_path_resolve(${args.length}, ${segs})`;
+    const helper = this.requireInternalPreludeFunctionCName("__topaz_path_resolve_segments", {
+      pos: expr.pos,
+    });
+    return `${helper}(${this.emitNodePathSegmentsArray(args, "resolve")}, topaz_process_cwd())`;
   }
 
   // Phase 1.5-6 prep #21: node:path.basename(p, ext?) の引数検査。1 または 2
@@ -10391,9 +10392,9 @@ class Emitter {
     return args;
   }
 
-  private emitNodePathJoinSegmentsArray(args: Array<Expr>): string {
+  private emitNodePathSegmentsArray(args: Array<Expr>, label: string): string {
     const id = this.tmpCounter++;
-    const tmp = `__topaz_path_join_segments_${id}`;
+    const tmp = `__topaz_path_${label}_segments_${id}`;
     const parts: string[] = [];
     parts.push(`topaz_array_string *${tmp} = topaz_array_string_new();`);
     if (args.length > 0) {
@@ -10410,7 +10411,7 @@ class Emitter {
     const helper = this.requireInternalPreludeFunctionCName("__topaz_path_join_segments", {
       pos: expr.pos,
     });
-    return `${helper}(${this.emitNodePathJoinSegmentsArray(args)})`;
+    return `${helper}(${this.emitNodePathSegmentsArray(args, "join")})`;
   }
 
   // Phase 1.5-6 prep #16: parseInt(s, radix). radix is mandatory (1-arg

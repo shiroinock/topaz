@@ -282,3 +282,19 @@ function __topaz_path_join_segments(segments: Array<string>): string {
   if (trailing) out = out + "/";
   return out;
 }
+
+function __topaz_path_resolve_segments(segments: Array<string>, cwd: string): string {
+  let resolved: string = "";
+  let absolute: boolean = false;
+  for (let i: number = segments.length - 1; i >= -1 && !absolute; i = i - 1) {
+    const segment: string = i >= 0 ? segments[i] : cwd;
+    if (segment.length === 0) continue;
+    resolved = segment + "/" + resolved;
+    absolute = segment.charCodeAt(0) === 47;
+  }
+
+  const norm: string = __topaz_path_normalize_string(resolved, !absolute);
+  if (absolute) return "/" + norm;
+  if (norm.length > 0) return norm;
+  return ".";
+}

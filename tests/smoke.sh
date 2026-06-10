@@ -401,13 +401,34 @@ run_cli_smoke() {
   fi
   echo "PASS [runtime_prelude_path_join]"
 
-  node dist/cli.js examples/node_path_basic.ts --emit-c-only -o build/runtime_substrate_path_resolve > /dev/null
-  if ! grep -q "topaz_path_resolve(" build/runtime_substrate_path_resolve.c; then
-    echo "FAIL [runtime_substrate_path_resolve]: missing path resolve substrate call site" >&2
+  node dist/cli.js examples/node_path_basic.ts --emit-c-only -o build/runtime_prelude_path_resolve > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_path_resolve_segments" build/runtime_prelude_path_resolve.c; then
+    echo "FAIL [runtime_prelude_path_resolve]: missing stable path resolve prelude symbol" >&2
     exit 1
   fi
-  echo "PASS [runtime_substrate_path_resolve]"
-  if grep -Eq "static inline topaz_string topaz_path_(dirname|basename|basename_ext|extname|join)\\(" build/runtime_substrate_path_resolve.c; then
+  if ! grep -q "topaz_process_cwd(" build/runtime_prelude_path_resolve.c; then
+    echo "FAIL [runtime_prelude_path_resolve]: missing cwd substrate helper" >&2
+    exit 1
+  fi
+  if grep -q "topaz_path_resolve(" build/runtime_prelude_path_resolve.c; then
+    echo "FAIL [runtime_prelude_path_resolve]: unexpected old path resolve call site" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_string topaz_path_(resolve|normalize_string)\\(" build/runtime_prelude_path_resolve.c; then
+    echo "FAIL [runtime_prelude_path_resolve]: old path resolve helper definition still embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_path_resolve.c -o build/runtime_prelude_path_resolve
+  local path_resolve_out
+  path_resolve_out=$(./build/runtime_prelude_path_resolve)
+  if [[ "$path_resolve_out" != $'/foo/bar\n/foo\nfoo\n.\n/\n/\n/foo/bar\n/a/c\n/a/b/d\n/foo/bar/baz\n/bar\n/x/w\n/a/b/util.ts\n/pkg/src\ntrue' ]]; then
+    echo "FAIL [runtime_prelude_path_resolve]:" >&2
+    echo "  expected node_path_basic output" >&2
+    printf '%s\n' "$path_resolve_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_path_resolve]"
+  if grep -Eq "static inline topaz_string topaz_path_(dirname|basename|basename_ext|extname|join|resolve|normalize_string)\\(" build/runtime_prelude_path_resolve.c; then
     echo "FAIL [runtime_header_path_helper_cleanup]: migrated path helper definition still embedded" >&2
     exit 1
   fi
@@ -567,6 +588,7 @@ run_fail_case runtime_prelude_path_basename_hidden_fail examples/runtime_prelude
 run_fail_case runtime_prelude_path_basename_ext_hidden_fail examples/runtime_prelude_path_basename_ext_hidden_fail.ts "unknown identifier '__topaz_path_basename_ext'"
 run_fail_case runtime_prelude_string_eq_hidden_fail examples/runtime_prelude_string_eq_hidden_fail.ts "unknown identifier '__topaz_string_eq'"
 run_fail_case runtime_prelude_path_join_hidden_fail examples/runtime_prelude_path_join_hidden_fail.ts "unknown identifier '__topaz_path_join_segments'"
+run_fail_case runtime_prelude_path_resolve_hidden_fail examples/runtime_prelude_path_resolve_hidden_fail.ts "unknown identifier '__topaz_path_resolve_segments'"
 run_fail_case module_function_duplicate_fail examples/module_function_duplicate_fail.ts "redeclaration of function 'sameName'"
 run_module_case module_side_effect examples/module_side_effect_main.ts "123"
 run_module_case module_global_state examples/module_global_state_main.ts $'3\n5\nhi!'

@@ -90,11 +90,13 @@ compiler-owned string `===` / `!==`, string `switch`, and
 `Array<string>.includes(...)`. `__topaz_path_join_segments(segments)` now
 handles imported `node:path` / `std/path` `join(...segments)` after codegen
 packages the already checked variadic arguments into an internal
-`Array<string>`. These helpers keep the public stdlib import shape, language
-surface, and diagnostics unchanged. The migrated path helpers' old C
-definitions have been removed from the embedded runtime header; only
-`topaz_path_resolve(...)` and its `topaz_path_normalize_string(...)` dependency
-remain on the C path boundary. The old C definitions for migrated
+`Array<string>`. `__topaz_path_resolve_segments(segments, cwd)` handles
+imported `node:path` / `std/path` `resolve(...segments)` after codegen packages
+the checked variadic arguments and passes the C substrate `topaz_process_cwd()`
+fallback. These helpers keep the public stdlib import shape, language surface,
+and diagnostics unchanged. The migrated path helpers' old C definitions have
+been removed from the embedded runtime header; `topaz_process_cwd()` is the only
+remaining C path fallback for `resolve`. The old C definitions for migrated
 `startsWith`, `endsWith`, `trimStart`, and compiler-owned boolean
 stringification are also removed from the embedded runtime header; their stable
 internal prelude helpers remain the only lowering targets. The stale
@@ -120,11 +122,11 @@ adds suffix matching before delegating final allocation to `path.slice(start,
 end)`. `join(...segments)` is the first array-parameter path helper on this
 lane: the public API remains variadic, but the internal helper receives the
 segments as `Array<string>` and performs POSIX normalization in Topaz-subset TS.
-The migrated C definitions for `extname`, `dirname`, `basename`, and `join`
-are removed from `runtime/runtime.h` once codegen no longer targets them.
-Host-bound path helpers such as `resolve(...segments)` stay on the C substrate
-path until the host fallback boundary is explicit; `topaz_path_normalize_string`
-stays there while `resolve` depends on it.
+`resolve(...segments)` uses the same array-parameter lane and keeps only cwd
+lookup on the C substrate; right-to-left segment merging and POSIX
+normalization now live in the prelude. The migrated C definitions for
+`extname`, `dirname`, `basename`, `join`, `resolve`, and the old C normalize
+helper are removed from `runtime/runtime.h` once codegen no longer targets them.
 Boolean stringification also qualifies for the prelude lane because it is a
 pure scalar-to-literal choice and does not allocate beyond returning string
 literals. Its old C helper definition is removed after codegen targets only the
