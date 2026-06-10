@@ -531,6 +531,11 @@ run_cli_smoke() {
     printf '%s\n' "$help" | sed 's/^/    /' >&2
     exit 1
   fi
+  if [[ "$help" != *"topaz doctor <entry.ts>"* ]]; then
+    echo "FAIL [cli_help]: missing doctor usage" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
   if [[ "$help" != *"--parse-only"*"unsupported/reserved"* ]]; then
     echo "FAIL [cli_help]: --parse-only is not described as unsupported/reserved" >&2
     printf '%s\n' "$help" | sed 's/^/    /' >&2
@@ -542,6 +547,48 @@ run_cli_smoke() {
     exit 1
   fi
   echo "PASS [cli_help]"
+
+  local doctor_entry
+  doctor_entry="$(pwd)/build/doctor_report/main.ts"
+  local doctor_cli_out
+  doctor_cli_out=$(node dist/cli.js doctor build/doctor_report/main.ts)
+  if [[ "$doctor_cli_out" != *"topaz doctor report: ${doctor_entry}"* ]]; then
+    echo "FAIL [cli_doctor_report]: missing public doctor heading" >&2
+    printf '%s\n' "$doctor_cli_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  for effect in fs.read fs.write process.argv io.stdout io.stderr; do
+    if [[ "$doctor_cli_out" != *"  ${effect}: "* ]]; then
+      echo "FAIL [cli_doctor_report]: missing capability summary ${effect}" >&2
+      printf '%s\n' "$doctor_cli_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  if [[ "$doctor_cli_out" != *"${doctor_entry}:6:14"* ]]; then
+    echo "FAIL [cli_doctor_report]: missing file:line:col occurrence" >&2
+    printf '%s\n' "$doctor_cli_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$doctor_cli_out" != *"console.warn(...)"* ]]; then
+    echo "FAIL [cli_doctor_report]: missing console.warn detail" >&2
+    printf '%s\n' "$doctor_cli_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_doctor_report]"
+
+  local pure_doctor_entry
+  pure_doctor_entry="$(pwd)/build/doctor_report/pure.ts"
+  local pure_doctor_cli_out
+  pure_doctor_cli_out=$(node dist/cli.js doctor build/doctor_report/pure.ts)
+  if [[ "$pure_doctor_cli_out" != $'topaz doctor report: '"${pure_doctor_entry}"$'\ncapabilities: none\nrequirements: none' ]]; then
+    echo "FAIL [cli_doctor_pure]: missing empty doctor report contract" >&2
+    printf '%s\n' "$pure_doctor_cli_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_doctor_pure]"
+
+  run_cli_fail_case cli_doctor_emit_c_flag "topaz: doctor does not accept compile option --emit-c-only" doctor --emit-c-only build/doctor_report/main.ts
+  run_cli_fail_case cli_doctor_output_flag "topaz: doctor does not accept compile option -o" doctor build/doctor_report/main.ts -o build/doctor_report/out
 
   node dist/cli.js examples/fib.ts --emit-c-only -o build/cli_emit_probe > /dev/null
   if [[ ! -f build/cli_emit_probe.c ]]; then

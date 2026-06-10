@@ -5,18 +5,25 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CodegenError, codegen } from "./codegen.js";
+import { formatDoctorReportForEntry } from "./doctor_report.js";
 import { computeLineStarts, LexError, tokenize, Token } from "./lexer.js";
 import { LoaderError, loadModuleGraph } from "./loader.js";
 import { ParseError } from "./topaz_parser.js";
 
 function usageText(): string {
   return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
+       topaz doctor <entry.ts>
 
-options:
+compile options:
   -o, --output <path>   output binary path (default: <input> with .ts stripped)
   --emit-c-only         emit the generated .c next to output and exit (skip cc)
   --lex-only            run only the Topaz lexer and dump tokens (skip parse/codegen/cc)
   --parse-only          unsupported/reserved in the self-host subset
+
+doctor:
+  read-only capability diagnostics for an entry source graph
+
+options:
   -h, --help            show this help`;
 }
 
@@ -83,7 +90,49 @@ function parseCliOptions(argv: Array<string>): CliOptions {
   return opts;
 }
 
+function rawCliArgs(argv: Array<string>): Array<string> {
+  return argv.slice(argvStartIndex(argv));
+}
+
+function runDoctorCommand(args: Array<string>): void {
+  let entry: string | undefined = undefined;
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (
+      arg === "-o" ||
+      arg === "--output" ||
+      arg === "--emit-c-only" ||
+      arg === "--lex-only" ||
+      arg === "--parse-only"
+    ) {
+      die(`doctor does not accept compile option ${arg}`);
+    }
+    if (arg.startsWith("-")) {
+      die(`doctor does not accept option ${arg}`);
+    }
+    if (entry !== undefined) die(`unexpected positional argument ${arg}`);
+    entry = arg;
+    i = i + 1;
+  }
+
+  if (entry === undefined) die("doctor expects <entry.ts>");
+
+  const resolvedEntry = resolve(entry);
+  if (extname(resolvedEntry) !== ".ts") {
+    die(`expected a .ts file, got ${resolvedEntry}`);
+  }
+
+  console.log(formatDoctorReportForEntry(resolvedEntry));
+}
+
 function main(): void {
+  const rawArgs = rawCliArgs(process.argv);
+  if (rawArgs.length > 0 && rawArgs[0] === "doctor") {
+    runDoctorCommand(rawArgs.slice(1));
+    return;
+  }
+
   const parsed = parseCliOptions(process.argv);
 
   if (parsed.help) {
