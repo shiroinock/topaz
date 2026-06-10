@@ -129,6 +129,8 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
 5. Wait for the `release artifact` GitHub Actions workflow.
 6. Confirm the draft GitHub Release has:
 
+   - `isDraft: true`
+   - `isPrerelease: true`
    - `topaz-darwin-arm64`
    - `SHA256SUMS`
    - a checksum that verifies with `shasum -a 256 -c SHA256SUMS`
@@ -162,8 +164,9 @@ Use this after an RC has passed black-box validation.
    compiler smoke from the RC flow.
 6. Write or update the release notes using the final release notes format
    above, then apply them with `gh release edit <tag> --notes-file <file>`.
-7. Read the release back with `gh release view <tag> --json body,isDraft,url`
-   and confirm the notes are structured, non-placeholder, and still draft.
+7. Read the release back with
+   `gh release view <tag> --json body,isDraft,isPrerelease,url` and confirm the
+   notes are structured, non-placeholder, still draft, and not prerelease.
 8. Review release notes, known limitations, checksum, and docs.
 9. Publish the GitHub Release manually.
 

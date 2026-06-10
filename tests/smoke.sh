@@ -8,6 +8,24 @@ pnpm run check:runtime-header > /dev/null
 echo "PASS [runtime_header_fresh]"
 pnpm run check:runtime-prelude > /dev/null
 echo "PASS [runtime_prelude_fresh]"
+release_workflow=".github/workflows/release-artifact.yml"
+if ! grep -Fq 'release_flags=(--draft)' "${release_workflow}"; then
+  echo "FAIL [release_workflow_prerelease]: missing draft release flag baseline" >&2
+  exit 1
+fi
+if ! grep -Fq 'if [[ "${tag}" == *"-rc."* ]]; then' "${release_workflow}"; then
+  echo "FAIL [release_workflow_prerelease]: missing RC tag prerelease branch" >&2
+  exit 1
+fi
+if ! grep -Fq 'release_flags+=(--prerelease)' "${release_workflow}"; then
+  echo "FAIL [release_workflow_prerelease]: missing RC prerelease flag" >&2
+  exit 1
+fi
+if ! grep -Fq '"${release_flags[@]}"' "${release_workflow}"; then
+  echo "FAIL [release_workflow_prerelease]: release creation does not use computed flags" >&2
+  exit 1
+fi
+echo "PASS [release_workflow_prerelease]"
 substrate_out=$(pnpm run check:runtime-substrate)
 if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing migration lane summary" >&2

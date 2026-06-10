@@ -57,10 +57,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF_NAME}"
+          release_flags=(--draft)
+          if [[ "${tag}" == *"-rc."* ]]; then
+            release_flags+=(--prerelease)
+          fi
           gh --version
           gh release view "${tag}" >/dev/null 2>&1 || \
             gh release create "${tag}" \
-              --draft \
+              "${release_flags[@]}" \
               --title "Topaz ${tag}" \
               --notes "Draft native compiler artifact release for ${tag}."
           gh release upload "${tag}" \
