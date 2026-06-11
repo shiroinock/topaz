@@ -389,6 +389,7 @@ fi
 echo "PASS [release_workflow_prerelease]"
 release_script="scripts/build-release.sh"
 release_skill=".agents/skills/topaz-release/SKILL.md"
+release_notes_v0_1_3="docs/releases/v0.1.3.md"
 for fragment in \
   'RELEASE [smoke ${artifact} guidance]' \
   'release_guidance_smoke' \
@@ -520,6 +521,47 @@ if [[ "${release_skill_runtime_prelude_section}" == *"examples/fib.ts"* ]]; then
   exit 1
 fi
 echo "PASS [release_skill_runtime_prelude_handoff_contract]"
+if [[ ! -f "${release_notes_v0_1_3}" ]]; then
+  echo "FAIL [release_v0_1_3_notes_contract]: missing ${release_notes_v0_1_3}" >&2
+  exit 1
+fi
+for fragment in \
+  '## Changes' \
+  '## Assets' \
+  '## Verification' \
+  '## Notes' \
+  'runtime TS prelude checkpoint' \
+  'topaz-darwin-arm64' \
+  'SHA256SUMS' \
+  'shasum -a 256 -c SHA256SUMS' \
+  'examples/fib.ts' \
+  'runtime-prelude-smoke.ts' \
+  './topaz-darwin-arm64 runtime-prelude-smoke.ts -o ./runtime-prelude-smoke' \
+  'prelude+check' \
+  '112' \
+  'true'; do
+  if ! grep -Fq "${fragment}" "${release_notes_v0_1_3}"; then
+    echo "FAIL [release_v0_1_3_notes_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if ! grep -Eq 'does not expand the public language surface or runtime semantics|public language surface / runtime semantics (are )?not expanded' "${release_notes_v0_1_3}"; then
+  echo "FAIL [release_v0_1_3_notes_contract]: missing no-public-surface note" >&2
+  exit 1
+fi
+if grep -Fq 'Draft native compiler artifact release' "${release_notes_v0_1_3}"; then
+  echo "FAIL [release_v0_1_3_notes_contract]: workflow placeholder leaked into notes" >&2
+  exit 1
+fi
+for fragment in \
+  'docs/releases/v0.1.3.md' \
+  'gh release edit v0.1.3 --notes-file docs/releases/v0.1.3.md'; do
+  if ! grep -Fq "${fragment}" "${release_skill}"; then
+    echo "FAIL [release_v0_1_3_notes_contract]: release skill missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [release_v0_1_3_notes_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \

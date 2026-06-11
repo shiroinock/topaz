@@ -92,6 +92,14 @@ placeholder body with structured release notes. Do not publish a final release
 whose notes are still the workflow placeholder such as "Draft native compiler
 artifact release for ...".
 
+For `v0.1.3`, final notes are prepared at `docs/releases/v0.1.3.md` after the
+runtime-prelude asset/checksum/black-box validation path has passed. Apply
+them to the still-draft final release with:
+
+```sh
+gh release edit v0.1.3 --notes-file docs/releases/v0.1.3.md
+```
+
 Use this format, matching the `v0.1.1` release notes:
 
 ````md
@@ -247,8 +255,9 @@ Use this after an RC has passed black-box validation.
 3. Push the tag to create/update the draft Release.
 4. Verify the Actions artifact and release assets.
 5. Download the draft Release assets and repeat the checksum + black-box
-   compiler smoke from the RC flow, including the v0.2 guidance CLI smoke for
-   `v0.2.0` final releases.
+   compiler smoke from the RC flow, including the v0.1.3 runtime-prelude smoke
+   for `v0.1.3` final releases and the v0.2 guidance CLI smoke for `v0.2.0`
+   final releases.
 6. Write or update the release notes using the final release notes format
    above, then apply them with `gh release edit <tag> --notes-file <file>`.
 7. Read the release back with
