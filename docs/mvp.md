@@ -49,6 +49,10 @@ chmod +x ./topaz-darwin-arm64
 The compiler binary itself does not require Node.js, `pnpm`, or a checked-out
 `runtime/` directory. It still invokes the platform C compiler (`cc`) when
 producing a native output binary. Use `--emit-c-only` to stop after generated C.
+Current post-MVP builds also include v0.2 capability and manifest guidance
+commands; see the README for `doctor`, `manifest init`, `check`, and `explain`
+usage. Those commands were not part of the original MVP boundary described
+below.
 
 ## Build The Compiler From A Repository Checkout
 
@@ -228,9 +232,11 @@ Ask them to verify:
 
 ## Post-MVP
 
-The following are intentionally after the MVP:
+The following were intentionally after the MVP snapshot:
 
-- Capability inference, manifest generation, `doctor`, `check`, and `explain`.
+- Capability inference, manifest generation, `doctor`, `check`, and `explain`
+  guidance. Current repository builds have since implemented this v0.2 guidance
+  CLI; see the README for the live command contract.
 - Runtime sandboxing.
 - Async/await and Promise execution.
 - Regexp execution.

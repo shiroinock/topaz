@@ -86,6 +86,41 @@ Public user code should import supported helpers from:
 The compiler source still keeps some compatibility imports such as `node:*`,
 but those are not the public surface for new Topaz programs.
 
+## Capability And Manifest Guidance
+
+The v0.2 guidance CLI can explain the capability requirements of a source
+graph without changing the zero-config compile path:
+
+```sh
+pnpm run topaz doctor <entry.ts>
+pnpm run topaz manifest init <entry.ts>
+pnpm run topaz manifest init <entry.ts> --write
+pnpm run topaz check <entry.ts>
+pnpm run topaz explain capability fs.read
+pnpm run topaz explain std/fs
+```
+
+`topaz doctor <entry.ts>` reports required capabilities with file/line
+provenance. `topaz manifest init <entry.ts>` prints normalized
+`strict-ts.json` text to stdout; it does not write files unless `--write` is
+present. `topaz manifest init --write <entry.ts>` and
+`topaz manifest init <entry.ts> --write` create the entry-adjacent
+`strict-ts.json` only when it is absent. The current manifest schema is the
+small policy slice:
+
+```json
+{
+  "capabilities": ["fs.read"]
+}
+```
+
+`topaz check <entry.ts>` validates that entry-adjacent policy and exits
+non-zero for missing or invalid capabilities. `topaz explain capability <name>`
+and `topaz explain std/<module>` describe known capability atoms and stdlib
+modules. A normal `topaz <entry.ts>` compile remains zero-config and does not
+enforce the policy yet; compile-time permission enforcement and runtime
+sandboxing are future work.
+
 ## Package Lookup
 
 Topaz can resolve minimal source packages from `node_modules` without a config
@@ -110,8 +145,9 @@ unsupported syntax/module/package shapes are in scope.
 See [docs/mvp.md](docs/mvp.md) for the full MVP snapshot and black-box usage
 checklist.
 
-Post-MVP work includes capabilities, manifest generation, `doctor`, `check`,
-`explain`, async/await, regexp, richer package support, and runtime sandboxing.
+Post-MVP v0.2 guidance now includes capability inference, manifest generation,
+`doctor`, `check`, and `explain`. Runtime sandboxing, async/await, regexp,
+richer package support, and compile-time policy enforcement remain future work.
 
 Diagnostics should stop compilation with `file:line:col` where the compiler has
 a source position for the unsupported construct.

@@ -355,6 +355,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **4.22 release artifact manifest init smoke** — `pnpm run build:release` の produced native artifact guidance smoke に `topaz manifest init <entry.ts>` を追加し、effectful fixture の normalized stdout preview が `fs.read` だけを含み、write/stdout capability や file-write side effect に依存しないことを black-box で固定した。通常 `pnpm test` は release script の manifest-init smoke fragments を静的に確認する。決定ログは `docs/adr/0441-release-manifest-init-smoke.md`。
 - [x] **4.23 manifest init write flag** — `topaz manifest init <entry.ts> --write` を明示 opt-in の file-writing slice として追加し、entry 隣接 `strict-ts.json` が存在しない時だけ normalized manifest text を作成する。preview は stdout-only のまま維持し、既存 policy overwrite・重複 `--write`・他 command の `--write` は deterministic に拒否する。prompt / force / policy discovery / compile-time permission enforcement / schema expansion は変更しない。決定ログは `docs/adr/0442-manifest-init-write-flag.md`。
 - [x] **4.24 release artifact manifest init write smoke** — `pnpm run build:release` の produced native artifact guidance smoke に `topaz manifest init --write <entry.ts>` を追加し、policy のない fixture で entry 隣接 `strict-ts.json` を作成してから同じ artifact の `topaz check <entry.ts>` が `status: ok` になる round-trip を black-box で固定した。preview fixture は引き続き stdout-only / write-free として保持し、通常 `pnpm test` は release script の write-mode smoke fragments を静的に確認する。決定ログは `docs/adr/0443-release-manifest-init-write-smoke.md`。
+- [x] **4.25 v0.2 guidance docs / release runbook** — README / MVP snapshot / release skill を current HEAD の v0.2 guidance surface へ揃え、`doctor` → `manifest init` preview/write → `check` → `explain` の reader-facing loop と RC/final black-box release確認を明記した。CLI behavior、manifest schema、permission enforcement、runtime sandboxing、release publication flow は変更しない。決定ログは `docs/adr/0444-v0-2-guidance-docs.md`。
 
 Release/version allocation:
 
@@ -373,7 +374,8 @@ Release/version allocation:
 Post-MVP ecosystem items:
 
 - restore current self-host fixed-point gate (old blocker `src/codegen.ts:7843:15` cleanup target frame walk cleared by ADR `0347`; `src/codegen.ts:9612:24` `fixedTmps.length.toString()` cleared by ADR `0348`; `pnpm run test:selfhost` now reaches `PASS [selfhost_fixed_point]` and writes the final native compiler as `build/topaz`)
-- effect inference / capabilities / manifest / doctor / check / explain
+- v0.2 guidance follow-through: compile-time policy enforcement, runtime
+  sandboxing, schema expansion, and richer policy discovery remain future work
 - async implementation
 - regexp implementation
 - generic method/interface implementation

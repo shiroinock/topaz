@@ -148,6 +148,40 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
    The expected output is `5702887`. This specifically checks that the release
    binary does not depend on a checked-out `runtime/` directory.
 
+   For `v0.2.0` release candidates, extend the black-box smoke with the
+   capability / manifest guidance CLI. Use only the downloaded artifact and a
+   temporary fixture:
+
+   ```sh
+   ./topaz-darwin-arm64 --help
+
+   mkdir -p guidance-smoke
+   cat > guidance-smoke/effectful.ts <<'EOF'
+   import { readFileSync, writeFileSync } from "std/fs";
+   import { writeStdout } from "std/process";
+
+   const text = readFileSync("guidance-smoke/input.txt", "utf8");
+   writeFileSync("guidance-smoke/out.txt", text, "utf8");
+   writeStdout(text);
+   EOF
+   printf 'hello from guidance\n' > guidance-smoke/input.txt
+
+   ./topaz-darwin-arm64 doctor guidance-smoke/effectful.ts
+   ./topaz-darwin-arm64 manifest init guidance-smoke/effectful.ts
+   ./topaz-darwin-arm64 manifest init --write guidance-smoke/effectful.ts
+   ./topaz-darwin-arm64 check guidance-smoke/effectful.ts
+   ./topaz-darwin-arm64 explain capability fs.read
+   ./topaz-darwin-arm64 explain std/fs
+   ```
+
+   Confirm that `--help` lists `doctor`, `check`, `manifest init`, and both
+   `explain` modes; `doctor` reports `fs.read`, `fs.write`, and `io.stdout`
+   with provenance; preview `manifest init` prints the normalized
+   `{ "capabilities": [...] }` policy without writing; `manifest init --write`
+   creates entry-adjacent `strict-ts.json` only when absent; the follow-up
+   `check` reports no missing capabilities and `status: ok`; and the two
+   `explain` commands describe `fs.read` and `std/fs`.
+
 8. Give a subagent or tester only the binary, checksum, README/MVP docs, and
    the validation prompt. Do not leak the expected answer unless the task is
    explicitly a guided check.
@@ -161,7 +195,8 @@ Use this after an RC has passed black-box validation.
 3. Push the tag to create/update the draft Release.
 4. Verify the Actions artifact and release assets.
 5. Download the draft Release assets and repeat the checksum + black-box
-   compiler smoke from the RC flow.
+   compiler smoke from the RC flow, including the v0.2 guidance CLI smoke for
+   `v0.2.0` final releases.
 6. Write or update the release notes using the final release notes format
    above, then apply them with `gh release edit <tag> --notes-file <file>`.
 7. Read the release back with
