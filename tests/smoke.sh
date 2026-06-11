@@ -2239,6 +2239,37 @@ TOPAZ
     echo "FAIL [runtime_substrate_string_map_set]: missing substrate string set equality helper" >&2
     exit 1
   fi
+  local string_eq_forward_line
+  local string_eq_bridge_line
+  string_eq_forward_line=$(grep -nF "static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_string_eq(topaz_string a, topaz_string b);" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  string_eq_bridge_line=$(grep -nF "static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  if [[ -z "${string_eq_forward_line}" || -z "${string_eq_bridge_line}" || "${string_eq_forward_line}" -ge "${string_eq_bridge_line}" ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing prelude string equality forward declaration before bridge" >&2
+    exit 1
+  fi
+  local string_eq_bridge_body
+  string_eq_bridge_body=$(awk '
+    /^static inline topaz_boolean topaz_string_eq\(topaz_string a, topaz_string b\) \{/ { in_fn = 1 }
+    in_fn { print }
+    in_fn && /^}/ { exit }
+  ' build/runtime_substrate_string_map_set.c)
+  if [[ "${string_eq_bridge_body}" != *"return topaz_fn_runtime_prelude___topaz_string_eq(a, b);"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_string_eq does not delegate to runtime prelude string equality" >&2
+    printf '%s\n' "${string_eq_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${string_eq_bridge_body}" == *"memcmp(a.data, b.data, a.len)"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_string_eq still embeds old memcmp byte equality" >&2
+    printf '%s\n' "${string_eq_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  local string_eq_detail_out
+  string_eq_detail_out=$(pnpm run check:runtime-substrate -- --details)
+  if [[ "${string_eq_detail_out}" != *"topaz_string_eq (helper,"* || "${string_eq_detail_out}" != *"migration=container-monomorph-boundary"* || "${string_eq_detail_out}" != *"runtime prelude"* || "${string_eq_detail_out}" != *"C bridge for Map/Set macro string key equality"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: substrate details do not describe topaz_string_eq as a prelude bridge in the container lane" >&2
+    printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
   echo "PASS [runtime_substrate_string_map_set]"
 
   node dist/cli.js examples/string_starts_ends_with.ts --emit-c-only -o build/runtime_prelude_ends_with > /dev/null

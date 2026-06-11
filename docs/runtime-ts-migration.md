@@ -204,6 +204,13 @@ should not change Map/Set/Array representation as part of this policy lane.
 Until then, `pnpm run check:runtime-substrate` and smoke keep the lane visible
 as `container-monomorph-boundary: 13`.
 
+Phase 4.39 narrows the ownership of `topaz_string_eq(...)` without changing
+the lane. It remains the C ABI bridge that Map/Set macro expansions and
+generated container monomorphs can pass as an equality-function token, but its
+byte-equality algorithm now delegates to the runtime prelude
+`__topaz_string_eq` stable symbol. Full Array/Map/Set monomorph replacement
+remains future compiler/backend work.
+
 ## Phase 3.87 Active Intrinsic Family Substrate Policy
 
 The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes

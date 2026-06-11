@@ -207,9 +207,9 @@ const inventory = {
 
   topaz_string_eq: {
     category: CATEGORY.CONTAINER,
-    reason: "string key equality substrate for Map/Set monomorphs.",
+    reason: "C bridge for Map/Set macro string key equality that delegates the byte-equality algorithm to the runtime prelude.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
-    next: NEXT.CONTAINER_MONOMORPH,
+    next: "Keep as the container macro equality-function ABI token until a future compiler-owned container monomorphization/backend design replaces Map/Set macros; the algorithm itself is owned by the runtime prelude __topaz_string_eq helper.",
   },
   topaz_string_buffer_new: {
     category: CATEGORY.STRING,

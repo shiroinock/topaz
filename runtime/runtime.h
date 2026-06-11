@@ -219,9 +219,10 @@ typedef struct { topaz_boolean present; topaz_string  value; } topaz_opt_string;
 
 #define topaz_opt_passthrough(v) (v)
 
+static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_string_eq(topaz_string a, topaz_string b);
+
 static inline topaz_boolean topaz_string_eq(topaz_string a, topaz_string b) {
-  if (a.len != b.len) return false;
-  return memcmp(a.data, b.data, a.len) == 0;
+  return topaz_fn_runtime_prelude___topaz_string_eq(a, b);
 }
 
 static inline size_t string_buffer_number_to_size(topaz_number n, const char *label) {
