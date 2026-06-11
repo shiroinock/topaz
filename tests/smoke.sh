@@ -247,6 +247,18 @@ for former_blocker in "unknown template escape" "default import from stdlib spec
   fi
 done
 echo "PASS [effect_selfhost]"
+cli_selfhost_out=$(pnpm run check:cli-selfhost)
+if [[ "${cli_selfhost_out}" != *"cli selfhost ok:"* ]]; then
+  echo "FAIL [cli_selfhost]: missing ok summary" >&2
+  printf '%s\n' "${cli_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${cli_selfhost_out}" != *"src/cli.ts"* ]]; then
+  echo "FAIL [cli_selfhost]: missing CLI target" >&2
+  printf '%s\n' "${cli_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+echo "PASS [cli_selfhost]"
 release_workflow=".github/workflows/release-artifact.yml"
 if ! grep -Fq 'release_flags=(--draft)' "${release_workflow}"; then
   echo "FAIL [release_workflow_prerelease]: missing draft release flag baseline" >&2
