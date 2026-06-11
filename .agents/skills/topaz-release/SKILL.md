@@ -44,6 +44,13 @@ Patch vs minor rule:
 - Minor: accepted syntax, runtime semantics, stdlib/package surface, artifact
   shape, or release UX meaningfully expands.
 
+Before switching release operations from the `v0.1.3` runtime checkpoint to a
+`v0.2.0` release candidate, consult
+`docs/releases/pre-v0.2.0-checkpoint.md`. It records the repo-local readiness
+evidence, the pinned runtime substrate/intrinsic boundary, and the current
+guidance CLI surface that should seed the v0.2 track. This does not change the
+manual publish policy below.
+
 ## Preflight
 
 Start from a clean tree unless the user explicitly asks to release local

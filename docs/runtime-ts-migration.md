@@ -258,6 +258,22 @@ tag points at the older phase 3.60 release history, so the completed runtime TS
 prelude checkpoint now targets `v0.1.3` as the next release vehicle instead of
 retagging, deleting, force-pushing, or editing public `v0.1.2` history.
 
+## Pre-v0.2.0 Checkpoint
+
+`docs/releases/pre-v0.2.0-checkpoint.md` records the handoff from the `v0.1.3`
+runtime TS prelude checkpoint to the `v0.2.0` capability guidance track. Its
+runtime boundary is intentionally not "move every remaining C helper to TS";
+the remaining C surface is pinned to these substrate/intrinsic families:
+
+- `libc-libm-boundary: 3`
+- `host-abi-boundary: 12`
+- `raw-memory-boundary: 3`
+- `exception-boundary: 4`
+- `c-abi-type-boundary: 8`
+- `container-monomorph-boundary: 13`
+- `string-buffer-intrinsic-family: 5`
+- `bigint-limb-intrinsic-family: 8`
+
 The scope remains documentation and release-roadmap alignment. Future runtime
 movement still starts from explicit substrate/backend ADRs for the pinned
 boundaries, or from removing an intrinsic family after no prelude client needs

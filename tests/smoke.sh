@@ -601,6 +601,55 @@ for fragment in \
   fi
 done
 echo "PASS [release_v0_1_3_readiness_contract]"
+pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
+runtime_migration_doc="docs/runtime-ts-migration.md"
+if [[ ! -f "${pre_v0_2_checkpoint}" ]]; then
+  echo "FAIL [pre_v0_2_0_checkpoint_contract]: missing ${pre_v0_2_checkpoint}" >&2
+  exit 1
+fi
+for fragment in \
+  'pre-v0.2.0 transition checkpoint' \
+  'v0.1.3 is the runtime TS prelude checkpoint' \
+  'docs/releases/v0.1.3.md' \
+  'docs/releases/v0.1.3-readiness.md' \
+  'pnpm run build' \
+  'pnpm test' \
+  'pnpm run build:release' \
+  'runtime header freshness' \
+  'runtime prelude freshness' \
+  'runtime substrate inventory' \
+  'libc-libm-boundary: 3' \
+  'host-abi-boundary: 12' \
+  'raw-memory-boundary: 3' \
+  'exception-boundary: 4' \
+  'c-abi-type-boundary: 8' \
+  'container-monomorph-boundary: 13' \
+  'string-buffer-intrinsic-family: 5' \
+  'bigint-limb-intrinsic-family: 8' \
+  'topaz doctor <entry.ts>' \
+  'topaz manifest init <entry.ts>' \
+  'topaz manifest init --write <entry.ts>' \
+  'topaz check <entry.ts>' \
+  'topaz explain capability <name>' \
+  'topaz explain std/<module>' \
+  'compile-time policy enforcement' \
+  'runtime sandboxing' \
+  'schema expansion' \
+  'richer policy discovery'; do
+  if ! grep -Fq "${fragment}" "${pre_v0_2_checkpoint}"; then
+    echo "FAIL [pre_v0_2_0_checkpoint_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq "${pre_v0_2_checkpoint}" "${runtime_migration_doc}"; then
+  echo "FAIL [pre_v0_2_0_checkpoint_contract]: runtime migration doc missing checkpoint link" >&2
+  exit 1
+fi
+if ! grep -Fq "${pre_v0_2_checkpoint}" "${release_skill}"; then
+  echo "FAIL [pre_v0_2_0_checkpoint_contract]: release skill missing checkpoint link" >&2
+  exit 1
+fi
+echo "PASS [pre_v0_2_0_checkpoint_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \
