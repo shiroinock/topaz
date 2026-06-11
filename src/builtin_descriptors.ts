@@ -23,6 +23,41 @@ export type BuiltinSyntheticGlobalDescriptor = {
 
 export type BuiltinDescriptor = BuiltinImportDescriptor | BuiltinSyntheticGlobalDescriptor;
 
+export function builtinEffectVocabulary(): Array<BuiltinEffect> {
+  return [
+    "fs.read",
+    "fs.metadata",
+    "fs.write",
+    "process.argv",
+    "process.exit",
+    "io.stdout",
+    "io.stderr",
+    "process.spawn",
+  ];
+}
+
+export function builtinEffectDescription(effect: BuiltinEffect): string {
+  switch (effect) {
+    case "fs.read":
+      return "allows reading filesystem contents";
+    case "fs.metadata":
+      return "allows reading filesystem metadata";
+    case "fs.write":
+      return "allows creating or writing filesystem entries";
+    case "process.argv":
+      return "allows reading process argument values";
+    case "process.exit":
+      return "allows terminating the current process";
+    case "io.stdout":
+      return "allows writing to standard output";
+    case "io.stderr":
+      return "allows writing to standard error";
+    case "process.spawn":
+      return "allows spawning child processes";
+  }
+  return "unknown capability";
+}
+
 function nodePathExplanation(): string {
   return "compatibility path helper backed by the Topaz path builtin";
 }

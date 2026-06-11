@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { formatCapabilityExplanation, knownCapabilityNames } from "./capability_explain.js";
 import { CodegenError, codegen } from "./codegen.js";
 import { formatDoctorReportForEntry } from "./doctor_report.js";
 import { computeLineStarts, LexError, tokenize, Token } from "./lexer.js";
@@ -13,6 +14,7 @@ import { ParseError } from "./topaz_parser.js";
 function usageText(): string {
   return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
        topaz doctor <entry.ts>
+       topaz explain capability <name>
 
 compile options:
   -o, --output <path>   output binary path (default: <input> with .ts stripped)
@@ -22,6 +24,9 @@ compile options:
 
 doctor:
   read-only capability diagnostics for an entry source graph
+
+explain:
+  read-only embedded docs for capability names
 
 options:
   -h, --help            show this help`;
@@ -126,10 +131,44 @@ function runDoctorCommand(args: Array<string>): void {
   console.log(formatDoctorReportForEntry(resolvedEntry));
 }
 
+function runExplainCommand(args: Array<string>): void {
+  for (const arg of args) {
+    if (
+      arg === "-o" ||
+      arg === "--output" ||
+      arg === "--emit-c-only" ||
+      arg === "--lex-only" ||
+      arg === "--parse-only"
+    ) {
+      die(`explain does not accept compile option ${arg}`);
+    }
+    if (arg.startsWith("-")) {
+      die(`explain does not accept option ${arg}`);
+    }
+  }
+
+  if (args.length === 0 || args[0] !== "capability") {
+    die("explain expects capability <name>");
+  }
+  if (args.length < 2) die("explain capability expects <name>");
+  const name = args[1];
+  if (args.length > 2) die(`unexpected positional argument ${args[2]}`);
+
+  const report = formatCapabilityExplanation(name);
+  if (report === undefined) {
+    die(`unknown capability ${name}; known capabilities: ${knownCapabilityNames().join(", ")}`);
+  }
+  console.log(report);
+}
+
 function main(): void {
   const rawArgs = rawCliArgs(process.argv);
   if (rawArgs.length > 0 && rawArgs[0] === "doctor") {
     runDoctorCommand(rawArgs.slice(1));
+    return;
+  }
+  if (rawArgs.length > 0 && rawArgs[0] === "explain") {
+    runExplainCommand(rawArgs.slice(1));
     return;
   }
 

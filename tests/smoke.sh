@@ -536,6 +536,11 @@ run_cli_smoke() {
     printf '%s\n' "$help" | sed 's/^/    /' >&2
     exit 1
   fi
+  if [[ "$help" != *"topaz explain capability <name>"* ]]; then
+    echo "FAIL [cli_help]: missing explain capability usage" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
   if [[ "$help" != *"--parse-only"*"unsupported/reserved"* ]]; then
     echo "FAIL [cli_help]: --parse-only is not described as unsupported/reserved" >&2
     printf '%s\n' "$help" | sed 's/^/    /' >&2
@@ -589,6 +594,45 @@ run_cli_smoke() {
 
   run_cli_fail_case cli_doctor_emit_c_flag "topaz: doctor does not accept compile option --emit-c-only" doctor --emit-c-only build/doctor_report/main.ts
   run_cli_fail_case cli_doctor_output_flag "topaz: doctor does not accept compile option -o" doctor build/doctor_report/main.ts -o build/doctor_report/out
+
+  local explain_fs_read_out
+  explain_fs_read_out=$(node dist/cli.js explain capability fs.read)
+  if [[ "$explain_fs_read_out" != *"topaz capability: fs.read"* ]]; then
+    echo "FAIL [cli_explain_capability_fs_read]: missing heading" >&2
+    printf '%s\n' "$explain_fs_read_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$explain_fs_read_out" != *"description: allows reading filesystem contents"* ]]; then
+    echo "FAIL [cli_explain_capability_fs_read]: missing description" >&2
+    printf '%s\n' "$explain_fs_read_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  for required in "std/fs.readFileSync" "node:fs.readFileSync" "semantic: fs.readFileSync" "status: public" "status: compat"; do
+    if [[ "$explain_fs_read_out" != *"$required"* ]]; then
+      echo "FAIL [cli_explain_capability_fs_read]: missing ${required}" >&2
+      printf '%s\n' "$explain_fs_read_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  echo "PASS [cli_explain_capability_fs_read]"
+
+  local explain_stderr_out
+  explain_stderr_out=$(node dist/cli.js explain capability io.stderr)
+  for required in "topaz capability: io.stderr" "std/process.writeStderr" "std/process.writeError" "synthetic console.error" "status: synthetic_compat"; do
+    if [[ "$explain_stderr_out" != *"$required"* ]]; then
+      echo "FAIL [cli_explain_capability_stderr]: missing ${required}" >&2
+      printf '%s\n' "$explain_stderr_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  echo "PASS [cli_explain_capability_stderr]"
+
+  run_cli_fail_case cli_explain_unknown "topaz: unknown capability path.resolve; known capabilities: fs.read, fs.metadata, fs.write, process.argv, process.exit, io.stdout, io.stderr, process.spawn" explain capability path.resolve
+  run_cli_fail_case cli_explain_missing "topaz: explain capability expects <name>" explain capability
+  run_cli_fail_case cli_explain_emit_c_flag "topaz: explain does not accept compile option --emit-c-only" explain capability fs.read --emit-c-only
+  run_cli_fail_case cli_explain_output_flag "topaz: explain does not accept compile option -o" explain capability fs.read -o build/explain/out
+  run_cli_fail_case cli_explain_lex_flag "topaz: explain does not accept compile option --lex-only" explain capability fs.read --lex-only
+  run_cli_fail_case cli_explain_parse_flag "topaz: explain does not accept compile option --parse-only" explain capability fs.read --parse-only
 
   node dist/cli.js examples/fib.ts --emit-c-only -o build/cli_emit_probe > /dev/null
   if [[ ! -f build/cli_emit_probe.c ]]; then
