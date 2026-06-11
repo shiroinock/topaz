@@ -5,6 +5,9 @@ import { mkdirSync } from "node:fs";
 const OUT_DIR = "build/cli_selfhost";
 const SOURCE = "src/cli.ts";
 const OUTPUT = `${OUT_DIR}/topaz`;
+const FIB_SOURCE = "examples/fib.ts";
+const FIB_OUTPUT = `${OUT_DIR}/fib`;
+const FIB_EXPECTED = "5702887";
 const REQUIRED_HELP = [
   "usage: topaz <input.ts>",
   "topaz doctor <entry.ts>",
@@ -26,6 +29,13 @@ try {
       process.exit(1);
     }
   }
+  run(OUTPUT, [FIB_SOURCE, "-o", FIB_OUTPUT]);
+  const fibOut = run(FIB_OUTPUT, []).replace(/\r?\n$/, "");
+  if (fibOut !== FIB_EXPECTED) {
+    console.error("cli selfhost check failed:");
+    console.error(`expected ${FIB_OUTPUT} stdout ${FIB_EXPECTED}, got ${JSON.stringify(fibOut)}`);
+    process.exit(1);
+  }
 } catch (err) {
   console.error("cli selfhost check failed:");
   console.error(err instanceof Error ? err.message : String(err));
@@ -34,3 +44,4 @@ try {
 
 console.log("cli selfhost ok:");
 console.log(`  ${SOURCE} -> ${OUTPUT} (--help includes doctor and explain capability)`);
+console.log(`  ${FIB_SOURCE} -> ${FIB_OUTPUT} (prints ${FIB_EXPECTED})`);

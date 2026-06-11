@@ -258,6 +258,16 @@ if [[ "${cli_selfhost_out}" != *"src/cli.ts"* ]]; then
   printf '%s\n' "${cli_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${cli_selfhost_out}" != *"src/cli.ts -> build/cli_selfhost/topaz"* ]]; then
+  echo "FAIL [cli_selfhost]: missing generated CLI summary" >&2
+  printf '%s\n' "${cli_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${cli_selfhost_out}" != *"examples/fib.ts -> build/cli_selfhost/fib"* ]]; then
+  echo "FAIL [cli_selfhost]: missing generated fib summary" >&2
+  printf '%s\n' "${cli_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 echo "PASS [cli_selfhost]"
 release_workflow=".github/workflows/release-artifact.yml"
 if ! grep -Fq 'release_flags=(--draft)' "${release_workflow}"; then
