@@ -390,6 +390,7 @@ echo "PASS [release_workflow_prerelease]"
 release_script="scripts/build-release.sh"
 release_skill=".agents/skills/topaz-release/SKILL.md"
 release_notes_v0_1_3="docs/releases/v0.1.3.md"
+release_notes_v0_2_0="docs/releases/v0.2.0.md"
 release_readiness_v0_1_3="docs/releases/v0.1.3-readiness.md"
 release_state_handoff_v0_1_3="docs/releases/v0.1.3-release-state-handoff.md"
 pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
@@ -730,6 +731,60 @@ if ! grep -Fq "${release_readiness_v0_2_0}" "${pre_v0_2_checkpoint}"; then
   exit 1
 fi
 echo "PASS [release_v0_2_0_rc_readiness_contract]"
+if [[ ! -f "${release_notes_v0_2_0}" ]]; then
+  echo "FAIL [release_v0_2_0_notes_contract]: missing ${release_notes_v0_2_0}" >&2
+  exit 1
+fi
+for fragment in \
+  'v0.2.0' \
+  '## Changes' \
+  '## Assets' \
+  '## Verification' \
+  '## Notes' \
+  'capability' \
+  'manifest init' \
+  'topaz doctor' \
+  'topaz check' \
+  'topaz explain capability' \
+  'topaz explain std/fs' \
+  'topaz-darwin-arm64' \
+  'SHA256SUMS' \
+  'shasum -a 256 -c SHA256SUMS' \
+  './topaz-darwin-arm64 --help' \
+  'doctor guidance-smoke/effectful.ts' \
+  'manifest init guidance-smoke/effectful.ts' \
+  'manifest init --write guidance-smoke/effectful.ts' \
+  'check guidance-smoke/effectful.ts' \
+  'explain capability fs.read' \
+  'explain std/fs' \
+  'fs.read' \
+  'fs.write' \
+  'io.stdout' \
+  'missing capabilities: none' \
+  'status: ok' \
+  'zero-config' \
+  'compile-time policy enforcement' \
+  'runtime sandboxing' \
+  'schema expansion' \
+  'richer policy discovery'; do
+  if ! grep -Fq "${fragment}" "${release_notes_v0_2_0}"; then
+    echo "FAIL [release_v0_2_0_notes_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if grep -Fq 'Draft native compiler artifact release' "${release_notes_v0_2_0}"; then
+  echo "FAIL [release_v0_2_0_notes_contract]: workflow placeholder leaked into notes" >&2
+  exit 1
+fi
+for fragment in \
+  'docs/releases/v0.2.0.md' \
+  'gh release edit v0.2.0 --notes-file docs/releases/v0.2.0.md'; do
+  if ! grep -Fq "${fragment}" "${release_skill}"; then
+    echo "FAIL [release_v0_2_0_notes_contract]: release skill missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [release_v0_2_0_notes_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \

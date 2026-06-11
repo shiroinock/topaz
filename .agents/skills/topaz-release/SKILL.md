@@ -121,6 +121,15 @@ If the final tag comparison reports a stale final tag, follow
 `docs/releases/v0.1.3-release-state-handoff.md` instead of pushing the tag,
 reusing the draft Release, or silently choosing a different release vehicle.
 
+For `v0.2.0`, final notes are prepared at `docs/releases/v0.2.0.md` after the
+non-mutating `docs/releases/v0.2.0-rc-readiness.md` evidence has passed and
+before any final publish review. Apply them to the still-draft final release
+with:
+
+```sh
+gh release edit v0.2.0 --notes-file docs/releases/v0.2.0.md
+```
+
 Use this format, matching the `v0.1.1` release notes:
 
 ````md
