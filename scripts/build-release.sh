@@ -135,7 +135,7 @@ cat > "${guidance_write_entry}" <<'EOF'
 import { readFileSync, writeFileSync } from "std/fs";
 
 const text: string = readFileSync("examples/fixtures/node_fs_sample.txt", "utf8");
-writeFileSync("build/release_guidance_write_smoke/out.txt", text, "utf8");
+writeFileSync("build/release_guidance_write_smoke/out.txt", text);
 console.log(text.length);
 EOF
 

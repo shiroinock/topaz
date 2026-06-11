@@ -424,6 +424,10 @@ for fragment in \
     exit 1
   fi
 done
+if grep -Fq 'writeFileSync("build/release_guidance_write_smoke/out.txt", text, "utf8");' "${release_script}"; then
+  echo "FAIL [release_guidance_smoke_contract]: stale three-argument writeFileSync fixture" >&2
+  exit 1
+fi
 echo "PASS [release_guidance_smoke_contract]"
 for fragment in \
   'readFileSync("guidance-smoke/input.txt", "utf8")' \
