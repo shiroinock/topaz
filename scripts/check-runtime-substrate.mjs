@@ -361,9 +361,9 @@ const inventory = {
   },
   topaz_hash_number: {
     category: CATEGORY.CONTAINER,
-    reason: "number key hashing with SameValueZero normalization.",
+    reason: "residual C substrate for number key hashing: normalizes -0, canonicalizes NaN bit representation, copies IEEE bits through uint64_t, and mixes to the container size_t hash ABI.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
-    next: NEXT.CONTAINER_MONOMORPH,
+    next: "Keep as residual C substrate until a future hash/integer/container backend design can preserve uint64_t bit copying, size_t hash-function ABI, NaN canonicalization, and -0 normalization without changing bucket placement.",
   },
   topaz_key_eq_number: {
     category: CATEGORY.CONTAINER,
@@ -379,9 +379,9 @@ const inventory = {
   },
   topaz_hash_pointer: {
     category: CATEGORY.CONTAINER,
-    reason: "reference identity hashing for class/interface keys.",
+    reason: "residual C substrate for pointer-bit reference identity hashing of class/interface/dunion keys.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
-    next: NEXT.CONTAINER_MONOMORPH,
+    next: "Keep as residual C substrate until a future pointer/intrinsic/container backend design provides a Topaz-level pointer value model for reference identity hashing without changing bucket placement.",
   },
   topaz_key_eq_boolean: {
     category: CATEGORY.CONTAINER,
@@ -391,9 +391,9 @@ const inventory = {
   },
   topaz_hash_string: {
     category: CATEGORY.CONTAINER,
-    reason: "byte string key hashing.",
+    reason: "residual C substrate for FNV-1a string byte hashing with unsigned overflow and the container size_t hash ABI.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
-    next: NEXT.CONTAINER_MONOMORPH,
+    next: "Keep as residual C substrate until a future hash/integer/container backend design preserves FNV-1a byte hashing, unsigned overflow, and hash-order iteration rather than replacing it helper-by-helper.",
   },
   TOPAZ_MAP_DEFINE: {
     category: CATEGORY.CONTAINER,

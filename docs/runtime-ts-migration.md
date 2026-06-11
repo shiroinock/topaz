@@ -229,6 +229,16 @@ equality token passed to `TOPAZ_MAP_DEFINE(...)` / `TOPAZ_SET_DEFINE(...)`,
 but it now delegates the SameValueZero boolean equality decision to the hidden
 runtime prelude helper `__topaz_number_key_eq`.
 
+Phase 4.42 pins the residual hash half of the container lane after the
+Phase 4.39-4.41 equality/boolean bridges. `topaz_hash_number(...)`,
+`topaz_hash_string(...)`, and `topaz_hash_pointer(...)` remain C substrate,
+not bridge backlog: number hashing depends on `uint64_t` bit copying,
+`size_t` mixing, canonical NaN, and `-0` normalization; string hashing depends
+on FNV-1a byte hashing with unsigned overflow and hash-order stability; pointer
+hashing depends on reference-identity pointer bits that Topaz source cannot
+model. Future movement requires an explicit hash/integer/pointer/container
+backend decision rather than helper-by-helper runtime prelude migration.
+
 ## Phase 3.87 Active Intrinsic Family Substrate Policy
 
 The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes

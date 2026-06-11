@@ -892,6 +892,16 @@ for fragment in \
   'migration=raw-memory-boundary' \
   'topaz_string_eq (helper,' \
   'migration=container-monomorph-boundary' \
+  'topaz_hash_number (helper,' \
+  'uint64_t' \
+  'NaN' \
+  '-0 normalization' \
+  'topaz_hash_string (helper,' \
+  'FNV-1a' \
+  'unsigned overflow' \
+  'hash-order iteration' \
+  'topaz_hash_pointer (helper,' \
+  'pointer-bit reference identity hashing' \
   'topaz_number_to_string (helper,' \
   'migration=libc-libm-boundary' \
   'topaz_stdout_write (helper,' \
@@ -2385,8 +2395,18 @@ TOPAZ
     printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
     exit 1
   fi
-  if [[ "${string_eq_detail_out}" != *"topaz_hash_number (helper,"* || "${string_eq_detail_out}" != *"number key hashing with SameValueZero normalization."* || "${string_eq_detail_out}" != *"migration=container-monomorph-boundary"* ]]; then
+  if [[ "${string_eq_detail_out}" != *"topaz_hash_number (helper,"* || "${string_eq_detail_out}" != *"residual C substrate for number key hashing"* || "${string_eq_detail_out}" != *"uint64_t"* || "${string_eq_detail_out}" != *"size_t"* || "${string_eq_detail_out}" != *"NaN"* || "${string_eq_detail_out}" != *"-0 normalization"* || "${string_eq_detail_out}" != *"migration=container-monomorph-boundary"* ]]; then
     echo "FAIL [runtime_substrate_string_map_set]: substrate details no longer prove topaz_hash_number remains C substrate" >&2
+    printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${string_eq_detail_out}" != *"topaz_hash_string (helper,"* || "${string_eq_detail_out}" != *"residual C substrate for FNV-1a string byte hashing"* || "${string_eq_detail_out}" != *"unsigned overflow"* || "${string_eq_detail_out}" != *"hash-order iteration"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: substrate details no longer prove topaz_hash_string remains residual C substrate" >&2
+    printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${string_eq_detail_out}" != *"topaz_hash_pointer (helper,"* || "${string_eq_detail_out}" != *"pointer-bit reference identity hashing"* || "${string_eq_detail_out}" != *"Topaz-level pointer value model"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: substrate details no longer prove topaz_hash_pointer remains residual C substrate" >&2
     printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
     exit 1
   fi
