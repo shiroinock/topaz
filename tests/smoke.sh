@@ -694,6 +694,11 @@ run_cli_smoke() {
     printf '%s\n' "$help" | sed 's/^/    /' >&2
     exit 1
   fi
+  if [[ "$help" != *"topaz manifest init <entry.ts>"* ]]; then
+    echo "FAIL [cli_help]: missing manifest init usage" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
   if [[ "$help" != *"topaz explain capability <name>"* ]]; then
     echo "FAIL [cli_help]: missing explain capability usage" >&2
     printf '%s\n' "$help" | sed 's/^/    /' >&2
@@ -875,6 +880,37 @@ run_cli_smoke() {
   run_cli_fail_case cli_check_parse_flag "topaz: check does not accept compile option --parse-only" check build/manifest_cli_check/effectful_missing/main.ts --parse-only
   run_cli_fail_case cli_check_unknown_option "topaz: check does not accept option --unknown" check build/manifest_cli_check/effectful_missing/main.ts --unknown
   run_cli_fail_case cli_check_extra_positional "topaz: unexpected positional argument other.ts" check build/manifest_cli_check/effectful_missing/main.ts other.ts
+
+  local cli_manifest_effectful_expected
+  cli_manifest_effectful_expected=$'{\n  "capabilities": [\n    "fs.read",\n    "fs.write",\n    "io.stdout"\n  ]\n}'
+  local cli_manifest_effectful_out
+  cli_manifest_effectful_out=$(node dist/cli.js manifest init build/manifest_cli_check/effectful_missing/main.ts)
+  if [[ "$cli_manifest_effectful_out" != "$cli_manifest_effectful_expected" ]]; then
+    echo "FAIL [cli_manifest_init_effectful]: manifest suggestion mismatch" >&2
+    echo "  expected:" >&2
+    printf '%s\n' "$cli_manifest_effectful_expected" | sed 's/^/    /' >&2
+    echo "  got:" >&2
+    printf '%s\n' "$cli_manifest_effectful_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_manifest_init_effectful]"
+
+  local cli_manifest_pure_expected
+  cli_manifest_pure_expected=$'{\n  "capabilities": []\n}'
+  local cli_manifest_pure_out
+  cli_manifest_pure_out=$(node dist/cli.js manifest init build/manifest_cli_check/pure_missing/pure.ts)
+  if [[ "$cli_manifest_pure_out" != "$cli_manifest_pure_expected" ]]; then
+    echo "FAIL [cli_manifest_init_pure]: manifest suggestion mismatch" >&2
+    echo "  expected:" >&2
+    printf '%s\n' "$cli_manifest_pure_expected" | sed 's/^/    /' >&2
+    echo "  got:" >&2
+    printf '%s\n' "$cli_manifest_pure_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_manifest_init_pure]"
+
+  run_cli_fail_case cli_manifest_init_missing_subcommand "topaz: manifest expects init <entry.ts>" manifest
+  run_cli_fail_case cli_manifest_init_compile_flag "topaz: manifest init does not accept compile option --emit-c-only" manifest init build/manifest_cli_check/effectful_missing/main.ts --emit-c-only
 
   local explain_fs_read_out
   explain_fs_read_out=$(node dist/cli.js explain capability fs.read)

@@ -18,13 +18,16 @@ import {
   checkManifestPolicyForEntry,
   formatManifestCheckReport,
 } from "./manifest_check.js";
+import { formatManifestPolicyForRequirements } from "./manifest_generate.js";
 import { manifestPolicyFilename } from "./manifest_policy.js";
+import { collectManifestRequirementsForEntry } from "./manifest_requirements.js";
 import { ParseError } from "./topaz_parser.js";
 
 function usageText(): string {
   return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
        topaz doctor <entry.ts>
        topaz check <entry.ts>
+       topaz manifest init <entry.ts>
        topaz explain capability <name>
        topaz explain std/<module>
 
@@ -39,6 +42,9 @@ doctor:
 
 check:
   read-only strict-ts.json coverage check for an entry source graph
+
+manifest init:
+  print a normalized strict-ts.json suggestion for an entry source graph
 
 explain:
   read-only embedded docs for capability names and builtin modules
@@ -187,6 +193,45 @@ function runCheckCommand(args: Array<string>): void {
   }
 }
 
+function runManifestCommand(args: Array<string>): void {
+  if (args.length === 0) die("manifest expects init <entry.ts>");
+  const subcommand = args[0];
+  if (subcommand !== "init") die("manifest expects init <entry.ts>");
+
+  let entry = "";
+  let hasEntry = false;
+  let i = 1;
+  while (i < args.length) {
+    const arg = args[i];
+    if (
+      arg === "-o" ||
+      arg === "--output" ||
+      arg === "--emit-c-only" ||
+      arg === "--lex-only" ||
+      arg === "--parse-only"
+    ) {
+      die(`manifest init does not accept compile option ${arg}`);
+    }
+    if (arg.startsWith("-")) {
+      die(`manifest init does not accept option ${arg}`);
+    }
+    if (hasEntry) die(`unexpected positional argument ${arg}`);
+    entry = arg;
+    hasEntry = true;
+    i = i + 1;
+  }
+
+  if (!hasEntry) die("manifest init expects <entry.ts>");
+
+  const resolvedEntry = resolve(entry);
+  if (extname(resolvedEntry) !== ".ts") {
+    die(`expected a .ts file, got ${resolvedEntry}`);
+  }
+
+  const requirements = collectManifestRequirementsForEntry(resolvedEntry);
+  process.stdout.write(formatManifestPolicyForRequirements(requirements));
+}
+
 function runExplainCommand(args: Array<string>): void {
   for (const arg of args) {
     if (
@@ -236,6 +281,10 @@ function main(): void {
   }
   if (rawArgs.length > 0 && rawArgs[0] === "check") {
     runCheckCommand(rawArgs.slice(1));
+    return;
+  }
+  if (rawArgs.length > 0 && rawArgs[0] === "manifest") {
+    runManifestCommand(rawArgs.slice(1));
     return;
   }
   if (rawArgs.length > 0 && rawArgs[0] === "explain") {

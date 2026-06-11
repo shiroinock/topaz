@@ -12,6 +12,7 @@ const REQUIRED_HELP = [
   "usage: topaz <input.ts>",
   "topaz doctor <entry.ts>",
   "topaz check <entry.ts>",
+  "topaz manifest init <entry.ts>",
   "topaz explain capability <name>",
   "topaz explain std/<module>",
 ];
@@ -45,5 +46,5 @@ try {
 }
 
 console.log("cli selfhost ok:");
-console.log(`  ${SOURCE} -> ${OUTPUT} (--help includes doctor, check, and explain guidance)`);
+console.log(`  ${SOURCE} -> ${OUTPUT} (--help includes doctor, check, manifest init, and explain guidance)`);
 console.log(`  ${FIB_SOURCE} -> ${FIB_OUTPUT} (prints ${FIB_EXPECTED})`);
