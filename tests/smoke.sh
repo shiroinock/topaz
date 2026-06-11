@@ -397,6 +397,16 @@ pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
 release_readiness_v0_2_0="docs/releases/v0.2.0-rc-readiness.md"
 runtime_migration_doc="docs/runtime-ts-migration.md"
 for fragment in \
+  'pnpm run check:runtime-header' \
+  'pnpm run check:runtime-prelude' \
+  'pnpm run check:runtime-substrate -- --details'; do
+  if ! grep -Fq "${fragment}" "${release_script}"; then
+    echo "FAIL [release_build_runtime_gate_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [release_build_runtime_gate_contract]"
+for fragment in \
   'RELEASE [smoke ${artifact} guidance]' \
   'release_guidance_smoke' \
   'topaz doctor <entry.ts>' \

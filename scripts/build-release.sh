@@ -35,7 +35,7 @@ trap cleanup_tmp EXIT
 echo "RELEASE [self-host fixed point]"
 pnpm run check:runtime-header
 pnpm run check:runtime-prelude
-pnpm run check:runtime-substrate
+pnpm run check:runtime-substrate -- --details
 pnpm run test:selfhost
 
 rm -rf "${release_dir}"

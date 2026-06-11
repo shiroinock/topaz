@@ -61,6 +61,9 @@ uncommitted work.
 
 ```sh
 git status --short
+pnpm run check:runtime-prelude
+pnpm run check:runtime-header
+pnpm run check:runtime-substrate -- --details
 pnpm run build
 pnpm test
 pnpm run build:release
@@ -68,6 +71,10 @@ pnpm run build:release
 
 `pnpm run build:release` is the local mirror of the release workflow. Generated
 C warnings are expected unless `cc`, `pnpm`, or the final native compiler fails.
+The explicit runtime prelude/header/substrate detail checks keep the release
+dry-run aligned with the post-4.42 C substrate boundary before the release
+artifact copy and checksum steps. A normal `main` push is still not release
+intent; only a requested `v*` tag publication starts the external release path.
 
 ## Tag Head Guard
 
