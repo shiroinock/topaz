@@ -473,6 +473,36 @@ if grep -Fq 'writeFileSync("guidance-smoke/out.txt", text, "utf8");' "${release_
   exit 1
 fi
 echo "PASS [release_guidance_skill_fixture]"
+release_skill_runtime_prelude_section=$(awk '
+  /For `v0\.1\.3` release candidates, also run a downloaded-artifact/ { in_section = 1 }
+  in_section { print }
+  /For `v0\.2\.0` release candidates/ { if (in_section) { exit } }
+' "${release_skill}")
+if [[ -z "${release_skill_runtime_prelude_section}" ]]; then
+  echo "FAIL [release_skill_runtime_prelude_handoff_contract]: missing v0.1.3 runtime-prelude handoff section" >&2
+  exit 1
+fi
+for fragment in \
+  'v0.1.3' \
+  'runtime-prelude' \
+  'runtime-prelude-smoke.ts' \
+  './topaz-darwin-arm64 runtime-prelude-smoke.ts -o ./runtime-prelude-smoke' \
+  '.slice(' \
+  '.charCodeAt(' \
+  '.startsWith(' \
+  'prelude+check' \
+  '112' \
+  'true'; do
+  if [[ "${release_skill_runtime_prelude_section}" != *"${fragment}"* ]]; then
+    echo "FAIL [release_skill_runtime_prelude_handoff_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if [[ "${release_skill_runtime_prelude_section}" == *"examples/fib.ts"* ]]; then
+  echo "FAIL [release_skill_runtime_prelude_handoff_contract]: v0.1.3 runtime-prelude handoff must not reuse examples/fib.ts" >&2
+  exit 1
+fi
+echo "PASS [release_skill_runtime_prelude_handoff_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \

@@ -148,6 +148,34 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
    The expected output is `5702887`. This specifically checks that the release
    binary does not depend on a checked-out `runtime/` directory.
 
+   For `v0.1.3` release candidates, also run a downloaded-artifact
+   runtime-prelude smoke. Use only the downloaded artifact and a temporary
+   fixture, separate from the generic fib smoke above, so the handoff proves
+   the binary carries the embedded runtime TS prelude helpers:
+
+   ```sh
+   cat > runtime-prelude-smoke.ts <<'EOF'
+   const label = "xxprelude".slice(2) + "+" + "check";
+   console.log(label);
+   console.log("prelude".charCodeAt(0));
+   console.log(label.startsWith("prelude"));
+   EOF
+
+   ./topaz-darwin-arm64 runtime-prelude-smoke.ts -o ./runtime-prelude-smoke
+   ./runtime-prelude-smoke
+   ```
+
+   The expected output is:
+
+   ```txt
+   prelude+check
+   112
+   true
+   ```
+
+   Keep this v0.1.3 runtime-prelude handoff distinct from the v0.2 guidance CLI
+   validation below.
+
    For `v0.2.0` release candidates, extend the black-box smoke with the
    capability / manifest guidance CLI. Use only the downloaded artifact and a
    temporary fixture:
