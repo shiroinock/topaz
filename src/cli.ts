@@ -14,11 +14,17 @@ import { CodegenError, codegen } from "./codegen.js";
 import { formatDoctorReportForEntry } from "./doctor_report.js";
 import { computeLineStarts, LexError, tokenize, Token } from "./lexer.js";
 import { LoaderError, loadModuleGraph } from "./loader.js";
+import {
+  checkManifestPolicyForEntry,
+  formatManifestCheckReport,
+} from "./manifest_check.js";
+import { manifestPolicyFilename } from "./manifest_policy.js";
 import { ParseError } from "./topaz_parser.js";
 
 function usageText(): string {
   return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
        topaz doctor <entry.ts>
+       topaz check <entry.ts>
        topaz explain capability <name>
        topaz explain std/<module>
 
@@ -30,6 +36,9 @@ compile options:
 
 doctor:
   read-only capability diagnostics for an entry source graph
+
+check:
+  read-only strict-ts.json coverage check for an entry source graph
 
 explain:
   read-only embedded docs for capability names and builtin modules
@@ -139,6 +148,45 @@ function runDoctorCommand(args: Array<string>): void {
   console.log(formatDoctorReportForEntry(resolvedEntry));
 }
 
+function runCheckCommand(args: Array<string>): void {
+  let entry = "";
+  let hasEntry = false;
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (
+      arg === "-o" ||
+      arg === "--output" ||
+      arg === "--emit-c-only" ||
+      arg === "--lex-only" ||
+      arg === "--parse-only"
+    ) {
+      die(`check does not accept compile option ${arg}`);
+    }
+    if (arg.startsWith("-")) {
+      die(`check does not accept option ${arg}`);
+    }
+    if (hasEntry) die(`unexpected positional argument ${arg}`);
+    entry = arg;
+    hasEntry = true;
+    i = i + 1;
+  }
+
+  if (!hasEntry) die("check expects <entry.ts>");
+
+  const resolvedEntry = resolve(entry);
+  if (extname(resolvedEntry) !== ".ts") {
+    die(`expected a .ts file, got ${resolvedEntry}`);
+  }
+
+  const policyPath = join(dirname(resolvedEntry), manifestPolicyFilename());
+  const result = checkManifestPolicyForEntry(resolvedEntry, policyPath);
+  console.log(formatManifestCheckReport(result));
+  if (!result.ok) {
+    process.exit(1);
+  }
+}
+
 function runExplainCommand(args: Array<string>): void {
   for (const arg of args) {
     if (
@@ -184,6 +232,10 @@ function main(): void {
   const rawArgs = rawCliArgs(process.argv);
   if (rawArgs.length > 0 && rawArgs[0] === "doctor") {
     runDoctorCommand(rawArgs.slice(1));
+    return;
+  }
+  if (rawArgs.length > 0 && rawArgs[0] === "check") {
+    runCheckCommand(rawArgs.slice(1));
     return;
   }
   if (rawArgs.length > 0 && rawArgs[0] === "explain") {

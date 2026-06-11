@@ -646,6 +646,11 @@ run_cli_smoke() {
     printf '%s\n' "$help" | sed 's/^/    /' >&2
     exit 1
   fi
+  if [[ "$help" != *"topaz check <entry.ts>"* ]]; then
+    echo "FAIL [cli_help]: missing check usage" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
   if [[ "$help" != *"topaz explain capability <name>"* ]]; then
     echo "FAIL [cli_help]: missing explain capability usage" >&2
     printf '%s\n' "$help" | sed 's/^/    /' >&2
@@ -709,6 +714,124 @@ run_cli_smoke() {
 
   run_cli_fail_case cli_doctor_emit_c_flag "topaz: doctor does not accept compile option --emit-c-only" doctor --emit-c-only build/doctor_report/main.ts
   run_cli_fail_case cli_doctor_output_flag "topaz: doctor does not accept compile option -o" doctor build/doctor_report/main.ts -o build/doctor_report/out
+
+  mkdir -p build/manifest_cli_check/pure_missing
+  mkdir -p build/manifest_cli_check/effectful_missing
+  mkdir -p build/manifest_cli_check/full_policy
+  mkdir -p build/manifest_cli_check/partial_policy
+  mkdir -p build/manifest_cli_check/invalid_policy
+  printf '%s\n' \
+    'import { join } from "std/path";' \
+    '' \
+    'const out = join("build", "pure.txt");' \
+    'out;' \
+    > build/manifest_cli_check/pure_missing/pure.ts
+  printf '%s\n' \
+    'import { readFileSync, writeFileSync } from "std/fs";' \
+    '' \
+    'const data = readFileSync("input.txt", "utf8");' \
+    'writeFileSync("build/manifest_cli_check/out.txt", data);' \
+    'console.log(data);' \
+    > build/manifest_cli_check/effectful_missing/main.ts
+  printf '%s\n' \
+    'import { readFileSync, writeFileSync } from "std/fs";' \
+    '' \
+    'const data = readFileSync("input.txt", "utf8");' \
+    'writeFileSync("build/manifest_cli_check/out.txt", data);' \
+    'console.log(data);' \
+    > build/manifest_cli_check/full_policy/main.ts
+  printf '%s\n' '{ "capabilities": ["fs.read", "fs.write", "io.stdout"] }' > build/manifest_cli_check/full_policy/strict-ts.json
+  printf '%s\n' \
+    'import { readFileSync, writeFileSync } from "std/fs";' \
+    '' \
+    'const data = readFileSync("input.txt", "utf8");' \
+    'writeFileSync("build/manifest_cli_check/out.txt", data);' \
+    'console.log(data);' \
+    > build/manifest_cli_check/partial_policy/main.ts
+  printf '%s\n' '{ "capabilities": ["fs.read", "io.stdout"] }' > build/manifest_cli_check/partial_policy/strict-ts.json
+  printf '%s\n' \
+    'import { readFileSync } from "std/fs";' \
+    '' \
+    'const data = readFileSync("input.txt", "utf8");' \
+    'console.log(data);' \
+    > build/manifest_cli_check/invalid_policy/main.ts
+  printf '%s\n' '[]' > build/manifest_cli_check/invalid_policy/strict-ts.json
+
+  local cli_check_pure_entry
+  cli_check_pure_entry="$(pwd)/build/manifest_cli_check/pure_missing/pure.ts"
+  local cli_check_pure_policy
+  cli_check_pure_policy="$(pwd)/build/manifest_cli_check/pure_missing/strict-ts.json"
+  local cli_check_pure_out
+  cli_check_pure_out=$(node dist/cli.js check build/manifest_cli_check/pure_missing/pure.ts)
+  for required in "topaz check report: ${cli_check_pure_entry}" "policy: ${cli_check_pure_policy} (missing)" "missing capabilities: none" "status: ok"; do
+    if [[ "$cli_check_pure_out" != *"$required"* ]]; then
+      echo "FAIL [cli_check_pure_missing_policy]: missing ${required}" >&2
+      printf '%s\n' "$cli_check_pure_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  echo "PASS [cli_check_pure_missing_policy]"
+
+  local cli_check_effectful_out
+  if cli_check_effectful_out=$(node dist/cli.js check build/manifest_cli_check/effectful_missing/main.ts 2>&1); then
+    echo "FAIL [cli_check_effectful_missing_policy]: expected failed status" >&2
+    printf '%s\n' "$cli_check_effectful_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  for required in "policy: $(pwd)/build/manifest_cli_check/effectful_missing/strict-ts.json (missing)" "  fs.read: " "  fs.write: " "  io.stdout: " "status: failed"; do
+    if [[ "$cli_check_effectful_out" != *"$required"* ]]; then
+      echo "FAIL [cli_check_effectful_missing_policy]: missing ${required}" >&2
+      printf '%s\n' "$cli_check_effectful_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  echo "PASS [cli_check_effectful_missing_policy]"
+
+  local cli_check_full_out
+  cli_check_full_out=$(node dist/cli.js check build/manifest_cli_check/full_policy/main.ts)
+  for required in "policy: $(pwd)/build/manifest_cli_check/full_policy/strict-ts.json (found)" "missing capabilities: none" "status: ok"; do
+    if [[ "$cli_check_full_out" != *"$required"* ]]; then
+      echo "FAIL [cli_check_full_policy]: missing ${required}" >&2
+      printf '%s\n' "$cli_check_full_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  echo "PASS [cli_check_full_policy]"
+
+  local cli_check_partial_out
+  if cli_check_partial_out=$(node dist/cli.js check build/manifest_cli_check/partial_policy/main.ts 2>&1); then
+    echo "FAIL [cli_check_partial_policy]: expected failed status" >&2
+    printf '%s\n' "$cli_check_partial_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$cli_check_partial_out" != *"  fs.write: "* || "$cli_check_partial_out" != *"status: failed"* ]]; then
+    echo "FAIL [cli_check_partial_policy]: missing ungranted fs.write failure" >&2
+    printf '%s\n' "$cli_check_partial_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_check_partial_policy]"
+
+  local cli_check_invalid_out
+  if cli_check_invalid_out=$(node dist/cli.js check build/manifest_cli_check/invalid_policy/main.ts 2>&1); then
+    echo "FAIL [cli_check_invalid_policy]: expected failed status" >&2
+    printf '%s\n' "$cli_check_invalid_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "$cli_check_invalid_out" != *"top-level value must be an object"* || "$cli_check_invalid_out" != *"status: failed"* ]]; then
+    echo "FAIL [cli_check_invalid_policy]: missing invalid policy diagnostic" >&2
+    printf '%s\n' "$cli_check_invalid_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_check_invalid_policy]"
+
+  run_cli_fail_case cli_check_missing_entry "topaz: check expects <entry.ts>" check
+  run_cli_fail_case cli_check_emit_c_flag "topaz: check does not accept compile option --emit-c-only" check build/manifest_cli_check/effectful_missing/main.ts --emit-c-only
+  run_cli_fail_case cli_check_output_flag "topaz: check does not accept compile option -o" check build/manifest_cli_check/effectful_missing/main.ts -o build/manifest_cli_check/out
+  run_cli_fail_case cli_check_output_long_flag "topaz: check does not accept compile option --output" check build/manifest_cli_check/effectful_missing/main.ts --output build/manifest_cli_check/out
+  run_cli_fail_case cli_check_lex_flag "topaz: check does not accept compile option --lex-only" check build/manifest_cli_check/effectful_missing/main.ts --lex-only
+  run_cli_fail_case cli_check_parse_flag "topaz: check does not accept compile option --parse-only" check build/manifest_cli_check/effectful_missing/main.ts --parse-only
+  run_cli_fail_case cli_check_unknown_option "topaz: check does not accept option --unknown" check build/manifest_cli_check/effectful_missing/main.ts --unknown
+  run_cli_fail_case cli_check_extra_positional "topaz: unexpected positional argument other.ts" check build/manifest_cli_check/effectful_missing/main.ts other.ts
 
   local explain_fs_read_out
   explain_fs_read_out=$(node dist/cli.js explain capability fs.read)
