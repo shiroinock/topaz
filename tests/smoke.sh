@@ -663,6 +663,7 @@ for fragment in \
   'runtime header freshness' \
   'runtime prelude freshness' \
   'runtime substrate inventory' \
+  'runtime prelude intrinsic boundary smoke' \
   'libc-libm-boundary: 3' \
   'host-abi-boundary: 12' \
   'raw-memory-boundary: 3' \
@@ -684,6 +685,13 @@ for fragment in \
   'topaz_hash_string' \
   'topaz_hash_pointer' \
   'residual C substrate' \
+  'runtime_prelude_intrinsic_boundary_guard' \
+  'StringBuffer' \
+  'BigIntBuffer' \
+  'representative `__topaz_*` intrinsics' \
+  'compiler-owned `runtime/prelude.ts` path' \
+  'public Topaz source' \
+  '56-symbol `runtime/runtime.h`' \
   'topaz doctor <entry.ts>' \
   'topaz manifest init <entry.ts>' \
   'topaz manifest init --write <entry.ts>' \
@@ -707,6 +715,28 @@ if ! grep -Fq "${pre_v0_2_checkpoint}" "${release_skill}"; then
   echo "FAIL [pre_v0_2_0_checkpoint_contract]: release skill missing checkpoint link" >&2
   exit 1
 fi
+for fragment in \
+  'Phase 4.46' \
+  'runtime-prelude intrinsic-boundary handoff'; do
+  if ! grep -Fq "${fragment}" "${release_skill}"; then
+    echo "FAIL [pre_v0_2_0_checkpoint_contract]: release skill missing ${fragment}" >&2
+    exit 1
+  fi
+done
+for fragment in \
+  'Phase 4.47 is a release-handoff sync, not runtime migration' \
+  'runtime_prelude_intrinsic_boundary_guard' \
+  '56-symbol `runtime/runtime.h`' \
+  'substrate saturation guard' \
+  'compiler-owned `runtime/prelude.ts`' \
+  'intrinsic access guard' \
+  'does not move helpers' \
+  'expose hidden pseudo types and `__topaz_*` intrinsics as public source'; do
+  if ! grep -Fq "${fragment}" "${runtime_migration_doc}"; then
+    echo "FAIL [pre_v0_2_0_checkpoint_contract]: runtime migration doc missing ${fragment}" >&2
+    exit 1
+  fi
+done
 echo "PASS [pre_v0_2_0_checkpoint_contract]"
 if [[ ! -f "${release_readiness_v0_2_0}" ]]; then
   echo "FAIL [release_v0_2_0_rc_readiness_contract]: missing ${release_readiness_v0_2_0}" >&2
@@ -720,6 +750,11 @@ for fragment in \
   'pnpm run check:runtime-substrate -- --details' \
   'pnpm run build' \
   'pnpm test' \
+  'runtime_prelude_intrinsic_boundary_guard' \
+  'compiler-owned `runtime/prelude.ts` intrinsic boundary' \
+  'distinct from `pnpm run check:runtime-substrate -- --details`' \
+  '56-symbol `runtime/runtime.h` substrate saturation' \
+  'counts' \
   'pnpm run build:release' \
   'tag="v0.2.0-rc.1"' \
   'git rev-parse HEAD' \
@@ -776,6 +811,14 @@ for fragment in \
   'post-4.42 runtime boundary' \
   'bridge/residual hash split' \
   'pnpm run check:runtime-substrate -- --details' \
+  'pre-v0.2 runtime prelude intrinsic boundary' \
+  'hidden pseudo types' \
+  '`__topaz_*` intrinsics' \
+  'runtime_prelude_intrinsic_boundary_guard' \
+  'StringBuffer' \
+  'BigIntBuffer' \
+  'compiler-owned `runtime/prelude.ts` affordances' \
+  'public Topaz' \
   'topaz_string_eq' \
   'topaz_hash_boolean' \
   'topaz_key_eq_boolean' \

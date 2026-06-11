@@ -47,9 +47,10 @@ Patch vs minor rule:
 Before switching release operations from the `v0.1.3` runtime checkpoint to a
 `v0.2.0` release candidate, consult
 `docs/releases/pre-v0.2.0-checkpoint.md`. It records the repo-local readiness
-evidence, the pinned runtime substrate/intrinsic boundary, and the current
-guidance CLI surface that should seed the v0.2 track. This does not change the
-manual publish policy below.
+evidence, the pinned runtime substrate/intrinsic boundary, the Phase 4.46
+runtime-prelude intrinsic-boundary handoff, and the current guidance CLI
+surface that should seed the v0.2 track. This does not change the manual
+publish policy below.
 For a `v0.2.0` RC, follow the non-mutating readiness checklist at
 `docs/releases/v0.2.0-rc-readiness.md` before creating, pushing, trusting, or
 publishing an RC tag or draft Release.

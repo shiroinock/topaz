@@ -19,6 +19,7 @@ Repo-local readiness now includes:
 - runtime header freshness
 - runtime prelude freshness
 - runtime substrate inventory
+- runtime prelude intrinsic boundary smoke
 - copied-artifact and downloaded-artifact style runtime-prelude smoke
 - checked-in `docs/releases/v0.1.3.md`
 - checked-in `docs/releases/v0.1.3-readiness.md`
@@ -50,6 +51,14 @@ operators should check with `pnpm run check:runtime-substrate -- --details`:
   `__topaz_number_key_eq`.
 - `topaz_hash_number`, `topaz_hash_string`, and `topaz_hash_pointer` remain
   intentional residual C substrate.
+
+Phase 4.46 adds the separate
+`runtime_prelude_intrinsic_boundary_guard` smoke evidence for the
+`runtime/prelude.ts` intrinsic access boundary. It proves `StringBuffer`,
+`BigIntBuffer`, and representative `__topaz_*` intrinsics remain accepted only
+through the compiler-owned `runtime/prelude.ts` path rather than becoming
+public Topaz source. This is distinct from the 56-symbol `runtime/runtime.h`
+substrate saturation evidence above.
 
 ## v0.2.0 Starting Surface
 

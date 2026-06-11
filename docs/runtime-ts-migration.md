@@ -259,6 +259,14 @@ closed legacy `needs-*` lanes. This guard is intentionally separate from the
 boundary without silently moving the other, but either movement needs its own
 ADR.
 
+Phase 4.47 is a release-handoff sync, not runtime migration. It carries the
+Phase 4.46 `runtime_prelude_intrinsic_boundary_guard` evidence into the
+pre-v0.2 / v0.2 release-readiness surfaces so operators see two independent
+runtime boundaries before publication work: the 56-symbol `runtime/runtime.h`
+substrate saturation guard and the compiler-owned `runtime/prelude.ts`
+intrinsic access guard. It does not move helpers, change checker lane counts,
+or expose hidden pseudo types and `__topaz_*` intrinsics as public source.
+
 ## Phase 3.87 Active Intrinsic Family Substrate Policy
 
 The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes
