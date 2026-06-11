@@ -197,6 +197,20 @@ for required in "pure missing policy: ok" "effectful missing policy: failed" "fu
   fi
 done
 echo "PASS [manifest_check]"
+manifest_generate_out=$(pnpm run check:manifest-generate)
+if [[ "${manifest_generate_out}" != *"manifest generate ok:"* ]]; then
+  echo "FAIL [manifest_generate]: missing ok summary" >&2
+  printf '%s\n' "${manifest_generate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for required in "pure capabilities: none" "effectful capabilities: fs.read, fs.write, io.stdout" "duplicate fs.read occurrences: 3" "round-trip capabilities: fs.read, fs.write, io.stdout"; do
+  if [[ "${manifest_generate_out}" != *"${required}"* ]]; then
+    echo "FAIL [manifest_generate]: missing ${required}" >&2
+    printf '%s\n' "${manifest_generate_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+echo "PASS [manifest_generate]"
 doctor_report_out=$(pnpm run check:doctor-report)
 if [[ "${doctor_report_out}" != *"doctor report ok:"* ]]; then
   echo "FAIL [doctor_report]: missing ok summary" >&2
@@ -286,6 +300,11 @@ if [[ "${manifest_selfhost_out}" != *"src/manifest_check.ts"* ]]; then
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${manifest_selfhost_out}" != *"src/manifest_generate.ts"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing manifest generate target" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 if [[ "${manifest_selfhost_out}" != *"Map<string, Array"* ]]; then
   echo "FAIL [manifest_selfhost]: missing former Map<string, Array blocker text" >&2
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
@@ -298,6 +317,11 @@ if [[ "${manifest_selfhost_out}" != *"capability policy array validator + text p
 fi
 if [[ "${manifest_selfhost_out}" != *"strict-ts policy coverage evaluator"* ]]; then
   echo "FAIL [manifest_selfhost]: missing manifest check selfhost text" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${manifest_selfhost_out}" != *"strict-ts manifest suggestion renderer"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing manifest generate selfhost text" >&2
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi

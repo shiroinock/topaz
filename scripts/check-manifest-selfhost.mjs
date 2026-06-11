@@ -19,6 +19,11 @@ const TARGETS = [
     output: `${OUT_DIR}/manifest_check`,
     formerBlocker: "strict-ts policy coverage evaluator",
   },
+  {
+    source: "src/manifest_generate.ts",
+    output: `${OUT_DIR}/manifest_generate`,
+    formerBlocker: "strict-ts manifest suggestion renderer",
+  },
 ];
 
 function run(command, args) {
