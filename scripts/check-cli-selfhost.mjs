@@ -12,6 +12,7 @@ const REQUIRED_HELP = [
   "usage: topaz <input.ts>",
   "topaz doctor <entry.ts>",
   "topaz explain capability <name>",
+  "topaz explain std/<module>",
 ];
 
 function run(command, args) {
@@ -43,5 +44,5 @@ try {
 }
 
 console.log("cli selfhost ok:");
-console.log(`  ${SOURCE} -> ${OUTPUT} (--help includes doctor and explain capability)`);
+console.log(`  ${SOURCE} -> ${OUTPUT} (--help includes doctor and explain guidance)`);
 console.log(`  ${FIB_SOURCE} -> ${FIB_OUTPUT} (prints ${FIB_EXPECTED})`);

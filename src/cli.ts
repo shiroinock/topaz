@@ -4,7 +4,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { formatCapabilityExplanation, knownCapabilityNames } from "./capability_explain.js";
+import {
+  formatCapabilityExplanation,
+  formatModuleExplanation,
+  knownCapabilityNames,
+  knownModuleSpecifiers,
+} from "./capability_explain.js";
 import { CodegenError, codegen } from "./codegen.js";
 import { formatDoctorReportForEntry } from "./doctor_report.js";
 import { computeLineStarts, LexError, tokenize, Token } from "./lexer.js";
@@ -15,6 +20,7 @@ function usageText(): string {
   return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
        topaz doctor <entry.ts>
        topaz explain capability <name>
+       topaz explain std/<module>
 
 compile options:
   -o, --output <path>   output binary path (default: <input> with .ts stripped)
@@ -26,7 +32,7 @@ doctor:
   read-only capability diagnostics for an entry source graph
 
 explain:
-  read-only embedded docs for capability names
+  read-only embedded docs for capability names and builtin modules
 
 options:
   -h, --help            show this help`;
@@ -149,16 +155,27 @@ function runExplainCommand(args: Array<string>): void {
     }
   }
 
-  if (args.length === 0 || args[0] !== "capability") {
-    die("explain expects capability <name>");
+  if (args.length === 0) {
+    die("explain expects capability <name> or std/<module>");
   }
-  if (args.length < 2) die("explain capability expects <name>");
-  const name = args[1];
-  if (args.length > 2) die(`unexpected positional argument ${args[2]}`);
+  if (args[0] === "capability") {
+    if (args.length < 2) die("explain capability expects <name>");
+    const name = args[1];
+    if (args.length > 2) die(`unexpected positional argument ${args[2]}`);
 
-  const report = formatCapabilityExplanation(name);
+    const report = formatCapabilityExplanation(name);
+    if (report === undefined) {
+      die(`unknown capability ${name}; known capabilities: ${knownCapabilityNames().join(", ")}`);
+    }
+    console.log(report);
+    return;
+  }
+
+  const specifier = args[0];
+  if (args.length > 1) die(`unexpected positional argument ${args[1]}`);
+  const report = formatModuleExplanation(specifier);
   if (report === undefined) {
-    die(`unknown capability ${name}; known capabilities: ${knownCapabilityNames().join(", ")}`);
+    die(`unknown builtin module ${specifier}; known module specifiers: ${knownModuleSpecifiers().join(", ")}`);
   }
   console.log(report);
 }

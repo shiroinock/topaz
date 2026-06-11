@@ -575,6 +575,11 @@ run_cli_smoke() {
     printf '%s\n' "$help" | sed 's/^/    /' >&2
     exit 1
   fi
+  if [[ "$help" != *"topaz explain std/<module>"* ]]; then
+    echo "FAIL [cli_help]: missing explain std module usage" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
   if [[ "$help" != *"--parse-only"*"unsupported/reserved"* ]]; then
     echo "FAIL [cli_help]: --parse-only is not described as unsupported/reserved" >&2
     printf '%s\n' "$help" | sed 's/^/    /' >&2
@@ -667,6 +672,31 @@ run_cli_smoke() {
   run_cli_fail_case cli_explain_output_flag "topaz: explain does not accept compile option -o" explain capability fs.read -o build/explain/out
   run_cli_fail_case cli_explain_lex_flag "topaz: explain does not accept compile option --lex-only" explain capability fs.read --lex-only
   run_cli_fail_case cli_explain_parse_flag "topaz: explain does not accept compile option --parse-only" explain capability fs.read --parse-only
+
+  local explain_std_fs_out
+  explain_std_fs_out=$(node dist/cli.js explain std/fs)
+  for required in "topaz builtin module: std/fs" "readFileSync" "semantic: fs.readFileSync" "effects: fs.read" "status: public"; do
+    if [[ "$explain_std_fs_out" != *"$required"* ]]; then
+      echo "FAIL [cli_explain_std_fs]: missing ${required}" >&2
+      printf '%s\n' "$explain_std_fs_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  echo "PASS [cli_explain_std_fs]"
+
+  local explain_std_path_out
+  explain_std_path_out=$(node dist/cli.js explain std/path)
+  for required in "topaz builtin module: std/path" "join" "semantic: path.join" "effects: none" "status: public"; do
+    if [[ "$explain_std_path_out" != *"$required"* ]]; then
+      echo "FAIL [cli_explain_std_path]: missing ${required}" >&2
+      printf '%s\n' "$explain_std_path_out" | sed 's/^/    /' >&2
+      exit 1
+    fi
+  done
+  echo "PASS [cli_explain_std_path]"
+
+  run_cli_fail_case cli_explain_std_unknown "topaz: unknown builtin module std/unknown; known module specifiers:" explain std/unknown
+  run_cli_fail_case cli_explain_std_emit_c_flag "topaz: explain does not accept compile option --emit-c-only" explain std/fs --emit-c-only
 
   node dist/cli.js examples/fib.ts --emit-c-only -o build/cli_emit_probe > /dev/null
   if [[ ! -f build/cli_emit_probe.c ]]; then
