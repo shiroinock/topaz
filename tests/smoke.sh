@@ -402,6 +402,15 @@ for fragment in \
   'release_guidance_manifest_init' \
   'policy_before=$(cat "${guidance_policy}")' \
   'manifest init changed existing policy fixture' \
+  'release_guidance_write_smoke' \
+  'manifest init --write "${guidance_write_entry}"' \
+  'release_guidance_manifest_init_write' \
+  'wrote ${expected_guidance_write_policy}' \
+  'guidance_write_expected=$' \
+  '"fs.write"' \
+  '"io.stdout"' \
+  'release_guidance_manifest_init_write_check' \
+  'missing capabilities: none' \
   '"capabilities"' \
   '"fs.read"' \
   '"fs.write"' \

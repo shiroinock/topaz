@@ -126,6 +126,45 @@ if [[ "${policy_after}" != "${policy_before}" ]]; then
   exit 1
 fi
 
+guidance_write_dir="build/release_guidance_write_smoke"
+guidance_write_entry="${guidance_write_dir}/effectful.ts"
+guidance_write_policy="${guidance_write_dir}/strict-ts.json"
+rm -rf "${guidance_write_dir}"
+mkdir -p "${guidance_write_dir}"
+cat > "${guidance_write_entry}" <<'EOF'
+import { readFileSync, writeFileSync } from "std/fs";
+
+const text: string = readFileSync("examples/fixtures/node_fs_sample.txt", "utf8");
+writeFileSync("build/release_guidance_write_smoke/out.txt", text, "utf8");
+console.log(text.length);
+EOF
+
+manifest_write_out=$("./${release_path}" manifest init --write "${guidance_write_entry}")
+expected_guidance_write_policy="$(pwd)/${guidance_write_policy}"
+if [[ "${manifest_write_out}" != "wrote ${expected_guidance_write_policy}" ]]; then
+  echo "FAIL [release_guidance_manifest_init_write]: missing write success line" >&2
+  printf '%s\n' "${manifest_write_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ ! -f "${guidance_write_policy}" ]]; then
+  echo "FAIL [release_guidance_manifest_init_write]: missing written strict-ts.json" >&2
+  exit 1
+fi
+guidance_write_expected=$'{\n  "capabilities": [\n    "fs.read",\n    "fs.write",\n    "io.stdout"\n  ]\n}'
+guidance_write_actual=$(cat "${guidance_write_policy}")
+if [[ "${guidance_write_actual}" != "${guidance_write_expected}" ]]; then
+  echo "FAIL [release_guidance_manifest_init_write]: written manifest mismatch" >&2
+  echo "  expected:" >&2
+  printf '%s\n' "${guidance_write_expected}" | sed 's/^/    /' >&2
+  echo "  got:" >&2
+  printf '%s\n' "${guidance_write_actual}" | sed 's/^/    /' >&2
+  exit 1
+fi
+manifest_write_check_out=$("./${release_path}" check "${guidance_write_entry}")
+assert_release_output_contains "release_guidance_manifest_init_write_check" "${manifest_write_check_out}" "topaz check report:"
+assert_release_output_contains "release_guidance_manifest_init_write_check" "${manifest_write_check_out}" "missing capabilities: none"
+assert_release_output_contains "release_guidance_manifest_init_write_check" "${manifest_write_check_out}" "status: ok"
+
 capability_out=$("./${release_path}" explain capability fs.read)
 assert_release_output_contains "release_guidance_explain_capability" "${capability_out}" "topaz capability: fs.read"
 
