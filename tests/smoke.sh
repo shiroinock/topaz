@@ -429,6 +429,36 @@ if grep -Fq 'writeFileSync("build/release_guidance_write_smoke/out.txt", text, "
   exit 1
 fi
 echo "PASS [release_guidance_smoke_contract]"
+runtime_prelude_release_section=$(awk '
+  /RELEASE \[smoke \$\{artifact\} runtime prelude\]/ { in_section = 1 }
+  in_section { print }
+  /RELEASE \[sha256\]/ { if (in_section) { exit } }
+' "${release_script}")
+if [[ -z "${runtime_prelude_release_section}" ]]; then
+  echo "FAIL [release_runtime_prelude_smoke_contract]: missing runtime prelude smoke section" >&2
+  exit 1
+fi
+for fragment in \
+  'RELEASE [smoke ${artifact} runtime prelude]' \
+  'runtime_prelude_smoke.ts' \
+  '( cd "${tmp_dir}"' \
+  './${artifact}" runtime_prelude_smoke.ts -o runtime_prelude_smoke' \
+  '.slice(' \
+  '.charCodeAt(' \
+  '.startsWith(' \
+  'release_runtime_prelude_expected=$' \
+  'prelude+check\n112\ntrue' \
+  'FAIL [release_runtime_prelude binary-only]'; do
+  if [[ "${runtime_prelude_release_section}" != *"${fragment}"* ]]; then
+    echo "FAIL [release_runtime_prelude_smoke_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if [[ "${runtime_prelude_release_section}" == *"examples/fib.ts"* ]]; then
+  echo "FAIL [release_runtime_prelude_smoke_contract]: runtime prelude smoke must use its own temp fixture" >&2
+  exit 1
+fi
+echo "PASS [release_runtime_prelude_smoke_contract]"
 for fragment in \
   'readFileSync("guidance-smoke/input.txt", "utf8")' \
   'writeFileSync("guidance-smoke/out.txt", text);' \

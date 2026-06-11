@@ -57,8 +57,9 @@ fresh, then runs the self-host fixed-point gate and writes:
 The release artifact is the native compiler. It can compile a Topaz-subset
 source graph without Node.js or a checked-out `runtime/` directory. The
 compiler embeds the internal runtime prelude source; it is not a user-importable
-stdlib surface. Downloaded GitHub Release assets may need `chmod +x` before
-first use:
+stdlib surface. Release smoke covers `fib`, v0.2 guidance commands, and a
+binary-only runtime-prelude string helper fixture. Downloaded GitHub Release
+assets may need `chmod +x` before first use:
 
 ```sh
 (

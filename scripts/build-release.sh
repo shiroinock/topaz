@@ -184,6 +184,32 @@ if [[ "${fib_out}" != "5702887" ]]; then
   exit 1
 fi
 
+echo "RELEASE [smoke ${artifact} runtime prelude]"
+cat > "${tmp_dir}/runtime_prelude_smoke.ts" <<'EOF'
+const source: string = "prelude-check";
+const left: string = source.slice(0, 7);
+const right: string = source.slice(8);
+const joined: string = left + "+" + right;
+const code: number = source.charCodeAt(0);
+const ok: boolean = joined.startsWith("prelude+");
+console.log(joined);
+console.log(code);
+console.log(ok);
+EOF
+( cd "${tmp_dir}"
+  "./${artifact}" runtime_prelude_smoke.ts -o runtime_prelude_smoke > /dev/null
+  runtime_prelude_out=$(./runtime_prelude_smoke)
+  release_runtime_prelude_expected=$'prelude+check\n112\ntrue'
+  if [[ "${runtime_prelude_out}" != "${release_runtime_prelude_expected}" ]]; then
+    echo "FAIL [release_runtime_prelude binary-only]:" >&2
+    echo "  expected:" >&2
+    printf '%s\n' "${release_runtime_prelude_expected}" | sed 's/^/    /' >&2
+    echo "  got:" >&2
+    printf '%s\n' "${runtime_prelude_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+)
+
 echo "RELEASE [sha256]"
 (
   cd "${release_dir}"
