@@ -221,6 +221,14 @@ prelude algorithm is constrained to exact `0` / `1` results. Number hashing and
 SameValueZero equality, string hashing, pointer/reference hashing/equality, and
 full container monomorph replacement remain future backend work.
 
+Phase 4.41 narrows the number statement from Phase 4.40 without moving number
+hashing. `topaz_hash_number(...)` remains C substrate because it owns `-0`
+normalization, canonical NaN bit representation, `uint64_t` bit copying, and
+splitmix-style `size_t` hashing. `topaz_key_eq_number(...)` remains the C ABI
+equality token passed to `TOPAZ_MAP_DEFINE(...)` / `TOPAZ_SET_DEFINE(...)`,
+but it now delegates the SameValueZero boolean equality decision to the hidden
+runtime prelude helper `__topaz_number_key_eq`.
+
 ## Phase 3.87 Active Intrinsic Family Substrate Policy
 
 The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes

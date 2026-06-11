@@ -2247,6 +2247,14 @@ TOPAZ
     echo "FAIL [runtime_substrate_string_map_set]: missing substrate boolean set hash/equality helpers" >&2
     exit 1
   fi
+  if ! grep -q "TOPAZ_MAP_DEFINE(number_.*topaz_hash_number,  topaz_key_eq_number" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing substrate number map hash/equality helpers" >&2
+    exit 1
+  fi
+  if ! grep -q "TOPAZ_SET_DEFINE(number,.*topaz_hash_number,  topaz_key_eq_number" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing substrate number set hash/equality helpers" >&2
+    exit 1
+  fi
   local string_eq_forward_line
   local string_eq_bridge_line
   string_eq_forward_line=$(grep -nF "static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_string_eq(topaz_string a, topaz_string b);" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
@@ -2319,12 +2327,40 @@ TOPAZ
     printf '%s\n' "${boolean_key_eq_bridge_body}" | sed 's/^/    /' >&2
     exit 1
   fi
+  local number_key_eq_forward_line
+  local number_key_eq_bridge_line
+  number_key_eq_forward_line=$(grep -nF "static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_number_key_eq(topaz_number a, topaz_number b);" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  number_key_eq_bridge_line=$(grep -nF "static inline topaz_boolean topaz_key_eq_number(topaz_number a, topaz_number b) {" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  if [[ -z "${number_key_eq_forward_line}" || -z "${number_key_eq_bridge_line}" || "${number_key_eq_forward_line}" -ge "${number_key_eq_bridge_line}" ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing prelude number key equality forward declaration before bridge" >&2
+    exit 1
+  fi
+  local number_key_eq_bridge_body
+  number_key_eq_bridge_body=$(awk '
+    /^static inline topaz_boolean topaz_key_eq_number\(topaz_number a, topaz_number b\) \{/ { in_fn = 1 }
+    in_fn { print }
+    in_fn && /^}/ { exit }
+  ' build/runtime_substrate_string_map_set.c)
+  if [[ "${number_key_eq_bridge_body}" != *"return topaz_fn_runtime_prelude___topaz_number_key_eq(a, b);"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_key_eq_number does not delegate to runtime prelude number key equality" >&2
+    printf '%s\n' "${number_key_eq_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${number_key_eq_bridge_body}" == *"if (a == b) return true;"* || "${number_key_eq_bridge_body}" == *"if (a != a && b != b) return true;"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_key_eq_number still embeds old SameValueZero equality" >&2
+    printf '%s\n' "${number_key_eq_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
   if ! grep -q "topaz_fn_runtime_prelude___topaz_boolean_hash(topaz_boolean value) {" build/runtime_substrate_string_map_set.c; then
     echo "FAIL [runtime_substrate_string_map_set]: missing runtime prelude boolean hash generated definition" >&2
     exit 1
   fi
   if ! grep -q "topaz_fn_runtime_prelude___topaz_boolean_key_eq(topaz_boolean a, topaz_boolean b) {" build/runtime_substrate_string_map_set.c; then
     echo "FAIL [runtime_substrate_string_map_set]: missing runtime prelude boolean key equality generated definition" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_number_key_eq(topaz_number a, topaz_number b) {" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing runtime prelude number key equality generated definition" >&2
     exit 1
   fi
   local string_eq_detail_out
@@ -2341,6 +2377,16 @@ TOPAZ
   fi
   if [[ "${string_eq_detail_out}" != *"topaz_key_eq_boolean (helper,"* || "${string_eq_detail_out}" != *"C bridge for Map/Set macro boolean key equality"* || "${string_eq_detail_out}" != *"__topaz_boolean_key_eq"* ]]; then
     echo "FAIL [runtime_substrate_string_map_set]: substrate details do not describe topaz_key_eq_boolean as a prelude bridge in the container lane" >&2
+    printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${string_eq_detail_out}" != *"topaz_key_eq_number (helper,"* || "${string_eq_detail_out}" != *"C bridge for Map/Set macro number key equality"* || "${string_eq_detail_out}" != *"runtime prelude"* || "${string_eq_detail_out}" != *"__topaz_number_key_eq"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: substrate details do not describe topaz_key_eq_number as a prelude bridge in the container lane" >&2
+    printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${string_eq_detail_out}" != *"topaz_hash_number (helper,"* || "${string_eq_detail_out}" != *"number key hashing with SameValueZero normalization."* || "${string_eq_detail_out}" != *"migration=container-monomorph-boundary"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: substrate details no longer prove topaz_hash_number remains C substrate" >&2
     printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
     exit 1
   fi
@@ -2691,6 +2737,8 @@ run_case array_method_includes $'true\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntr
 
 run_case array_method_slice $'3\n20\n40\n3\n30\n50\n5\n10\n50\n2\n40\n50\n4\n10\n40\n2\n30\n40\n0\n0\n2\n40\n50\n0\n2\nbeta\ngamma\n1\n99\n777\n2\n20\n30\n2\n20\n30\n3\n4\n99'
 
+run_case map_number_same_value_zero $'11\n22\n33\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\nfalse\n3'
+
 run_case array_method_join $'1,2,3\n5\n1, 2, 3\n7\n123\n3\n1 -> 2 -> 3\nalpha-beta-gamma\nalpha,beta,gamma\ntrue,false,true\ntrue | false | true\n\n0\n0\n42\n2\n3.14,0,-1.5\n2,4,6\n2-3\n2,3\n[1,2,3]\n1:2:3\n10:20'
 
 run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n25'
@@ -2699,6 +2747,7 @@ run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.t
 run_fail_case runtime_prelude_boolean_to_string_hidden_fail examples/runtime_prelude_boolean_to_string_hidden_fail.ts "unknown identifier '__topaz_boolean_to_string'"
 run_fail_case runtime_prelude_boolean_hash_hidden_fail examples/runtime_prelude_boolean_hash_hidden_fail.ts "unknown identifier '__topaz_boolean_hash'"
 run_fail_case runtime_prelude_boolean_key_eq_hidden_fail examples/runtime_prelude_boolean_key_eq_hidden_fail.ts "unknown identifier '__topaz_boolean_key_eq'"
+run_fail_case runtime_prelude_number_key_eq_hidden_fail examples/runtime_prelude_number_key_eq_hidden_fail.ts "unknown identifier '__topaz_number_key_eq'"
 run_fail_case runtime_prelude_starts_with_hidden_fail examples/runtime_prelude_starts_with_hidden_fail.ts "unknown identifier '__topaz_string_starts_with'"
 run_fail_case runtime_prelude_ends_with_hidden_fail examples/runtime_prelude_ends_with_hidden_fail.ts "unknown identifier '__topaz_string_ends_with'"
 run_fail_case runtime_prelude_trim_start_hidden_fail examples/runtime_prelude_trim_start_hidden_fail.ts "unknown identifier '__topaz_string_trim_start'"

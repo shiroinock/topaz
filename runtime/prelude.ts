@@ -15,6 +15,12 @@ function __topaz_boolean_key_eq(a: boolean, b: boolean): boolean {
   return a === b;
 }
 
+function __topaz_number_key_eq(a: number, b: number): boolean {
+  if (a === b) return true;
+  if (a !== a && b !== b) return true;
+  return false;
+}
+
 function __topaz_string_eq(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let i: number = 0;

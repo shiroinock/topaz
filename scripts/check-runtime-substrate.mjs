@@ -367,9 +367,9 @@ const inventory = {
   },
   topaz_key_eq_number: {
     category: CATEGORY.CONTAINER,
-    reason: "number key equality with SameValueZero semantics.",
+    reason: "C bridge for Map/Set macro number key equality delegating SameValueZero equality to the runtime prelude.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
-    next: NEXT.CONTAINER_MONOMORPH,
+    next: "Keep as the container macro equality-function ABI token until a future compiler-owned container monomorphization/backend design replaces Map/Set macros; the SameValueZero equality decision itself is owned by the runtime prelude __topaz_number_key_eq helper.",
   },
   topaz_hash_boolean: {
     category: CATEGORY.CONTAINER,

@@ -776,14 +776,13 @@ static inline size_t topaz_hash_number(topaz_number n) {
   return (size_t)bits;
 }
 
-static inline topaz_boolean topaz_key_eq_number(topaz_number a, topaz_number b) {
-  if (a == b) return true;                  // covers ±0 and all finite cases
-  if (a != a && b != b) return true;        // SameValueZero treats NaN as equal
-  return false;
-}
-
+static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_number_key_eq(topaz_number a, topaz_number b);
 static __attribute__((unused)) topaz_number topaz_fn_runtime_prelude___topaz_boolean_hash(topaz_boolean value);
 static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_boolean_key_eq(topaz_boolean a, topaz_boolean b);
+
+static inline topaz_boolean topaz_key_eq_number(topaz_number a, topaz_number b) {
+  return topaz_fn_runtime_prelude___topaz_number_key_eq(a, b);
+}
 
 static inline size_t topaz_hash_boolean(topaz_boolean b) {
   return (size_t)topaz_fn_runtime_prelude___topaz_boolean_hash(b);
