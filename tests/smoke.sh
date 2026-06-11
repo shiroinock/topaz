@@ -388,6 +388,7 @@ if ! grep -Fq '"${release_flags[@]}"' "${release_workflow}"; then
 fi
 echo "PASS [release_workflow_prerelease]"
 release_script="scripts/build-release.sh"
+release_skill=".agents/skills/topaz-release/SKILL.md"
 for fragment in \
   'RELEASE [smoke ${artifact} guidance]' \
   'release_guidance_smoke' \
@@ -424,6 +425,20 @@ for fragment in \
   fi
 done
 echo "PASS [release_guidance_smoke_contract]"
+for fragment in \
+  'readFileSync("guidance-smoke/input.txt", "utf8")' \
+  'writeFileSync("guidance-smoke/out.txt", text);' \
+  '`doctor` reports `fs.read`, `fs.write`, and `io.stdout`'; do
+  if ! grep -Fq "${fragment}" "${release_skill}"; then
+    echo "FAIL [release_guidance_skill_fixture]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if grep -Fq 'writeFileSync("guidance-smoke/out.txt", text, "utf8");' "${release_skill}"; then
+  echo "FAIL [release_guidance_skill_fixture]: stale three-argument writeFileSync fixture" >&2
+  exit 1
+fi
+echo "PASS [release_guidance_skill_fixture]"
 substrate_out=$(pnpm run check:runtime-substrate)
 if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing migration lane summary" >&2

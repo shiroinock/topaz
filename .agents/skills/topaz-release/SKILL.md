@@ -161,7 +161,7 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
    import { writeStdout } from "std/process";
 
    const text = readFileSync("guidance-smoke/input.txt", "utf8");
-   writeFileSync("guidance-smoke/out.txt", text, "utf8");
+   writeFileSync("guidance-smoke/out.txt", text);
    writeStdout(text);
    EOF
    printf 'hello from guidance\n' > guidance-smoke/input.txt
