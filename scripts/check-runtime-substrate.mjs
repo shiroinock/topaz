@@ -1,7 +1,33 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 
-const runtimePath = process.argv[2] ?? "runtime/runtime.h";
+function parseArgs(argv) {
+  let details = false;
+  let runtimePath = "runtime/runtime.h";
+  let sawRuntimePath = false;
+  for (const arg of argv) {
+    if (arg === "--") {
+      continue;
+    }
+    if (arg === "--details") {
+      details = true;
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      console.error(`runtime substrate inventory: unknown flag ${arg}`);
+      process.exit(1);
+    }
+    if (sawRuntimePath) {
+      console.error(`runtime substrate inventory: unexpected argument ${arg}`);
+      process.exit(1);
+    }
+    runtimePath = arg;
+    sawRuntimePath = true;
+  }
+  return { runtimePath, details };
+}
+
+const { runtimePath, details } = parseArgs(process.argv.slice(2));
 
 const CATEGORY = {
   HEADER: "header/types/option wrappers",
@@ -520,4 +546,13 @@ for (const [migration, count] of [...migrationCounts.entries()].sort(([a], [b]) 
 console.log("closed migration lanes:");
 for (const lane of [...CLOSED_MIGRATION_LANES].sort()) {
   console.log(`  ${lane}: closed`);
+}
+if (details) {
+  console.log("details:");
+  for (const [name, meta] of [...discovered.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const entry = inventory[name];
+    console.log(
+      `  ${name} (${meta.kind}, ${runtimePath}:${meta.line}) category=${entry.category}; migration=${entry.migration}; reason=${entry.reason}; next=${entry.next}`,
+    );
+  }
 }

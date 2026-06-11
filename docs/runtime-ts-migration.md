@@ -34,6 +34,14 @@ category counts and migration-lane counts; smoke asserts the lane summary is
 present so future runtime cleanup work can see whether the remaining C surface
 is shrinking in the intended lane.
 
+Before attempting any remaining C-to-TS runtime migration, run
+`pnpm run check:runtime-substrate -- --details` as the scout step. The detail
+report appends one deterministic line per remaining symbol with its
+`runtime/runtime.h` location, macro/helper kind, category, migration lane,
+reason, and next-action guidance. That per-symbol evidence is the starting
+point for deciding whether the next phase is a runtime-prelude migration, a
+compiler/backend substrate decision, or no movement at all.
+
 ## Remaining Migration Lanes
 
 The inventory migration lane is the next work boundary, not a promise that the

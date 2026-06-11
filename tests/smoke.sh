@@ -874,6 +874,40 @@ if [[ "${substrate_out}" != *"string-buffer-intrinsic-family: 5"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+substrate_detail_out=$(pnpm run check:runtime-substrate -- --details)
+if [[ "${substrate_detail_out}" != *"details:"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing detail report" >&2
+  printf '%s\n' "${substrate_detail_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${substrate_detail_out}" != *"runtime/runtime.h:"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: missing detail source location" >&2
+  printf '%s\n' "${substrate_detail_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for fragment in \
+  'TOPAZ_RUNTIME_H (macro,' \
+  'migration=c-abi-type-boundary' \
+  'topaz_arena_alloc (helper,' \
+  'migration=raw-memory-boundary' \
+  'topaz_string_eq (helper,' \
+  'migration=container-monomorph-boundary' \
+  'topaz_number_to_string (helper,' \
+  'migration=libc-libm-boundary' \
+  'topaz_stdout_write (helper,' \
+  'migration=host-abi-boundary' \
+  'topaz_try_push (helper,' \
+  'migration=exception-boundary' \
+  'topaz_string_buffer_new (helper,' \
+  'migration=string-buffer-intrinsic-family' \
+  'topaz_bigint_buffer_new (helper,' \
+  'migration=bigint-limb-intrinsic-family'; do
+  if [[ "${substrate_detail_out}" != *"${fragment}"* ]]; then
+    echo "FAIL [runtime_substrate_inventory]: missing detail fragment ${fragment}" >&2
+    printf '%s\n' "${substrate_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
 mkdir -p build
 tmp_runtime_substrate="build/runtime_substrate_probe.h"
 cp runtime/runtime.h "${tmp_runtime_substrate}"
