@@ -13,6 +13,7 @@ const REQUIRED_HELP = [
   "topaz doctor <entry.ts>",
   "topaz check <entry.ts>",
   "topaz manifest init <entry.ts>",
+  "--write",
   "topaz explain capability <name>",
   "topaz explain std/<module>",
 ];

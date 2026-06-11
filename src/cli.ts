@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,7 +27,7 @@ function usageText(): string {
   return `usage: topaz <input.ts> [-o <output>] [--emit-c-only] [--lex-only] [--parse-only]
        topaz doctor <entry.ts>
        topaz check <entry.ts>
-       topaz manifest init <entry.ts>
+       topaz manifest init <entry.ts> [--write]
        topaz explain capability <name>
        topaz explain std/<module>
 
@@ -45,6 +45,7 @@ check:
 
 manifest init:
   print a normalized strict-ts.json suggestion for an entry source graph
+  --write               create entry-adjacent strict-ts.json when absent
 
 explain:
   read-only embedded docs for capability names and builtin modules
@@ -200,6 +201,7 @@ function runManifestCommand(args: Array<string>): void {
 
   let entry = "";
   let hasEntry = false;
+  let writePolicy = false;
   let i = 1;
   while (i < args.length) {
     const arg = args[i];
@@ -211,6 +213,12 @@ function runManifestCommand(args: Array<string>): void {
       arg === "--parse-only"
     ) {
       die(`manifest init does not accept compile option ${arg}`);
+    }
+    if (arg === "--write") {
+      if (writePolicy) die("manifest init refuses repeated --write");
+      writePolicy = true;
+      i = i + 1;
+      continue;
     }
     if (arg.startsWith("-")) {
       die(`manifest init does not accept option ${arg}`);
@@ -229,7 +237,18 @@ function runManifestCommand(args: Array<string>): void {
   }
 
   const requirements = collectManifestRequirementsForEntry(resolvedEntry);
-  process.stdout.write(formatManifestPolicyForRequirements(requirements));
+  const text = formatManifestPolicyForRequirements(requirements);
+  if (!writePolicy) {
+    process.stdout.write(text);
+    return;
+  }
+
+  const policyPath = join(dirname(resolvedEntry), manifestPolicyFilename());
+  if (existsSync(policyPath)) {
+    die(`manifest init refuses to overwrite ${policyPath}`);
+  }
+  writeFileSync(policyPath, text);
+  console.log(`wrote ${policyPath}`);
 }
 
 function runExplainCommand(args: Array<string>): void {

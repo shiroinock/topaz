@@ -708,6 +708,11 @@ run_cli_smoke() {
     printf '%s\n' "$help" | sed 's/^/    /' >&2
     exit 1
   fi
+  if [[ "$help" != *"--write"*"strict-ts.json"* ]]; then
+    echo "FAIL [cli_help]: missing manifest init --write help" >&2
+    printf '%s\n' "$help" | sed 's/^/    /' >&2
+    exit 1
+  fi
   if [[ "$help" != *"topaz explain capability <name>"* ]]; then
     echo "FAIL [cli_help]: missing explain capability usage" >&2
     printf '%s\n' "$help" | sed 's/^/    /' >&2
@@ -772,11 +777,14 @@ run_cli_smoke() {
   run_cli_fail_case cli_doctor_emit_c_flag "topaz: doctor does not accept compile option --emit-c-only" doctor --emit-c-only build/doctor_report/main.ts
   run_cli_fail_case cli_doctor_output_flag "topaz: doctor does not accept compile option -o" doctor build/doctor_report/main.ts -o build/doctor_report/out
 
+  rm -rf build/manifest_cli_check
   mkdir -p build/manifest_cli_check/pure_missing
   mkdir -p build/manifest_cli_check/effectful_missing
   mkdir -p build/manifest_cli_check/full_policy
   mkdir -p build/manifest_cli_check/partial_policy
   mkdir -p build/manifest_cli_check/invalid_policy
+  mkdir -p build/manifest_cli_check/write_policy
+  mkdir -p build/manifest_cli_check/write_policy_before_entry
   printf '%s\n' \
     'import { join } from "std/path";' \
     '' \
@@ -813,6 +821,19 @@ run_cli_smoke() {
     'console.log(data);' \
     > build/manifest_cli_check/invalid_policy/main.ts
   printf '%s\n' '[]' > build/manifest_cli_check/invalid_policy/strict-ts.json
+  printf '%s\n' \
+    'import { readFileSync, writeFileSync } from "std/fs";' \
+    '' \
+    'const data = readFileSync("input.txt", "utf8");' \
+    'writeFileSync("build/manifest_cli_check/out.txt", data);' \
+    'console.log(data);' \
+    > build/manifest_cli_check/write_policy/main.ts
+  printf '%s\n' \
+    'import { readFileSync } from "std/fs";' \
+    '' \
+    'const data = readFileSync("input.txt", "utf8");' \
+    'data;' \
+    > build/manifest_cli_check/write_policy_before_entry/main.ts
 
   local cli_check_pure_entry
   cli_check_pure_entry="$(pwd)/build/manifest_cli_check/pure_missing/pure.ts"
@@ -902,6 +923,10 @@ run_cli_smoke() {
     printf '%s\n' "$cli_manifest_effectful_out" | sed 's/^/    /' >&2
     exit 1
   fi
+  if [[ -e build/manifest_cli_check/effectful_missing/strict-ts.json ]]; then
+    echo "FAIL [cli_manifest_init_effectful]: preview unexpectedly created strict-ts.json" >&2
+    exit 1
+  fi
   echo "PASS [cli_manifest_init_effectful]"
 
   local cli_manifest_pure_expected
@@ -917,6 +942,66 @@ run_cli_smoke() {
     exit 1
   fi
   echo "PASS [cli_manifest_init_pure]"
+
+  local cli_manifest_write_policy
+  cli_manifest_write_policy="$(pwd)/build/manifest_cli_check/write_policy/strict-ts.json"
+  local cli_manifest_write_out
+  cli_manifest_write_out=$(node dist/cli.js manifest init build/manifest_cli_check/write_policy/main.ts --write)
+  if [[ "$cli_manifest_write_out" != "wrote ${cli_manifest_write_policy}" ]]; then
+    echo "FAIL [cli_manifest_init_write]: missing write success line" >&2
+    printf '%s\n' "$cli_manifest_write_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  local cli_manifest_written_text
+  cli_manifest_written_text=$(cat build/manifest_cli_check/write_policy/strict-ts.json)
+  if [[ "$cli_manifest_written_text" != "$cli_manifest_effectful_expected" ]]; then
+    echo "FAIL [cli_manifest_init_write]: written manifest mismatch" >&2
+    printf '%s\n' "$cli_manifest_written_text" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  local cli_manifest_write_check_out
+  cli_manifest_write_check_out=$(node dist/cli.js check build/manifest_cli_check/write_policy/main.ts)
+  if [[ "$cli_manifest_write_check_out" != *"policy: ${cli_manifest_write_policy} (found)"* || "$cli_manifest_write_check_out" != *"status: ok"* ]]; then
+    echo "FAIL [cli_manifest_init_write]: written policy did not pass check" >&2
+    printf '%s\n' "$cli_manifest_write_check_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_manifest_init_write]"
+
+  local cli_manifest_write_before_policy
+  cli_manifest_write_before_policy="$(pwd)/build/manifest_cli_check/write_policy_before_entry/strict-ts.json"
+  local cli_manifest_write_before_expected
+  cli_manifest_write_before_expected=$'{\n  "capabilities": [\n    "fs.read"\n  ]\n}'
+  local cli_manifest_write_before_out
+  cli_manifest_write_before_out=$(node dist/cli.js manifest init --write build/manifest_cli_check/write_policy_before_entry/main.ts)
+  if [[ "$cli_manifest_write_before_out" != "wrote ${cli_manifest_write_before_policy}" ]]; then
+    echo "FAIL [cli_manifest_init_write_before_entry]: missing write success line" >&2
+    printf '%s\n' "$cli_manifest_write_before_out" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  local cli_manifest_write_before_text
+  cli_manifest_write_before_text=$(cat build/manifest_cli_check/write_policy_before_entry/strict-ts.json)
+  if [[ "$cli_manifest_write_before_text" != "$cli_manifest_write_before_expected" ]]; then
+    echo "FAIL [cli_manifest_init_write_before_entry]: written manifest mismatch" >&2
+    printf '%s\n' "$cli_manifest_write_before_text" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  echo "PASS [cli_manifest_init_write_before_entry]"
+
+  local cli_manifest_existing_before
+  cli_manifest_existing_before=$(cat build/manifest_cli_check/full_policy/strict-ts.json)
+  run_cli_fail_case cli_manifest_init_write_existing "topaz: manifest init refuses to overwrite" manifest init build/manifest_cli_check/full_policy/main.ts --write
+  local cli_manifest_existing_after
+  cli_manifest_existing_after=$(cat build/manifest_cli_check/full_policy/strict-ts.json)
+  if [[ "$cli_manifest_existing_after" != "$cli_manifest_existing_before" ]]; then
+    echo "FAIL [cli_manifest_init_write_existing]: existing policy changed" >&2
+    exit 1
+  fi
+  run_cli_fail_case cli_manifest_init_write_repeated "topaz: manifest init refuses repeated --write" manifest init --write build/manifest_cli_check/effectful_missing/main.ts --write
+  run_cli_fail_case cli_doctor_write_flag "topaz: doctor does not accept option --write" doctor build/doctor_report/main.ts --write
+  run_cli_fail_case cli_check_write_flag "topaz: check does not accept option --write" check build/manifest_cli_check/full_policy/main.ts --write
+  run_cli_fail_case cli_explain_write_flag "topaz: explain does not accept option --write" explain capability fs.read --write
+  run_cli_fail_case cli_compile_write_flag "topaz: unknown option --write" --write examples/fib.ts
 
   run_cli_fail_case cli_manifest_init_missing_subcommand "topaz: manifest expects init <entry.ts>" manifest
   run_cli_fail_case cli_manifest_init_compile_flag "topaz: manifest init does not accept compile option --emit-c-only" manifest init build/manifest_cli_check/effectful_missing/main.ts --emit-c-only
