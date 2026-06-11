@@ -100,7 +100,8 @@ function rawCliArgs(argv: Array<string>): Array<string> {
 }
 
 function runDoctorCommand(args: Array<string>): void {
-  let entry: string | undefined = undefined;
+  let entry = "";
+  let hasEntry = false;
   let i = 0;
   while (i < args.length) {
     const arg = args[i];
@@ -116,12 +117,13 @@ function runDoctorCommand(args: Array<string>): void {
     if (arg.startsWith("-")) {
       die(`doctor does not accept option ${arg}`);
     }
-    if (entry !== undefined) die(`unexpected positional argument ${arg}`);
+    if (hasEntry) die(`unexpected positional argument ${arg}`);
     entry = arg;
+    hasEntry = true;
     i = i + 1;
   }
 
-  if (entry === undefined) die("doctor expects <entry.ts>");
+  if (!hasEntry) die("doctor expects <entry.ts>");
 
   const resolvedEntry = resolve(entry);
   if (extname(resolvedEntry) !== ".ts") {
