@@ -197,6 +197,18 @@ if [[ "${doctor_selfhost_out}" != *"literal union source/status template blocker
   exit 1
 fi
 echo "PASS [doctor_selfhost]"
+mkdir -p build/capability_explain_selfhost
+if ! capability_explain_selfhost_err=$(node dist/cli.js src/capability_explain.ts --emit-c-only -o build/capability_explain_selfhost/capability_explain 2>&1); then
+  echo "FAIL [capability_explain_selfhost]: expected capability explain C emission" >&2
+  printf '%s\n' "${capability_explain_selfhost_err}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ ! -f build/capability_explain_selfhost/capability_explain.c ]]; then
+  echo "FAIL [capability_explain_selfhost]: missing emitted C" >&2
+  exit 1
+fi
+cc -O2 -Iruntime -Wall -Wextra -c build/capability_explain_selfhost/capability_explain.c -o build/capability_explain_selfhost/capability_explain.o
+echo "PASS [capability_explain_selfhost] literal-union descriptor status template blocker cleared"
 manifest_selfhost_out=$(pnpm run check:manifest-selfhost)
 if [[ "${manifest_selfhost_out}" != *"manifest selfhost ok:"* ]]; then
   echo "FAIL [manifest_selfhost]: missing ok summary" >&2

@@ -24,9 +24,11 @@ export function formatCapabilityExplanation(name: string): string | undefined {
     "apis:",
   ];
   for (const desc of orderedCapabilityDescriptors(descriptors)) {
-    lines.push(`  - ${descriptorSourceLabel(desc)}`);
+    const source = descriptorSourceLabel(desc);
+    const status = descriptorStatusLabel(desc.status);
+    lines.push(`  - ${source}`);
     lines.push(`    semantic: ${desc.semanticName}`);
-    lines.push(`    status: ${desc.status}`);
+    lines.push(`    status: ${status}`);
     lines.push(`    explanation: ${desc.explanation}`);
   }
   return lines.join("\n");
@@ -68,4 +70,10 @@ function appendDescriptorsWithStatus(
 function descriptorSourceLabel(desc: BuiltinDescriptor): string {
   if (desc.kind === "import") return `${desc.specifier}.${desc.importedName}`;
   return `synthetic ${desc.globalName}`;
+}
+
+function descriptorStatusLabel(status: "public" | "compat" | "synthetic_compat"): string {
+  if (status === "public") return "public";
+  if (status === "compat") return "compat";
+  return "synthetic_compat";
 }
