@@ -2239,6 +2239,14 @@ TOPAZ
     echo "FAIL [runtime_substrate_string_map_set]: missing substrate string set equality helper" >&2
     exit 1
   fi
+  if ! grep -q "TOPAZ_MAP_DEFINE(boolean_.*topaz_hash_boolean, topaz_key_eq_boolean" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing substrate boolean map hash/equality helpers" >&2
+    exit 1
+  fi
+  if ! grep -q "TOPAZ_SET_DEFINE(boolean,.*topaz_hash_boolean, topaz_key_eq_boolean" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing substrate boolean set hash/equality helpers" >&2
+    exit 1
+  fi
   local string_eq_forward_line
   local string_eq_bridge_line
   string_eq_forward_line=$(grep -nF "static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_string_eq(topaz_string a, topaz_string b);" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
@@ -2263,10 +2271,76 @@ TOPAZ
     printf '%s\n' "${string_eq_bridge_body}" | sed 's/^/    /' >&2
     exit 1
   fi
+  local boolean_hash_forward_line
+  local boolean_hash_bridge_line
+  local boolean_key_eq_forward_line
+  local boolean_key_eq_bridge_line
+  boolean_hash_forward_line=$(grep -nF "static __attribute__((unused)) topaz_number topaz_fn_runtime_prelude___topaz_boolean_hash(topaz_boolean value);" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  boolean_hash_bridge_line=$(grep -nF "static inline size_t topaz_hash_boolean(topaz_boolean b) {" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  boolean_key_eq_forward_line=$(grep -nF "static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_boolean_key_eq(topaz_boolean a, topaz_boolean b);" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  boolean_key_eq_bridge_line=$(grep -nF "static inline topaz_boolean topaz_key_eq_boolean(topaz_boolean a, topaz_boolean b) {" build/runtime_substrate_string_map_set.c | head -n1 | cut -d: -f1 || true)
+  if [[ -z "${boolean_hash_forward_line}" || -z "${boolean_hash_bridge_line}" || "${boolean_hash_forward_line}" -ge "${boolean_hash_bridge_line}" ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing prelude boolean hash forward declaration before bridge" >&2
+    exit 1
+  fi
+  if [[ -z "${boolean_key_eq_forward_line}" || -z "${boolean_key_eq_bridge_line}" || "${boolean_key_eq_forward_line}" -ge "${boolean_key_eq_bridge_line}" ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing prelude boolean key equality forward declaration before bridge" >&2
+    exit 1
+  fi
+  local boolean_hash_bridge_body
+  boolean_hash_bridge_body=$(awk '
+    /^static inline size_t topaz_hash_boolean\(topaz_boolean b\) \{/ { in_fn = 1 }
+    in_fn { print }
+    in_fn && /^}/ { exit }
+  ' build/runtime_substrate_string_map_set.c)
+  if [[ "${boolean_hash_bridge_body}" != *"return (size_t)topaz_fn_runtime_prelude___topaz_boolean_hash(b);"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_hash_boolean does not delegate to runtime prelude boolean hash" >&2
+    printf '%s\n' "${boolean_hash_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${boolean_hash_bridge_body}" == *"return b ? 1u : 0u;"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_hash_boolean still embeds old boolean hash" >&2
+    printf '%s\n' "${boolean_hash_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  local boolean_key_eq_bridge_body
+  boolean_key_eq_bridge_body=$(awk '
+    /^static inline topaz_boolean topaz_key_eq_boolean\(topaz_boolean a, topaz_boolean b\) \{/ { in_fn = 1 }
+    in_fn { print }
+    in_fn && /^}/ { exit }
+  ' build/runtime_substrate_string_map_set.c)
+  if [[ "${boolean_key_eq_bridge_body}" != *"return topaz_fn_runtime_prelude___topaz_boolean_key_eq(a, b);"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_key_eq_boolean does not delegate to runtime prelude boolean key equality" >&2
+    printf '%s\n' "${boolean_key_eq_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${boolean_key_eq_bridge_body}" == *"return a == b;"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: topaz_key_eq_boolean still embeds old boolean equality" >&2
+    printf '%s\n' "${boolean_key_eq_bridge_body}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_boolean_hash(topaz_boolean value) {" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing runtime prelude boolean hash generated definition" >&2
+    exit 1
+  fi
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_boolean_key_eq(topaz_boolean a, topaz_boolean b) {" build/runtime_substrate_string_map_set.c; then
+    echo "FAIL [runtime_substrate_string_map_set]: missing runtime prelude boolean key equality generated definition" >&2
+    exit 1
+  fi
   local string_eq_detail_out
   string_eq_detail_out=$(pnpm run check:runtime-substrate -- --details)
   if [[ "${string_eq_detail_out}" != *"topaz_string_eq (helper,"* || "${string_eq_detail_out}" != *"migration=container-monomorph-boundary"* || "${string_eq_detail_out}" != *"runtime prelude"* || "${string_eq_detail_out}" != *"C bridge for Map/Set macro string key equality"* ]]; then
     echo "FAIL [runtime_substrate_string_map_set]: substrate details do not describe topaz_string_eq as a prelude bridge in the container lane" >&2
+    printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${string_eq_detail_out}" != *"topaz_hash_boolean (helper,"* || "${string_eq_detail_out}" != *"C bridge for Map/Set macro boolean key hashing"* || "${string_eq_detail_out}" != *"__topaz_boolean_hash"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: substrate details do not describe topaz_hash_boolean as a prelude bridge in the container lane" >&2
+    printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+  if [[ "${string_eq_detail_out}" != *"topaz_key_eq_boolean (helper,"* || "${string_eq_detail_out}" != *"C bridge for Map/Set macro boolean key equality"* || "${string_eq_detail_out}" != *"__topaz_boolean_key_eq"* ]]; then
+    echo "FAIL [runtime_substrate_string_map_set]: substrate details do not describe topaz_key_eq_boolean as a prelude bridge in the container lane" >&2
     printf '%s\n' "${string_eq_detail_out}" | sed 's/^/    /' >&2
     exit 1
   fi
@@ -2623,6 +2697,8 @@ run_module_case module_basic examples/module_basic_main.ts $'7\n11\n12\n12\n25\n
 run_module_case module_function_collision examples/module_function_collision_main.ts $'15\n10\n17'
 run_fail_case runtime_prelude_hidden_fail examples/runtime_prelude_hidden_fail.ts "unknown identifier '__topaz_runtime_prelude_init'"
 run_fail_case runtime_prelude_boolean_to_string_hidden_fail examples/runtime_prelude_boolean_to_string_hidden_fail.ts "unknown identifier '__topaz_boolean_to_string'"
+run_fail_case runtime_prelude_boolean_hash_hidden_fail examples/runtime_prelude_boolean_hash_hidden_fail.ts "unknown identifier '__topaz_boolean_hash'"
+run_fail_case runtime_prelude_boolean_key_eq_hidden_fail examples/runtime_prelude_boolean_key_eq_hidden_fail.ts "unknown identifier '__topaz_boolean_key_eq'"
 run_fail_case runtime_prelude_starts_with_hidden_fail examples/runtime_prelude_starts_with_hidden_fail.ts "unknown identifier '__topaz_string_starts_with'"
 run_fail_case runtime_prelude_ends_with_hidden_fail examples/runtime_prelude_ends_with_hidden_fail.ts "unknown identifier '__topaz_string_ends_with'"
 run_fail_case runtime_prelude_trim_start_hidden_fail examples/runtime_prelude_trim_start_hidden_fail.ts "unknown identifier '__topaz_string_trim_start'"

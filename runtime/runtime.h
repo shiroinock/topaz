@@ -782,8 +782,11 @@ static inline topaz_boolean topaz_key_eq_number(topaz_number a, topaz_number b) 
   return false;
 }
 
+static __attribute__((unused)) topaz_number topaz_fn_runtime_prelude___topaz_boolean_hash(topaz_boolean value);
+static __attribute__((unused)) topaz_boolean topaz_fn_runtime_prelude___topaz_boolean_key_eq(topaz_boolean a, topaz_boolean b);
+
 static inline size_t topaz_hash_boolean(topaz_boolean b) {
-  return b ? 1u : 0u;
+  return (size_t)topaz_fn_runtime_prelude___topaz_boolean_hash(b);
 }
 
 // Reference identity hash for class instances / interface fat-pointer payloads.
@@ -801,7 +804,7 @@ static inline size_t topaz_hash_pointer(const void *p) {
 }
 
 static inline topaz_boolean topaz_key_eq_boolean(topaz_boolean a, topaz_boolean b) {
-  return a == b;
+  return topaz_fn_runtime_prelude___topaz_boolean_key_eq(a, b);
 }
 
 // FNV-1a over UTF-8 bytes. ASCII-only at the codegen layer, so byte hashing is

@@ -373,9 +373,9 @@ const inventory = {
   },
   topaz_hash_boolean: {
     category: CATEGORY.CONTAINER,
-    reason: "boolean key hashing.",
+    reason: "C bridge for Map/Set macro boolean key hashing that delegates the exact 0/1 algorithm to the runtime prelude.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
-    next: NEXT.CONTAINER_MONOMORPH,
+    next: "Keep as the container macro hash-function ABI token until a future compiler-owned container monomorphization/backend design replaces Map/Set macros; the exact 0/1 algorithm itself is owned by the runtime prelude __topaz_boolean_hash helper.",
   },
   topaz_hash_pointer: {
     category: CATEGORY.CONTAINER,
@@ -385,9 +385,9 @@ const inventory = {
   },
   topaz_key_eq_boolean: {
     category: CATEGORY.CONTAINER,
-    reason: "boolean key equality.",
+    reason: "C bridge for Map/Set macro boolean key equality that delegates the exact equality algorithm to the runtime prelude.",
     migration: MIGRATION.CONTAINER_MONOMORPH,
-    next: NEXT.CONTAINER_MONOMORPH,
+    next: "Keep as the container macro equality-function ABI token until a future compiler-owned container monomorphization/backend design replaces Map/Set macros; the algorithm itself is owned by the runtime prelude __topaz_boolean_key_eq helper.",
   },
   topaz_hash_string: {
     category: CATEGORY.CONTAINER,

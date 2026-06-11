@@ -211,6 +211,16 @@ byte-equality algorithm now delegates to the runtime prelude
 `__topaz_string_eq` stable symbol. Full Array/Map/Set monomorph replacement
 remains future compiler/backend work.
 
+Phase 4.40 applies the same bridge pattern to boolean Map/Set key helpers.
+`topaz_hash_boolean(...)` and `topaz_key_eq_boolean(...)` remain the C ABI
+tokens required by `TOPAZ_MAP_DEFINE(...)` / `TOPAZ_SET_DEFINE(...)`, but their
+exact algorithms delegate to hidden runtime prelude symbols
+`__topaz_boolean_hash` and `__topaz_boolean_key_eq`. The `topaz_number` to
+`size_t` cast in the hash bridge is safe for this helper only because the
+prelude algorithm is constrained to exact `0` / `1` results. Number hashing and
+SameValueZero equality, string hashing, pointer/reference hashing/equality, and
+full container monomorph replacement remain future backend work.
+
 ## Phase 3.87 Active Intrinsic Family Substrate Policy
 
 The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes

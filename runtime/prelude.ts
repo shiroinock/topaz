@@ -6,6 +6,15 @@ function __topaz_boolean_to_string(value: boolean): string {
   return "false";
 }
 
+function __topaz_boolean_hash(value: boolean): number {
+  if (value) return 1;
+  return 0;
+}
+
+function __topaz_boolean_key_eq(a: boolean, b: boolean): boolean {
+  return a === b;
+}
+
 function __topaz_string_eq(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let i: number = 0;
