@@ -59,6 +59,32 @@ pnpm run build:release
 `pnpm run build:release` is the local mirror of the release workflow. Generated
 C warnings are expected unless `cc`, `pnpm`, or the final native compiler fails.
 
+## Tag Head Guard
+
+Before creating, pushing, or trusting any release tag or draft Release, verify
+that an existing tag points at the intended release `HEAD`.
+
+```sh
+tag="v0.1.3-rc.1"
+head="$(git rev-parse HEAD)"
+if git rev-parse -q --verify "${tag}^{commit}" >/dev/null; then
+  tag_head="$(git rev-parse "${tag}^{commit}")"
+  if [[ "${tag_head}" != "${head}" ]]; then
+    echo "STALE TAG: ${tag} points at ${tag_head}, not HEAD ${head}" >&2
+    echo "Stop. Do not push stale tags or reuse this draft Release." >&2
+    exit 1
+  fi
+else
+  git tag -a "${tag}" -m "Topaz ${tag}"
+fi
+```
+
+If the tag already exists and its peeled commit is not `HEAD`, stop. Do not
+push stale tags, force-move or delete remote tags, or reuse the draft Release.
+Choose a new RC tag, or ask for explicit approval before changing local-only
+tags. If the tag is absent, create the annotated tag at the current `HEAD` and
+continue with the normal release flow.
+
 ## Final Release Notes Format
 
 Before publishing a non-RC final release such as `v0.1.2`, replace the draft
@@ -114,16 +140,12 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
 
 1. Confirm the intended version from `MEMO.md` and the current release goal.
 2. Ensure the release commit is the intended `HEAD`.
-3. Create an annotated tag:
-
-   ```sh
-   git tag -a v0.1.0-rc.1 -m "Topaz v0.1.0-rc.1"
-   ```
-
+3. Run the Tag Head Guard above with the intended RC tag. If the tag is absent,
+   the guard creates the annotated tag at current `HEAD`.
 4. Push the tag only when the user has asked to publish the RC:
 
    ```sh
-   git push origin v0.1.0-rc.1
+   git push origin "${tag}"
    ```
 
 5. Wait for the `release artifact` GitHub Actions workflow.
@@ -219,7 +241,9 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
 Use this after an RC has passed black-box validation.
 
 1. Apply any fixes and repeat preflight.
-2. Create the final annotated tag, for example `v0.1.0`.
+2. Run the Tag Head Guard above with the intended final tag, for example
+   `v0.1.0`. If the tag is absent, the guard creates the annotated tag at
+   current `HEAD`.
 3. Push the tag to create/update the draft Release.
 4. Verify the Actions artifact and release assets.
 5. Download the draft Release assets and repeat the checksum + black-box

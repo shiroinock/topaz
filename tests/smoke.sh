@@ -473,6 +473,23 @@ if grep -Fq 'writeFileSync("guidance-smoke/out.txt", text, "utf8");' "${release_
   exit 1
 fi
 echo "PASS [release_guidance_skill_fixture]"
+for fragment in \
+  '## Tag Head Guard' \
+  'git rev-parse HEAD' \
+  'git rev-parse "${tag}^{commit}"' \
+  'STALE TAG:' \
+  'existing tag points at the intended release `HEAD`' \
+  'Do not push stale tags' \
+  'force-move or delete remote tags' \
+  'Choose a new RC tag' \
+  'explicit approval before changing local-only' \
+  'tags. If the tag is absent, create the annotated tag at the current `HEAD`'; do
+  if ! grep -Fq "${fragment}" "${release_skill}"; then
+    echo "FAIL [release_tag_head_guard_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [release_tag_head_guard_contract]"
 release_skill_runtime_prelude_section=$(awk '
   /For `v0\.1\.3` release candidates, also run a downloaded-artifact/ { in_section = 1 }
   in_section { print }
