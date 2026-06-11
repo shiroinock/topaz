@@ -443,6 +443,34 @@ if grep -Fq 'writeFileSync("guidance-smoke/out.txt", text, "utf8");' "${release_
   exit 1
 fi
 echo "PASS [release_guidance_skill_fixture]"
+mvp_doc="docs/mvp.md"
+for fragment in \
+  './topaz-darwin-arm64 --help' \
+  'doctor guidance-smoke/effectful.ts' \
+  'manifest init guidance-smoke/effectful.ts' \
+  'test ! -e guidance-smoke/strict-ts.json' \
+  'manifest init --write guidance-smoke/effectful.ts' \
+  'test -f guidance-smoke/strict-ts.json' \
+  'check guidance-smoke/effectful.ts' \
+  'explain capability fs.read' \
+  'explain std/fs' \
+  'readFileSync("guidance-smoke/input.txt", "utf8")' \
+  'writeFileSync("guidance-smoke/out.txt", text);' \
+  'fs.read' \
+  'fs.write' \
+  'io.stdout' \
+  'missing capabilities: none' \
+  'status: ok'; do
+  if ! grep -Fq "${fragment}" "${mvp_doc}"; then
+    echo "FAIL [mvp_guidance_handoff_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if grep -Fq 'writeFileSync("guidance-smoke/out.txt", text, "utf8");' "${mvp_doc}"; then
+  echo "FAIL [mvp_guidance_handoff_contract]: stale three-argument writeFileSync fixture" >&2
+  exit 1
+fi
+echo "PASS [mvp_guidance_handoff_contract]"
 substrate_out=$(pnpm run check:runtime-substrate)
 if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing migration lane summary" >&2

@@ -50,9 +50,46 @@ The compiler binary itself does not require Node.js, `pnpm`, or a checked-out
 `runtime/` directory. It still invokes the platform C compiler (`cc`) when
 producing a native output binary. Use `--emit-c-only` to stop after generated C.
 Current post-MVP builds also include v0.2 capability and manifest guidance
-commands; see the README for `doctor`, `manifest init`, `check`, and `explain`
-usage. Those commands were not part of the original MVP boundary described
-below.
+commands. Those commands were not part of the original MVP boundary described
+below, but v0.2 release-candidate validation should exercise them from the
+binary alone.
+
+Create a temporary guidance fixture next to the compiler binary:
+
+```sh
+mkdir -p guidance-smoke
+printf 'hello from fixture\n' > guidance-smoke/input.txt
+cat > guidance-smoke/effectful.ts <<'TS'
+import { readFileSync, writeFileSync } from "std/fs";
+import { writeStdout } from "std/process";
+
+const text = readFileSync("guidance-smoke/input.txt", "utf8");
+writeFileSync("guidance-smoke/out.txt", text);
+writeStdout(text);
+TS
+```
+
+Then run the implemented v0.2 guidance loop:
+
+```sh
+./topaz-darwin-arm64 --help
+./topaz-darwin-arm64 doctor guidance-smoke/effectful.ts
+./topaz-darwin-arm64 manifest init guidance-smoke/effectful.ts
+test ! -e guidance-smoke/strict-ts.json
+./topaz-darwin-arm64 manifest init --write guidance-smoke/effectful.ts
+test -f guidance-smoke/strict-ts.json
+./topaz-darwin-arm64 check guidance-smoke/effectful.ts
+./topaz-darwin-arm64 explain capability fs.read
+./topaz-darwin-arm64 explain std/fs
+```
+
+The fixture demonstrates the current `std/fs` and `std/process` surface:
+`readFileSync(path, "utf8")`, `writeFileSync(path, content)`, and
+`writeStdout(text)`. Its guidance should name `fs.read`, `fs.write`, and
+`io.stdout`. The plain `manifest init` command is a preview and must not write
+`guidance-smoke/strict-ts.json`; `manifest init --write` creates that
+entry-adjacent `strict-ts.json` only when it is absent. The follow-up `check`
+should report `missing capabilities: none` and `status: ok`.
 
 ## Build The Compiler From A Repository Checkout
 
@@ -225,6 +262,17 @@ Ask them to verify:
 - `shasum -a 256 -c SHA256SUMS` verifies the downloaded compiler asset.
 - The compile instructions create one runnable output binary from a simple
   `hello.ts`.
+- `./topaz-darwin-arm64 --help` shows the v0.2 guidance commands.
+- `doctor guidance-smoke/effectful.ts` reports the `fs.read`, `fs.write`, and
+  `io.stdout` requirements from the temporary fixture.
+- `manifest init guidance-smoke/effectful.ts` previews an entry-adjacent
+  `strict-ts.json` without writing it.
+- `manifest init --write guidance-smoke/effectful.ts` creates
+  `guidance-smoke/strict-ts.json` only when it is absent.
+- `check guidance-smoke/effectful.ts` accepts the written policy with
+  `missing capabilities: none` and `status: ok`.
+- `explain capability fs.read` and `explain std/fs` describe the capability and
+  public stdlib module without a repository checkout.
 - `std/process` can print output.
 - Unsupported package shapes fail clearly when attempted.
 - The documentation distinguishes the Node-based development/bootstrap CLI from
@@ -236,7 +284,8 @@ The following were intentionally after the MVP snapshot:
 
 - Capability inference, manifest generation, `doctor`, `check`, and `explain`
   guidance. Current repository builds have since implemented this v0.2 guidance
-  CLI; see the README for the live command contract.
+  CLI; the compiler-binary handoff path above includes the current black-box
+  command sequence.
 - Runtime sandboxing.
 - Async/await and Promise execution.
 - Regexp execution.
