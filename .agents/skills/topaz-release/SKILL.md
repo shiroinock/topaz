@@ -100,6 +100,12 @@ them to the still-draft final release with:
 gh release edit v0.1.3 --notes-file docs/releases/v0.1.3.md
 ```
 
+Before pushing or trusting the final `v0.1.3` tag, trusting final draft assets,
+or applying these notes, run the repo-local final-readiness checklist at
+`docs/releases/v0.1.3-readiness.md`. It keeps local gates, stale-tag stopping
+behavior, downloaded-artifact validation, release-note application, and the
+no-push/no-publish boundary in one checked-in place.
+
 Use this format, matching the `v0.1.1` release notes:
 
 ````md
@@ -249,6 +255,9 @@ Use this for a release candidate such as `v0.1.0-rc.1`.
 Use this after an RC has passed black-box validation.
 
 1. Apply any fixes and repeat preflight.
+   For final `v0.1.3`, read and follow
+   `docs/releases/v0.1.3-readiness.md` before pushing or trusting the final
+   tag, trusting final draft assets, or applying final release notes.
 2. Run the Tag Head Guard above with the intended final tag, for example
    `v0.1.0`. If the tag is absent, the guard creates the annotated tag at
    current `HEAD`.

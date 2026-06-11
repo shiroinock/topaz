@@ -390,6 +390,7 @@ echo "PASS [release_workflow_prerelease]"
 release_script="scripts/build-release.sh"
 release_skill=".agents/skills/topaz-release/SKILL.md"
 release_notes_v0_1_3="docs/releases/v0.1.3.md"
+release_readiness_v0_1_3="docs/releases/v0.1.3-readiness.md"
 for fragment in \
   'RELEASE [smoke ${artifact} guidance]' \
   'release_guidance_smoke' \
@@ -562,6 +563,44 @@ for fragment in \
   fi
 done
 echo "PASS [release_v0_1_3_notes_contract]"
+if [[ ! -f "${release_readiness_v0_1_3}" ]]; then
+  echo "FAIL [release_v0_1_3_readiness_contract]: missing ${release_readiness_v0_1_3}" >&2
+  exit 1
+fi
+for fragment in \
+  'v0.1.3 final readiness' \
+  'git status --short --branch' \
+  'pnpm run build' \
+  'pnpm test' \
+  'pnpm run build:release' \
+  'tag="v0.1.3"' \
+  'git rev-parse HEAD' \
+  'git rev-parse "${tag}^{commit}"' \
+  'if [[ "${tag_commit}" != "${head_commit}" ]]; then' \
+  'Stop. Do not push a stale tag' \
+  'force-move a remote tag' \
+  'delete a remote tag' \
+  'auto-publish' \
+  'shasum -a 256 -c SHA256SUMS' \
+  'examples/fib.ts' \
+  'runtime-prelude-smoke.ts' \
+  './topaz-darwin-arm64 runtime-prelude-smoke.ts -o ./runtime-prelude-smoke' \
+  'gh release edit v0.1.3 --notes-file docs/releases/v0.1.3.md'; do
+  if ! grep -Fq "${fragment}" "${release_readiness_v0_1_3}"; then
+    echo "FAIL [release_v0_1_3_readiness_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+for fragment in \
+  'docs/releases/v0.1.3-readiness.md' \
+  'Before pushing or trusting the final `v0.1.3` tag' \
+  'no-push/no-publish boundary'; do
+  if ! grep -Fq "${fragment}" "${release_skill}"; then
+    echo "FAIL [release_v0_1_3_readiness_contract]: release skill missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [release_v0_1_3_readiness_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \
