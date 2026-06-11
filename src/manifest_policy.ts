@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+
 import { builtinEffectVocabulary } from "./builtin_descriptors.js";
 
 export type ManifestPolicy = {
@@ -16,6 +18,12 @@ export type ManifestPolicyValidationResult = {
   diagnostics: Array<ManifestPolicyDiagnostic>;
 };
 
+export type ManifestPolicyFileLoadResult = {
+  found: boolean;
+  path: string;
+  result: ManifestPolicyValidationResult;
+};
+
 type ManifestPolicyTextParseState = {
   text: string;
   pos: number;
@@ -32,6 +40,26 @@ export function manifestPolicyFilename(): string {
 
 export function emptyManifestPolicy(): ManifestPolicy {
   return { capabilities: [] };
+}
+
+export function loadManifestPolicyFile(path: string): ManifestPolicyFileLoadResult {
+  if (!existsSync(path)) {
+    return {
+      found: false,
+      path,
+      result: {
+        ok: true,
+        policy: emptyManifestPolicy(),
+        diagnostics: [],
+      },
+    };
+  }
+
+  return {
+    found: true,
+    path,
+    result: parseManifestPolicyText(readFileSync(path, "utf8")),
+  };
 }
 
 export function validateManifestPolicyCapabilities(

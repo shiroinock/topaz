@@ -169,6 +169,20 @@ for required in "valid capabilities: fs.read, io.stdout" "empty object: none" "e
   fi
 done
 echo "PASS [manifest_policy_parse]"
+manifest_policy_load_out=$(pnpm run check:manifest-policy-load)
+if [[ "${manifest_policy_load_out}" != *"manifest policy load ok:"* ]]; then
+  echo "FAIL [manifest_policy_load]: missing ok summary" >&2
+  printf '%s\n' "${manifest_policy_load_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for required in "missing file: found=false" "valid capability file: fs.read, io.stdout" "non-object diagnostic: top-level value must be an object" "unknown diagnostic: unknown capability 'fs.delete'" "duplicate key diagnostic: duplicate top-level key 'capabilities'"; do
+  if [[ "${manifest_policy_load_out}" != *"${required}"* ]]; then
+    echo "FAIL [manifest_policy_load]: missing ${required}" >&2
+    printf '%s\n' "${manifest_policy_load_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+echo "PASS [manifest_policy_load]"
 doctor_report_out=$(pnpm run check:doctor-report)
 if [[ "${doctor_report_out}" != *"doctor report ok:"* ]]; then
   echo "FAIL [doctor_report]: missing ok summary" >&2
@@ -258,7 +272,7 @@ if [[ "${manifest_selfhost_out}" != *"Map<string, Array"* ]]; then
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${manifest_selfhost_out}" != *"capability policy array validator + text parser"* ]]; then
+if [[ "${manifest_selfhost_out}" != *"capability policy array validator + text parser + file loader"* ]]; then
   echo "FAIL [manifest_selfhost]: missing manifest policy selfhost text" >&2
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
