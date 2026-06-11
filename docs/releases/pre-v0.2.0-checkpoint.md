@@ -39,6 +39,18 @@ boundary:
 - `string-buffer-intrinsic-family: 5`
 - `bigint-limb-intrinsic-family: 8`
 
+Post-4.42, the container boundary has a bridge/residual split that release
+operators should check with `pnpm run check:runtime-substrate -- --details`:
+
+- `topaz_string_eq` delegates string equality to `__topaz_string_eq`.
+- `topaz_hash_boolean` delegates boolean hashing to `__topaz_boolean_hash`.
+- `topaz_key_eq_boolean` delegates boolean equality to
+  `__topaz_boolean_key_eq`.
+- `topaz_key_eq_number` delegates SameValueZero number equality to
+  `__topaz_number_key_eq`.
+- `topaz_hash_number`, `topaz_hash_string`, and `topaz_hash_pointer` remain
+  intentional residual C substrate.
+
 ## v0.2.0 Starting Surface
 
 `v0.2.0` should start from the existing guidance surface rather than runtime

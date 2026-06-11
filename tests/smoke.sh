@@ -661,6 +661,19 @@ for fragment in \
   'container-monomorph-boundary: 13' \
   'string-buffer-intrinsic-family: 5' \
   'bigint-limb-intrinsic-family: 8' \
+  'pnpm run check:runtime-substrate -- --details' \
+  'topaz_string_eq' \
+  '__topaz_string_eq' \
+  'topaz_hash_boolean' \
+  '__topaz_boolean_hash' \
+  'topaz_key_eq_boolean' \
+  '__topaz_boolean_key_eq' \
+  'topaz_key_eq_number' \
+  '__topaz_number_key_eq' \
+  'topaz_hash_number' \
+  'topaz_hash_string' \
+  'topaz_hash_pointer' \
+  'residual C substrate' \
   'topaz doctor <entry.ts>' \
   'topaz manifest init <entry.ts>' \
   'topaz manifest init --write <entry.ts>' \
@@ -692,6 +705,9 @@ fi
 for fragment in \
   'v0.2.0 RC readiness' \
   'git status --short --branch' \
+  'pnpm run check:runtime-prelude' \
+  'pnpm run check:runtime-header' \
+  'pnpm run check:runtime-substrate -- --details' \
   'pnpm run build' \
   'pnpm test' \
   'pnpm run build:release' \
@@ -747,6 +763,17 @@ for fragment in \
   'topaz check' \
   'topaz explain capability' \
   'topaz explain std/fs' \
+  'post-4.42 runtime boundary' \
+  'bridge/residual hash split' \
+  'pnpm run check:runtime-substrate -- --details' \
+  'topaz_string_eq' \
+  'topaz_hash_boolean' \
+  'topaz_key_eq_boolean' \
+  'topaz_key_eq_number' \
+  'topaz_hash_number' \
+  'topaz_hash_string' \
+  'topaz_hash_pointer' \
+  'residual C substrate' \
   'topaz-darwin-arm64' \
   'SHA256SUMS' \
   'shasum -a 256 -c SHA256SUMS' \
