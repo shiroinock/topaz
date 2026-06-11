@@ -6,7 +6,8 @@ track.
 
 v0.1.3 is the runtime TS prelude checkpoint. It still requires explicit
 human-owned release-state action before anyone trusts a final tag or GitHub
-Release, because the local final tag may be stale.
+Release, because the local final tag may be stale. Stale final tag handling is
+covered by `docs/releases/v0.1.3-release-state-handoff.md`.
 
 ## Readiness Evidence
 

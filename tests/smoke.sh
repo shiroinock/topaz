@@ -391,6 +391,9 @@ release_script="scripts/build-release.sh"
 release_skill=".agents/skills/topaz-release/SKILL.md"
 release_notes_v0_1_3="docs/releases/v0.1.3.md"
 release_readiness_v0_1_3="docs/releases/v0.1.3-readiness.md"
+release_state_handoff_v0_1_3="docs/releases/v0.1.3-release-state-handoff.md"
+pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
+runtime_migration_doc="docs/runtime-ts-migration.md"
 for fragment in \
   'RELEASE [smoke ${artifact} guidance]' \
   'release_guidance_smoke' \
@@ -601,8 +604,38 @@ for fragment in \
   fi
 done
 echo "PASS [release_v0_1_3_readiness_contract]"
-pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
-runtime_migration_doc="docs/runtime-ts-migration.md"
+if [[ ! -f "${release_state_handoff_v0_1_3}" ]]; then
+  echo "FAIL [release_v0_1_3_state_handoff_contract]: missing ${release_state_handoff_v0_1_3}" >&2
+  exit 1
+fi
+for fragment in \
+  'v0.1.3 release state handoff' \
+  'pnpm run build' \
+  'pnpm test' \
+  'pnpm run build:release' \
+  'git rev-parse HEAD' \
+  'git rev-parse "${tag}^{commit}"' \
+  'STALE FINAL TAG' \
+  'Do not push' \
+  'Do not reuse the draft Release' \
+  'Do not silently switch to v0.1.4' \
+  'explicit human approval' \
+  'new patch/RC release vehicle' \
+  'defer publication'; do
+  if ! grep -Fq "${fragment}" "${release_state_handoff_v0_1_3}"; then
+    echo "FAIL [release_v0_1_3_state_handoff_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq "${release_state_handoff_v0_1_3}" "${release_skill}"; then
+  echo "FAIL [release_v0_1_3_state_handoff_contract]: release skill missing handoff link" >&2
+  exit 1
+fi
+if ! grep -Fq "${release_state_handoff_v0_1_3}" "${pre_v0_2_checkpoint}"; then
+  echo "FAIL [release_v0_1_3_state_handoff_contract]: pre-v0.2 checkpoint missing handoff link" >&2
+  exit 1
+fi
+echo "PASS [release_v0_1_3_state_handoff_contract]"
 if [[ ! -f "${pre_v0_2_checkpoint}" ]]; then
   echo "FAIL [pre_v0_2_0_checkpoint_contract]: missing ${pre_v0_2_checkpoint}" >&2
   exit 1

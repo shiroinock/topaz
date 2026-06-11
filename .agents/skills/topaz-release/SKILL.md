@@ -90,7 +90,9 @@ If the tag already exists and its peeled commit is not `HEAD`, stop. Do not
 push stale tags, force-move or delete remote tags, or reuse the draft Release.
 Choose a new RC tag, or ask for explicit approval before changing local-only
 tags. If the tag is absent, create the annotated tag at the current `HEAD` and
-continue with the normal release flow.
+continue with the normal release flow. For a stale final `v0.1.3` tag, follow
+`docs/releases/v0.1.3-release-state-handoff.md` before changing tag or draft
+Release state.
 
 ## Final Release Notes Format
 
@@ -112,6 +114,9 @@ or applying these notes, run the repo-local final-readiness checklist at
 `docs/releases/v0.1.3-readiness.md`. It keeps local gates, stale-tag stopping
 behavior, downloaded-artifact validation, release-note application, and the
 no-push/no-publish boundary in one checked-in place.
+If the final tag comparison reports a stale final tag, follow
+`docs/releases/v0.1.3-release-state-handoff.md` instead of pushing the tag,
+reusing the draft Release, or silently choosing a different release vehicle.
 
 Use this format, matching the `v0.1.1` release notes:
 
@@ -264,7 +269,9 @@ Use this after an RC has passed black-box validation.
 1. Apply any fixes and repeat preflight.
    For final `v0.1.3`, read and follow
    `docs/releases/v0.1.3-readiness.md` before pushing or trusting the final
-   tag, trusting final draft assets, or applying final release notes.
+   tag, trusting final draft assets, or applying final release notes. If that
+   path finds a stale final tag, stop and use
+   `docs/releases/v0.1.3-release-state-handoff.md`.
 2. Run the Tag Head Guard above with the intended final tag, for example
    `v0.1.0`. If the tag is absent, the guard creates the annotated tag at
    current `HEAD`.
