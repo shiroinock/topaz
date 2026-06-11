@@ -393,10 +393,19 @@ for fragment in \
   'release_guidance_smoke' \
   'topaz doctor <entry.ts>' \
   'topaz check <entry.ts>' \
+  'topaz manifest init <entry.ts>' \
   'topaz explain capability <name>' \
   'topaz explain std/<module>' \
   'doctor "${guidance_entry}"' \
   'check "${guidance_entry}"' \
+  'manifest init "${guidance_entry}"' \
+  'release_guidance_manifest_init' \
+  'policy_before=$(cat "${guidance_policy}")' \
+  'manifest init changed existing policy fixture' \
+  '"capabilities"' \
+  '"fs.read"' \
+  '"fs.write"' \
+  '"io.stdout"' \
   'explain capability fs.read' \
   'explain std/fs' \
   'status: ok'; do

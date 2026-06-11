@@ -88,6 +88,7 @@ assert_release_output_contains() {
 help_out=$("./${release_path}" --help)
 assert_release_output_contains "release_guidance_help" "${help_out}" "topaz doctor <entry.ts>"
 assert_release_output_contains "release_guidance_help" "${help_out}" "topaz check <entry.ts>"
+assert_release_output_contains "release_guidance_help" "${help_out}" "topaz manifest init <entry.ts>"
 assert_release_output_contains "release_guidance_help" "${help_out}" "topaz explain capability <name>"
 assert_release_output_contains "release_guidance_help" "${help_out}" "topaz explain std/<module>"
 
@@ -99,6 +100,31 @@ check_out=$("./${release_path}" check "${guidance_entry}")
 assert_release_output_contains "release_guidance_check" "${check_out}" "topaz check report:"
 assert_release_output_contains "release_guidance_check" "${check_out}" "missing capabilities: none"
 assert_release_output_contains "release_guidance_check" "${check_out}" "status: ok"
+
+assert_release_output_not_contains() {
+  local label="$1"
+  local output="$2"
+  local unexpected="$3"
+  if [[ "${output}" == *"${unexpected}"* ]]; then
+    echo "FAIL [${label}]: unexpected output fragment" >&2
+    echo "  unexpected fragment: ${unexpected}" >&2
+    echo "  got:" >&2
+    printf '%s\n' "${output}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+}
+
+policy_before=$(cat "${guidance_policy}")
+manifest_out=$("./${release_path}" manifest init "${guidance_entry}")
+assert_release_output_contains "release_guidance_manifest_init" "${manifest_out}" '"capabilities"'
+assert_release_output_contains "release_guidance_manifest_init" "${manifest_out}" '"fs.read"'
+assert_release_output_not_contains "release_guidance_manifest_init" "${manifest_out}" '"fs.write"'
+assert_release_output_not_contains "release_guidance_manifest_init" "${manifest_out}" '"io.stdout"'
+policy_after=$(cat "${guidance_policy}")
+if [[ "${policy_after}" != "${policy_before}" ]]; then
+  echo "FAIL [release_guidance_manifest_init]: manifest init changed existing policy fixture" >&2
+  exit 1
+fi
 
 capability_out=$("./${release_path}" explain capability fs.read)
 assert_release_output_contains "release_guidance_explain_capability" "${capability_out}" "topaz capability: fs.read"
