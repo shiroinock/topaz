@@ -363,6 +363,25 @@ if ! grep -Fq '"${release_flags[@]}"' "${release_workflow}"; then
   exit 1
 fi
 echo "PASS [release_workflow_prerelease]"
+release_script="scripts/build-release.sh"
+for fragment in \
+  'RELEASE [smoke ${artifact} guidance]' \
+  'release_guidance_smoke' \
+  'topaz doctor <entry.ts>' \
+  'topaz check <entry.ts>' \
+  'topaz explain capability <name>' \
+  'topaz explain std/<module>' \
+  'doctor "${guidance_entry}"' \
+  'check "${guidance_entry}"' \
+  'explain capability fs.read' \
+  'explain std/fs' \
+  'status: ok'; do
+  if ! grep -Fq "${fragment}" "${release_script}"; then
+    echo "FAIL [release_guidance_smoke_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [release_guidance_smoke_contract]"
 substrate_out=$(pnpm run check:runtime-substrate)
 if [[ "${substrate_out}" != *"migration lanes:"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: missing migration lane summary" >&2

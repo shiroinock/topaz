@@ -56,6 +56,56 @@ if [[ "${fib_out}" != "5702887" ]]; then
   exit 1
 fi
 
+echo "RELEASE [smoke ${artifact} guidance]"
+guidance_dir="build/release_guidance_smoke"
+guidance_entry="${guidance_dir}/effectful.ts"
+guidance_policy="${guidance_dir}/strict-ts.json"
+rm -rf "${guidance_dir}"
+mkdir -p "${guidance_dir}"
+cat > "${guidance_entry}" <<'EOF'
+import { readFileSync } from "std/fs";
+
+const text: string = readFileSync("examples/fixtures/node_fs_sample.txt", "utf8");
+const size: number = text.length;
+EOF
+cat > "${guidance_policy}" <<'EOF'
+{ "capabilities": ["fs.read"] }
+EOF
+
+assert_release_output_contains() {
+  local label="$1"
+  local output="$2"
+  local expected="$3"
+  if [[ "${output}" != *"${expected}"* ]]; then
+    echo "FAIL [${label}]: missing expected output fragment" >&2
+    echo "  expected fragment: ${expected}" >&2
+    echo "  got:" >&2
+    printf '%s\n' "${output}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+}
+
+help_out=$("./${release_path}" --help)
+assert_release_output_contains "release_guidance_help" "${help_out}" "topaz doctor <entry.ts>"
+assert_release_output_contains "release_guidance_help" "${help_out}" "topaz check <entry.ts>"
+assert_release_output_contains "release_guidance_help" "${help_out}" "topaz explain capability <name>"
+assert_release_output_contains "release_guidance_help" "${help_out}" "topaz explain std/<module>"
+
+doctor_out=$("./${release_path}" doctor "${guidance_entry}")
+assert_release_output_contains "release_guidance_doctor" "${doctor_out}" "topaz doctor report:"
+assert_release_output_contains "release_guidance_doctor" "${doctor_out}" "  fs.read: "
+
+check_out=$("./${release_path}" check "${guidance_entry}")
+assert_release_output_contains "release_guidance_check" "${check_out}" "topaz check report:"
+assert_release_output_contains "release_guidance_check" "${check_out}" "missing capabilities: none"
+assert_release_output_contains "release_guidance_check" "${check_out}" "status: ok"
+
+capability_out=$("./${release_path}" explain capability fs.read)
+assert_release_output_contains "release_guidance_explain_capability" "${capability_out}" "topaz capability: fs.read"
+
+module_out=$("./${release_path}" explain std/fs)
+assert_release_output_contains "release_guidance_explain_module" "${module_out}" "topaz builtin module: std/fs"
+
 echo "RELEASE [smoke ${artifact} binary-only]"
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/topaz-release.XXXXXX")
 cp "${release_path}" "${tmp_dir}/${artifact}"
