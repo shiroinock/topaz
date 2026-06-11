@@ -12,7 +12,7 @@ const TARGETS = [
   {
     source: "src/manifest_policy.ts",
     output: `${OUT_DIR}/manifest_policy`,
-    formerBlocker: "capability policy array validator",
+    formerBlocker: "capability policy array validator + text parser",
   },
 ];
 

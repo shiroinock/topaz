@@ -155,6 +155,20 @@ for required in "filename: strict-ts.json" "valid capabilities: fs.read, io.stdo
   fi
 done
 echo "PASS [manifest_policy]"
+manifest_policy_parse_out=$(pnpm run check:manifest-policy-parse)
+if [[ "${manifest_policy_parse_out}" != *"manifest policy parse ok:"* ]]; then
+  echo "FAIL [manifest_policy_parse]: missing ok summary" >&2
+  printf '%s\n' "${manifest_policy_parse_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for required in "valid capabilities: fs.read, io.stdout" "empty object: none" "extra keys ignored: fs.read" "invalid syntax diagnostic: expected string" "non-array diagnostic: 'capabilities' must be an array" "non-string diagnostic: 'capabilities' entries must be strings" "duplicate key diagnostic: duplicate top-level key 'capabilities'" "invalid number diagnostic: invalid number" "unknown diagnostic: unknown capability 'fs.delete'" "duplicate diagnostic: duplicate capability 'fs.read'"; do
+  if [[ "${manifest_policy_parse_out}" != *"${required}"* ]]; then
+    echo "FAIL [manifest_policy_parse]: missing ${required}" >&2
+    printf '%s\n' "${manifest_policy_parse_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+echo "PASS [manifest_policy_parse]"
 doctor_report_out=$(pnpm run check:doctor-report)
 if [[ "${doctor_report_out}" != *"doctor report ok:"* ]]; then
   echo "FAIL [doctor_report]: missing ok summary" >&2
@@ -244,7 +258,7 @@ if [[ "${manifest_selfhost_out}" != *"Map<string, Array"* ]]; then
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${manifest_selfhost_out}" != *"capability policy array validator"* ]]; then
+if [[ "${manifest_selfhost_out}" != *"capability policy array validator + text parser"* ]]; then
   echo "FAIL [manifest_selfhost]: missing manifest policy selfhost text" >&2
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1

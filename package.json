@@ -24,6 +24,7 @@
     "check:effect-selfhost": "node scripts/check-effect-selfhost.mjs",
     "check:manifest-requirements": "node scripts/check-manifest-requirements.mjs",
     "check:manifest-policy": "node scripts/check-manifest-policy.mjs",
+    "check:manifest-policy-parse": "node scripts/check-manifest-policy-parse.mjs",
     "check:manifest-selfhost": "node scripts/check-manifest-selfhost.mjs",
     "check:doctor-report": "node scripts/check-doctor-report.mjs",
     "check:doctor-selfhost": "node scripts/check-doctor-selfhost.mjs",
