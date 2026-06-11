@@ -14,6 +14,11 @@ const TARGETS = [
     output: `${OUT_DIR}/manifest_policy`,
     formerBlocker: "capability policy array validator + text parser + file loader",
   },
+  {
+    source: "src/manifest_check.ts",
+    output: `${OUT_DIR}/manifest_check`,
+    formerBlocker: "strict-ts policy coverage evaluator",
+  },
 ];
 
 function run(command, args) {

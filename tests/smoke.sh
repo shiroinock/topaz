@@ -183,6 +183,20 @@ for required in "missing file: found=false" "valid capability file: fs.read, io.
   fi
 done
 echo "PASS [manifest_policy_load]"
+manifest_check_out=$(pnpm run check:manifest-check)
+if [[ "${manifest_check_out}" != *"manifest check ok:"* ]]; then
+  echo "FAIL [manifest_check]: missing ok summary" >&2
+  printf '%s\n' "${manifest_check_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for required in "pure missing policy: ok" "effectful missing policy: failed" "full policy: ok" "partial policy: missing fs.write" "invalid diagnostic: top-level value must be an object" "unknown diagnostic: unknown capability 'fs.delete'"; do
+  if [[ "${manifest_check_out}" != *"${required}"* ]]; then
+    echo "FAIL [manifest_check]: missing ${required}" >&2
+    printf '%s\n' "${manifest_check_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+echo "PASS [manifest_check]"
 doctor_report_out=$(pnpm run check:doctor-report)
 if [[ "${doctor_report_out}" != *"doctor report ok:"* ]]; then
   echo "FAIL [doctor_report]: missing ok summary" >&2
@@ -267,6 +281,11 @@ if [[ "${manifest_selfhost_out}" != *"src/manifest_policy.ts"* ]]; then
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${manifest_selfhost_out}" != *"src/manifest_check.ts"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing manifest check target" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 if [[ "${manifest_selfhost_out}" != *"Map<string, Array"* ]]; then
   echo "FAIL [manifest_selfhost]: missing former Map<string, Array blocker text" >&2
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
@@ -274,6 +293,11 @@ if [[ "${manifest_selfhost_out}" != *"Map<string, Array"* ]]; then
 fi
 if [[ "${manifest_selfhost_out}" != *"capability policy array validator + text parser + file loader"* ]]; then
   echo "FAIL [manifest_selfhost]: missing manifest policy selfhost text" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${manifest_selfhost_out}" != *"strict-ts policy coverage evaluator"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing manifest check selfhost text" >&2
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi
