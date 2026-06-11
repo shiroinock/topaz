@@ -955,6 +955,29 @@ for fragment in \
     exit 1
   fi
 done
+for fragment in \
+  'runtime substrate inventory ok: 56 symbols classified' \
+  'bigint-limb-intrinsic-family: 8' \
+  'c-abi-type-boundary: 8' \
+  'container-monomorph-boundary: 13' \
+  'exception-boundary: 4' \
+  'host-abi-boundary: 12' \
+  'libc-libm-boundary: 3' \
+  'raw-memory-boundary: 3' \
+  'string-buffer-intrinsic-family: 5' \
+  'needs-bigint-limb-intrinsics: closed' \
+  'needs-string-buffer-intrinsics: closed' \
+  'topaz_hash_string (helper,' \
+  'reason=residual C substrate for FNV-1a string byte hashing with unsigned overflow and the container size_t hash ABI.' \
+  'topaz_key_eq_number (helper,' \
+  'reason=C bridge for Map/Set macro number key equality delegating SameValueZero equality to the runtime prelude.'; do
+  if [[ "${substrate_detail_out}" != *"${fragment}"* ]]; then
+    echo "FAIL [runtime_substrate_saturation_guard]: missing saturation fragment ${fragment}" >&2
+    printf '%s\n' "${substrate_detail_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+echo "PASS [runtime_substrate_saturation_guard]"
 mkdir -p build
 tmp_runtime_substrate="build/runtime_substrate_probe.h"
 cp runtime/runtime.h "${tmp_runtime_substrate}"

@@ -239,6 +239,15 @@ hashing depends on reference-identity pointer bits that Topaz source cannot
 model. Future movement requires an explicit hash/integer/pointer/container
 backend decision rather than helper-by-helper runtime prelude migration.
 
+Phase 4.45 turns that post-4.42 boundary into a normal smoke-level saturation
+guard. `pnpm test` now checks the detailed substrate report still classifies
+56 symbols, keeps the eight active migration lane counts fixed, keeps the
+legacy string-buffer and bigint-limb lanes closed, and shows both halves of
+the container/hash split: residual hash helpers such as `topaz_hash_string`
+remain C substrate, while equality bridge tokens such as
+`topaz_key_eq_number` delegate their algorithms to the runtime prelude. Any
+future count movement needs its own migration, backend, or intrinsic decision.
+
 ## Phase 3.87 Active Intrinsic Family Substrate Policy
 
 The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes
