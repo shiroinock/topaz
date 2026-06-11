@@ -141,6 +141,20 @@ if [[ "${manifest_requirements_out}" == *"path.join"* || "${manifest_requirement
   exit 1
 fi
 echo "PASS [manifest_requirements]"
+manifest_policy_out=$(pnpm run check:manifest-policy)
+if [[ "${manifest_policy_out}" != *"manifest policy ok:"* ]]; then
+  echo "FAIL [manifest_policy]: missing ok summary" >&2
+  printf '%s\n' "${manifest_policy_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+for required in "filename: strict-ts.json" "valid capabilities: fs.read, io.stdout" "empty capabilities: none" "unknown diagnostic: unknown capability 'fs.delete'" "duplicate diagnostic: duplicate capability 'fs.read'"; do
+  if [[ "${manifest_policy_out}" != *"${required}"* ]]; then
+    echo "FAIL [manifest_policy]: missing ${required}" >&2
+    printf '%s\n' "${manifest_policy_out}" | sed 's/^/    /' >&2
+    exit 1
+  fi
+done
+echo "PASS [manifest_policy]"
 doctor_report_out=$(pnpm run check:doctor-report)
 if [[ "${doctor_report_out}" != *"doctor report ok:"* ]]; then
   echo "FAIL [doctor_report]: missing ok summary" >&2
@@ -220,8 +234,18 @@ if [[ "${manifest_selfhost_out}" != *"src/manifest_requirements.ts"* ]]; then
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${manifest_selfhost_out}" != *"src/manifest_policy.ts"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing manifest policy target" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 if [[ "${manifest_selfhost_out}" != *"Map<string, Array"* ]]; then
   echo "FAIL [manifest_selfhost]: missing former Map<string, Array blocker text" >&2
+  printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
+if [[ "${manifest_selfhost_out}" != *"capability policy array validator"* ]]; then
+  echo "FAIL [manifest_selfhost]: missing manifest policy selfhost text" >&2
   printf '%s\n' "${manifest_selfhost_out}" | sed 's/^/    /' >&2
   exit 1
 fi

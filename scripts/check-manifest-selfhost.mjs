@@ -3,11 +3,18 @@ import { mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const OUT_DIR = "build/manifest_selfhost";
-const TARGET = {
-  source: "src/manifest_requirements.ts",
-  output: `${OUT_DIR}/manifest_requirements`,
-  formerBlocker: "Map<string, Array<...>> monomorph blocker",
-};
+const TARGETS = [
+  {
+    source: "src/manifest_requirements.ts",
+    output: `${OUT_DIR}/manifest_requirements`,
+    formerBlocker: "Map<string, Array<...>> monomorph blocker",
+  },
+  {
+    source: "src/manifest_policy.ts",
+    output: `${OUT_DIR}/manifest_policy`,
+    formerBlocker: "capability policy array validator",
+  },
+];
 
 function run(command, args) {
   execFileSync(command, args, { stdio: "pipe" });
@@ -15,8 +22,10 @@ function run(command, args) {
 
 try {
   mkdirSync(OUT_DIR, { recursive: true });
-  run("node", ["dist/cli.js", TARGET.source, "--emit-c-only", "-o", TARGET.output]);
-  run("cc", ["-O2", "-Iruntime", "-Wall", "-Wextra", "-c", `${TARGET.output}.c`, "-o", `${TARGET.output}.o`]);
+  for (const target of TARGETS) {
+    run("node", ["dist/cli.js", target.source, "--emit-c-only", "-o", target.output]);
+    run("cc", ["-O2", "-Iruntime", "-Wall", "-Wextra", "-c", `${target.output}.c`, "-o", `${target.output}.o`]);
+  }
 } catch (err) {
   console.error("manifest selfhost check failed:");
   console.error(err instanceof Error ? err.message : String(err));
@@ -24,4 +33,6 @@ try {
 }
 
 console.log("manifest selfhost ok:");
-console.log(`  ${TARGET.source} -> ${TARGET.output}.c (${TARGET.formerBlocker} cleared)`);
+for (const target of TARGETS) {
+  console.log(`  ${target.source} -> ${target.output}.c (${target.formerBlocker} cleared)`);
+}
