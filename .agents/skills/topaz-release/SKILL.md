@@ -50,6 +50,9 @@ Before switching release operations from the `v0.1.3` runtime checkpoint to a
 evidence, the pinned runtime substrate/intrinsic boundary, and the current
 guidance CLI surface that should seed the v0.2 track. This does not change the
 manual publish policy below.
+For a `v0.2.0` RC, follow the non-mutating readiness checklist at
+`docs/releases/v0.2.0-rc-readiness.md` before creating, pushing, trusting, or
+publishing an RC tag or draft Release.
 
 ## Preflight
 
@@ -165,6 +168,9 @@ dependency note.
 Use this for a release candidate such as `v0.1.0-rc.1`.
 
 1. Confirm the intended version from `MEMO.md` and the current release goal.
+   For a `v0.2.0` release candidate, first complete
+   `docs/releases/v0.2.0-rc-readiness.md`; it is the non-mutating checklist for
+   the guidance CLI RC path.
 2. Ensure the release commit is the intended `HEAD`.
 3. Run the Tag Head Guard above with the intended RC tag. If the tag is absent,
    the guard creates the annotated tag at current `HEAD`.

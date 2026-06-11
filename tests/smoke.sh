@@ -393,6 +393,7 @@ release_notes_v0_1_3="docs/releases/v0.1.3.md"
 release_readiness_v0_1_3="docs/releases/v0.1.3-readiness.md"
 release_state_handoff_v0_1_3="docs/releases/v0.1.3-release-state-handoff.md"
 pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
+release_readiness_v0_2_0="docs/releases/v0.2.0-rc-readiness.md"
 runtime_migration_doc="docs/runtime-ts-migration.md"
 for fragment in \
   'RELEASE [smoke ${artifact} guidance]' \
@@ -683,6 +684,52 @@ if ! grep -Fq "${pre_v0_2_checkpoint}" "${release_skill}"; then
   exit 1
 fi
 echo "PASS [pre_v0_2_0_checkpoint_contract]"
+if [[ ! -f "${release_readiness_v0_2_0}" ]]; then
+  echo "FAIL [release_v0_2_0_rc_readiness_contract]: missing ${release_readiness_v0_2_0}" >&2
+  exit 1
+fi
+for fragment in \
+  'v0.2.0 RC readiness' \
+  'git status --short --branch' \
+  'pnpm run build' \
+  'pnpm test' \
+  'pnpm run build:release' \
+  'tag="v0.2.0-rc.1"' \
+  'git rev-parse HEAD' \
+  'git rev-parse "${tag}^{commit}"' \
+  'Do not push' \
+  'Do not publish' \
+  'shasum -a 256 -c SHA256SUMS' \
+  './topaz-darwin-arm64 --help' \
+  'doctor guidance-smoke/effectful.ts' \
+  'manifest init guidance-smoke/effectful.ts' \
+  'manifest init --write guidance-smoke/effectful.ts' \
+  'check guidance-smoke/effectful.ts' \
+  'explain capability fs.read' \
+  'explain std/fs' \
+  'fs.read' \
+  'fs.write' \
+  'io.stdout' \
+  'missing capabilities: none' \
+  'status: ok' \
+  'compile-time policy enforcement' \
+  'runtime sandboxing' \
+  'schema expansion' \
+  'richer policy discovery'; do
+  if ! grep -Fq "${fragment}" "${release_readiness_v0_2_0}"; then
+    echo "FAIL [release_v0_2_0_rc_readiness_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq "${release_readiness_v0_2_0}" "${release_skill}"; then
+  echo "FAIL [release_v0_2_0_rc_readiness_contract]: release skill missing readiness link" >&2
+  exit 1
+fi
+if ! grep -Fq "${release_readiness_v0_2_0}" "${pre_v0_2_checkpoint}"; then
+  echo "FAIL [release_v0_2_0_rc_readiness_contract]: pre-v0.2 checkpoint missing readiness link" >&2
+  exit 1
+fi
+echo "PASS [release_v0_2_0_rc_readiness_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \

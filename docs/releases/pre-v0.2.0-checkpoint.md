@@ -22,6 +22,7 @@ Repo-local readiness now includes:
 - copied-artifact and downloaded-artifact style runtime-prelude smoke
 - checked-in `docs/releases/v0.1.3.md`
 - checked-in `docs/releases/v0.1.3-readiness.md`
+- checked-in `docs/releases/v0.2.0-rc-readiness.md`
 
 ## Runtime Boundary
 
@@ -41,7 +42,8 @@ boundary:
 ## v0.2.0 Starting Surface
 
 `v0.2.0` should start from the existing guidance surface rather than runtime
-migration:
+migration. Release-candidate readiness for this track is covered by
+`docs/releases/v0.2.0-rc-readiness.md`:
 
 - `topaz doctor <entry.ts>`
 - `topaz manifest init <entry.ts>`
