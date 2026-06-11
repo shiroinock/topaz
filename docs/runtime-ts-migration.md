@@ -248,6 +248,17 @@ remain C substrate, while equality bridge tokens such as
 `topaz_key_eq_number` delegate their algorithms to the runtime prelude. Any
 future count movement needs its own migration, backend, or intrinsic decision.
 
+Phase 4.46 adds a separate normal smoke guard for the runtime prelude
+intrinsic boundary. It checks that `StringBuffer`, `BigIntBuffer`, and their
+representative `__topaz_*` intrinsic calls are still accepted only through the
+compiler-owned `runtime/prelude.ts` path, that the prelude still actively uses
+both families, that ordinary user-source hidden-helper failures remain present,
+and that the active intrinsic families stay documented separately from the
+closed legacy `needs-*` lanes. This guard is intentionally separate from the
+56-symbol `runtime/runtime.h` saturation count: future work may move one
+boundary without silently moving the other, but either movement needs its own
+ADR.
+
 ## Phase 3.87 Active Intrinsic Family Substrate Policy
 
 The `string-buffer-intrinsic-family` and `bigint-limb-intrinsic-family` lanes

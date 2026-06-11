@@ -978,6 +978,70 @@ for fragment in \
   fi
 done
 echo "PASS [runtime_substrate_saturation_guard]"
+codegen_runtime_prelude_guard=$(awk '
+  /if \(this\.isCompilingRuntimePrelude\(\)\) \{/ { in_guard = 1 }
+  in_guard { print }
+  /if \(callee\.name === "readFileSync"\)/ && in_guard { in_guard = 0 }
+' src/codegen.ts)
+for fragment in \
+  '__topaz_string_buffer_new' \
+  'emitInternalPreludeStringBufferNew' \
+  'checkInternalPreludeStringBufferNewArgs' \
+  'return T_STRING_BUFFER' \
+  '__topaz_bigint_buffer_new' \
+  'emitInternalPreludeBigIntBufferNew' \
+  'checkInternalPreludeBigIntBufferNewArgs' \
+  'return T_BIGINT_BUFFER'; do
+  if [[ "${codegen_runtime_prelude_guard}" != *"${fragment}"* ]]; then
+    echo "FAIL [runtime_prelude_intrinsic_boundary_guard]: codegen guard missing ${fragment}" >&2
+    exit 1
+  fi
+done
+for fragment in \
+  'if (refName === "StringBuffer" && sf.isInternalModule && sf.stableModuleId === "runtime_prelude")' \
+  'if (refName === "BigIntBuffer" && sf.isInternalModule && sf.stableModuleId === "runtime_prelude")'; do
+  if ! grep -Fq "${fragment}" src/codegen.ts; then
+    echo "FAIL [runtime_prelude_intrinsic_boundary_guard]: codegen pseudo type guard missing ${fragment}" >&2
+    exit 1
+  fi
+done
+for fragment in \
+  'const buffer: StringBuffer = __topaz_string_buffer_new' \
+  '__topaz_string_buffer_to_string(buffer)' \
+  'const buffer: BigIntBuffer = __topaz_bigint_buffer_new' \
+  '__topaz_bigint_buffer_to_bigint(buffer' \
+  '__topaz_bigint_limb(value'; do
+  if ! grep -Fq "${fragment}" runtime/prelude.ts; then
+    echo "FAIL [runtime_prelude_intrinsic_boundary_guard]: runtime prelude missing ${fragment}" >&2
+    exit 1
+  fi
+done
+for fragment in \
+  'run_fail_case runtime_prelude_string_buffer_hidden_fail' \
+  "unknown identifier '__topaz_string_buffer_new'" \
+  'run_fail_case runtime_prelude_bigint_buffer_hidden_fail' \
+  "unknown identifier '__topaz_bigint_buffer_new'"; do
+  if ! grep -Fq "${fragment}" tests/smoke.sh; then
+    echo "FAIL [runtime_prelude_intrinsic_boundary_guard]: hidden-helper smoke missing ${fragment}" >&2
+    exit 1
+  fi
+done
+for fragment in \
+  'string-buffer-intrinsic-family: 5' \
+  'bigint-limb-intrinsic-family: 8' \
+  'closed legacy `needs-*` lanes' \
+  '`needs-string-buffer-intrinsics`' \
+  '`needs-bigint-limb-intrinsics`' \
+  'compiler-owned `StringBuffer` pseudo type' \
+  '`__topaz_string_buffer_*`' \
+  'compiler-owned `BigIntBuffer` pseudo type' \
+  '`__topaz_bigint_*`'; do
+  if ! grep -Fq "${fragment}" docs/runtime-ts-migration.md; then
+    echo "FAIL [runtime_prelude_intrinsic_boundary_guard]: migration doc missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [runtime_prelude_intrinsic_boundary_guard]"
 mkdir -p build
 tmp_runtime_substrate="build/runtime_substrate_probe.h"
 cp runtime/runtime.h "${tmp_runtime_substrate}"
