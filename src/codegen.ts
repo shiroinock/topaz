@@ -12672,10 +12672,7 @@ class Emitter {
       const fulfilledIsUndefined = this.isExplicitUndefinedPromiseHandler(expr.args[0]);
       const rejectedIsUndefined = this.isExplicitUndefinedPromiseHandler(expr.args[1]);
       if (fulfilledIsUndefined && rejectedIsUndefined) {
-        throw new CodegenError(
-          { pos: expr.args[0].pos },
-          "Promise.then requires at least one function handler; both handlers being undefined is unsupported",
-        );
+        return baseType;
       }
       if (fulfilledIsUndefined) {
         const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
@@ -12759,6 +12756,9 @@ class Emitter {
     if (expr.args.length !== 1) {
       throw new CodegenError({ pos: expr.pos }, `Promise.catch expects exactly one argument, got ${expr.args.length}`);
     }
+    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+      return baseType;
+    }
     const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
     const resultType = fnType.returnType;
     if (resultType.kind === "promise") {
@@ -12793,6 +12793,9 @@ class Emitter {
     this.checkPromiseMethodTypeArgs(expr, "finally");
     if (expr.args.length !== 1) {
       throw new CodegenError({ pos: expr.pos }, `Promise.finally expects exactly one argument, got ${expr.args.length}`);
+    }
+    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+      return baseType;
     }
     const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
     const resultType = fnType.returnType;
@@ -12978,6 +12981,19 @@ class Emitter {
     return runnerName;
   }
 
+  private emitPromisePassThroughCall(callee: PropAccessExpr, label: string): string {
+    const id = this.tmpCounter++;
+    const sourceVar = `__topaz_${label}_src_${id}`;
+    const targetVar = `__topaz_${label}_target_${id}`;
+    const sourceExpr = this.emitExpression(callee.receiver);
+    return (
+      `({ void *${sourceVar} = ${sourceExpr}; ` +
+      `void *${targetVar} = topaz_promise_new_pending(); ` +
+      `topaz_promise_forward_into(${sourceVar}, ${targetVar}); ` +
+      `${targetVar}; })`
+    );
+  }
+
   private emitPromiseThenCall(expr: CallExpr, callee: PropAccessExpr, baseType: TopazType): string {
     const promiseType = this.inferPromiseThenCall(expr, baseType);
     if (baseType.kind !== "promise") {
@@ -12985,6 +13001,13 @@ class Emitter {
     }
     if (promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseThenCall: invalid Promise<T> types");
+    }
+    if (
+      expr.args.length === 2 &&
+      this.isExplicitUndefinedPromiseHandler(expr.args[0]) &&
+      this.isExplicitUndefinedPromiseHandler(expr.args[1])
+    ) {
+      return this.emitPromisePassThroughCall(callee, "then_pass");
     }
     if (
       expr.args.length === 2 &&
@@ -13058,6 +13081,9 @@ class Emitter {
     if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseCatchCall: invalid Promise<T> types");
     }
+    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+      return this.emitPromisePassThroughCall(callee, "catch_pass");
+    }
     const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
     const runnerName = this.recordPromiseCatchRunner(baseType.value, fnType);
     const ctxName = this.promiseCatchContextName(baseType.value, fnType.returnType);
@@ -13081,6 +13107,9 @@ class Emitter {
     const promiseType = this.inferPromiseFinallyCall(expr, baseType);
     if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseFinallyCall: invalid Promise<T> types");
+    }
+    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+      return this.emitPromisePassThroughCall(callee, "finally_pass");
     }
     const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
     const runnerName = this.recordPromiseFinallyRunner(baseType.value, fnType);
