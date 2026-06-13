@@ -225,6 +225,31 @@ type OrdinaryCallPlan =
       params: Array<ParamInfo>;
       returnType: TopazType;
       label: string;
+    }
+  | {
+      kind: "map_method";
+      callee: PropAccessExpr;
+      receiver: Expr;
+      receiverType: TopazType;
+      methodName: string;
+      mapName: string;
+      keyType: TopazType;
+      valueType: TopazType;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
+      kind: "set_method";
+      callee: PropAccessExpr;
+      receiver: Expr;
+      receiverType: TopazType;
+      methodName: string;
+      setName: string;
+      elemType: TopazType;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
     };
 
 type AsyncFrameThisContext = {
@@ -4835,6 +4860,50 @@ class Emitter {
         end: plan.callee.end,
       };
     } else if (plan.kind === "interface_method") {
+      const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
+      this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: plan.receiver,
+        receiverType: plan.receiverType,
+      });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: plan.receiver.pos,
+        end: plan.receiver.end,
+      };
+      transformedCallee = {
+        kind: "prop_access",
+        receiver: receiverTempExpr,
+        name: plan.methodName,
+        optional: false,
+        pos: plan.callee.pos,
+        end: plan.callee.end,
+      };
+    } else if (plan.kind === "map_method") {
+      const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
+      this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: plan.receiver,
+        receiverType: plan.receiverType,
+      });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: plan.receiver.pos,
+        end: plan.receiver.end,
+      };
+      transformedCallee = {
+        kind: "prop_access",
+        receiver: receiverTempExpr,
+        name: plan.methodName,
+        optional: false,
+        pos: plan.callee.pos,
+        end: plan.callee.end,
+      };
+    } else if (plan.kind === "set_method") {
       const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
       this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
       preAwaitReceiverTemps.push({
@@ -11219,6 +11288,126 @@ class Emitter {
     );
   }
 
+  private makeParamInfo(name: string, paramType: TopazType): ParamInfo {
+    return { name, type: paramType, isOptional: false };
+  }
+
+  private noParamInfos(): Array<ParamInfo> {
+    return [];
+  }
+
+  private resolveMapMethodCallPlan(
+    callee: PropAccessExpr,
+    baseType: TopazType,
+  ): OrdinaryCallPlan {
+    const keyType = mapKey(baseType)!;
+    const valueType = mapValue(baseType)!;
+    const methodName = callee.name;
+    let params: Array<ParamInfo> = [];
+    let returnType: TopazType = T_VOID;
+    if (methodName === "set") {
+      params = [
+        this.makeParamInfo("key", keyType),
+        this.makeParamInfo("value", valueType),
+      ];
+      returnType = T_VOID;
+    } else if (methodName === "get") {
+      params = [this.makeParamInfo("key", keyType)];
+      returnType = makeUnion([valueType, T_UNDEFINED]);
+    } else if (methodName === "has" || methodName === "delete") {
+      params = [this.makeParamInfo("key", keyType)];
+      returnType = T_BOOLEAN;
+    } else if (methodName === "values") {
+      params = this.noParamInfos();
+      returnType = { kind: "iter", elem: valueType };
+    } else if (methodName === "keys") {
+      params = this.noParamInfos();
+      returnType = { kind: "iter", elem: keyType };
+    } else if (methodName === "entries") {
+      throw new CodegenError(
+        { pos: callee.pos },
+        "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
+      );
+    } else {
+      throw new CodegenError({ pos: callee.pos }, `unsupported method '.${methodName}' on ${typeIdent(baseType)}`);
+    }
+    return {
+      kind: "map_method",
+      callee,
+      receiver: callee.receiver,
+      receiverType: baseType,
+      methodName,
+      mapName: mapShortName(baseType),
+      keyType,
+      valueType,
+      params,
+      returnType,
+      label: `Map.${methodName}`,
+    };
+  }
+
+  private resolveSetMethodCallPlan(
+    callee: PropAccessExpr,
+    baseType: TopazType,
+  ): OrdinaryCallPlan {
+    const elemType = setElem(baseType)!;
+    const methodName = callee.name;
+    let params: Array<ParamInfo> = [];
+    let returnType: TopazType = T_VOID;
+    if (methodName === "add") {
+      params = [this.makeParamInfo("value", elemType)];
+      returnType = T_VOID;
+    } else if (methodName === "has" || methodName === "delete") {
+      params = [this.makeParamInfo("value", elemType)];
+      returnType = T_BOOLEAN;
+    } else if (methodName === "values" || methodName === "keys") {
+      params = this.noParamInfos();
+      returnType = { kind: "iter", elem: elemType };
+    } else if (methodName === "entries") {
+      throw new CodegenError(
+        { pos: callee.pos },
+        "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
+      );
+    } else {
+      throw new CodegenError({ pos: callee.pos }, `unsupported method '.${methodName}' on ${typeIdent(baseType)}`);
+    }
+    return {
+      kind: "set_method",
+      callee,
+      receiver: callee.receiver,
+      receiverType: baseType,
+      methodName,
+      setName: setShortName(baseType),
+      elemType,
+      params,
+      returnType,
+      label: `Set.${methodName}`,
+    };
+  }
+
+  private checkCollectionMethodArgCount(expr: CallExpr, plan: OrdinaryCallPlan): void {
+    if (plan.kind === "map_method") {
+      if (plan.methodName === "set" && expr.args.length !== 2) {
+        throw new CodegenError({ pos: expr.pos }, "Map.set expects exactly two arguments");
+      }
+      if ((plan.methodName === "get" || plan.methodName === "has" || plan.methodName === "delete") && expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, `Map.${plan.methodName} expects exactly one argument`);
+      }
+      if ((plan.methodName === "values" || plan.methodName === "keys") && expr.args.length !== 0) {
+        throw new CodegenError({ pos: expr.pos }, `Map.${plan.methodName} takes no arguments`);
+      }
+      return;
+    }
+    if (plan.kind === "set_method") {
+      if ((plan.methodName === "add" || plan.methodName === "has" || plan.methodName === "delete") && expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, `Set.${plan.methodName} expects exactly one argument`);
+      }
+      if ((plan.methodName === "values" || plan.methodName === "keys") && expr.args.length !== 0) {
+        throw new CodegenError({ pos: expr.pos }, `Set.${plan.methodName} takes no arguments`);
+      }
+    }
+  }
+
   private resolveOrdinaryCallPlan(
     expr: CallExpr,
     awaitExpr: AwaitExpr | undefined,
@@ -11270,8 +11459,8 @@ class Emitter {
       if (awaitExpr !== undefined && this.collectAwaitExprsInExpr(receiver).length > 0) {
         throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
       }
-      // Synthetic and specialized namespaces/methods stay outside this seed.
-      // Their emit/type paths keep owning their diagnostics and argument rules.
+      // Synthetic namespaces stay outside the descriptor frontier; collection
+      // methods join it below with explicit key/value metadata.
       if (receiver.kind === "ident") {
         const receiverName = receiver.name;
         if (
@@ -11297,6 +11486,12 @@ class Emitter {
       }
 
       const receiverType = this.inferType(receiver);
+      if (isMapType(receiverType)) {
+        return this.resolveMapMethodCallPlan(callee, receiverType);
+      }
+      if (isSetType(receiverType)) {
+        return this.resolveSetMethodCallPlan(callee, receiverType);
+      }
       if (isClassType(receiverType)) {
         const cls = this.classes.get(classNameOf(receiverType)!)!;
         const method = cls.methods.get(callee.name);
@@ -11393,6 +11588,52 @@ class Emitter {
         ...this.emitCallArgs(expr.args, plan.params, plan.label, { pos: expr.pos }),
       ];
       return `({ ${cTypeName(plan.receiverType)} ${tmp} = ${baseStr}; ${tmp}.vt->${plan.methodName}(${argParts.join(", ")}); })`;
+    }
+    if (plan.kind === "map_method") {
+      this.checkCollectionMethodArgCount(expr, plan);
+      const base = this.emitExpression(plan.receiver);
+      if (plan.methodName === "set") {
+        const keyArg = expr.args[0];
+        const valueArg = expr.args[1];
+        return `topaz_map_${plan.mapName}_set(${base}, ${this.emitWithExpected(keyArg, plan.keyType)}, ${this.emitWithExpected(valueArg, plan.valueType)})`;
+      }
+      if (plan.methodName === "get") {
+        const keyArg = expr.args[0];
+        return `topaz_map_${plan.mapName}_get(${base}, ${this.emitWithExpected(keyArg, plan.keyType)})`;
+      }
+      if (plan.methodName === "has") {
+        const keyArg = expr.args[0];
+        return `topaz_map_${plan.mapName}_has(${base}, ${this.emitWithExpected(keyArg, plan.keyType)})`;
+      }
+      if (plan.methodName === "delete") {
+        const keyArg = expr.args[0];
+        return `topaz_map_${plan.mapName}_delete(${base}, ${this.emitWithExpected(keyArg, plan.keyType)})`;
+      }
+      if (plan.methodName === "values") {
+        return this.emitIterConstruction(plan.receiver, plan.receiverType, "map_values", plan.valueType, "value");
+      }
+      if (plan.methodName === "keys") {
+        return this.emitIterConstruction(plan.receiver, plan.receiverType, "map_keys", plan.keyType, "key");
+      }
+    }
+    if (plan.kind === "set_method") {
+      this.checkCollectionMethodArgCount(expr, plan);
+      const base = this.emitExpression(plan.receiver);
+      if (plan.methodName === "add") {
+        const valueArg = expr.args[0];
+        return `topaz_set_${plan.setName}_add(${base}, ${this.emitWithExpected(valueArg, plan.elemType)})`;
+      }
+      if (plan.methodName === "has") {
+        const valueArg = expr.args[0];
+        return `topaz_set_${plan.setName}_has(${base}, ${this.emitWithExpected(valueArg, plan.elemType)})`;
+      }
+      if (plan.methodName === "delete") {
+        const valueArg = expr.args[0];
+        return `topaz_set_${plan.setName}_delete(${base}, ${this.emitWithExpected(valueArg, plan.elemType)})`;
+      }
+      if (plan.methodName === "values" || plan.methodName === "keys") {
+        return this.emitIterConstruction(plan.receiver, plan.receiverType, "set_values", plan.elemType, "key");
+      }
     }
     throwInternalCodegenError("emitOrdinaryCallPlan: unknown ordinary call plan");
   }
@@ -13207,69 +13448,7 @@ class Emitter {
     callee: PropAccessExpr,
     baseType: TopazType,
   ): string {
-    const name = mapShortName(baseType);
-    const k = mapKey(baseType)!;
-    const v = mapValue(baseType)!;
-    const method = callee.name;
-    const base = this.emitExpression(callee.receiver);
-    if (method === "set") {
-      if (expr.args.length !== 2) {
-        throw new CodegenError({ pos: expr.pos }, "Map.set expects exactly two arguments");
-      }
-      const keyArg = expr.args[0];
-      const valueArg = expr.args[1];
-      // emitWithExpected enables class -> interface coercion for the value
-      // when V is an interface; keys are still scalar so this is a no-op for
-      // them, but the helper handles both uniformly.
-      const ke = this.emitWithExpected(keyArg, k);
-      const ve = this.emitWithExpected(valueArg, v);
-      return `topaz_map_${name}_set(${base}, ${ke}, ${ve})`;
-    }
-    if (method === "get") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "Map.get expects exactly one argument");
-      }
-      const keyArg = expr.args[0];
-      return `topaz_map_${name}_get(${base}, ${this.emitWithExpected(keyArg, k)})`;
-    }
-    if (method === "has") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "Map.has expects exactly one argument");
-      }
-      const keyArg = expr.args[0];
-      return `topaz_map_${name}_has(${base}, ${this.emitWithExpected(keyArg, k)})`;
-    }
-    if (method === "delete") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "Map.delete expects exactly one argument");
-      }
-      const keyArg = expr.args[0];
-      return `topaz_map_${name}_delete(${base}, ${this.emitWithExpected(keyArg, k)})`;
-    }
-    // Phase 1.5-3.5g-iterator: `.values()` / `.keys()` now yield an Iterator<T>
-    // value — a fat pointer struct allocated on the arena. The for-of dispatch
-    // recognizes the call as a special form for direct hash-walk lowering;
-    // standalone uses produce a real iter that can be bound / passed / consumed
-    // via for-of (which uses the while-form lowering instead).
-    if (method === "values") {
-      if (expr.args.length !== 0) {
-        throw new CodegenError({ pos: expr.pos }, "Map.values takes no arguments");
-      }
-      return this.emitIterConstruction(callee.receiver, baseType, "map_values", v, "value");
-    }
-    if (method === "keys") {
-      if (expr.args.length !== 0) {
-        throw new CodegenError({ pos: expr.pos }, "Map.keys takes no arguments");
-      }
-      return this.emitIterConstruction(callee.receiver, baseType, "map_keys", k, "key");
-    }
-    if (method === "entries") {
-      throw new CodegenError(
-        { pos: callee.pos },
-        "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
-      );
-    }
-    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+    return this.emitOrdinaryCallPlan(expr, this.resolveMapMethodCallPlan(callee, baseType));
   }
 
   private emitSetMethodCall(
@@ -13277,47 +13456,7 @@ class Emitter {
     callee: PropAccessExpr,
     baseType: TopazType,
   ): string {
-    const name = setShortName(baseType);
-    const elem = setElem(baseType)!;
-    const method = callee.name;
-    const base = this.emitExpression(callee.receiver);
-    if (method === "add") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "Set.add expects exactly one argument");
-      }
-      const valueArg = expr.args[0];
-      return `topaz_set_${name}_add(${base}, ${this.emitWithExpected(valueArg, elem)})`;
-    }
-    if (method === "has") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "Set.has expects exactly one argument");
-      }
-      const valueArg = expr.args[0];
-      return `topaz_set_${name}_has(${base}, ${this.emitWithExpected(valueArg, elem)})`;
-    }
-    if (method === "delete") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "Set.delete expects exactly one argument");
-      }
-      const valueArg = expr.args[0];
-      return `topaz_set_${name}_delete(${base}, ${this.emitWithExpected(valueArg, elem)})`;
-    }
-    // Phase 1.5-3.5g-iterator: Set.values() / Set.keys() yield an Iterator<T>;
-    // both share `set_values` semantics (Set yields elem for either, matching
-    // JS), so we always pass source="set_values" + field="key".
-    if (method === "values" || method === "keys") {
-      if (expr.args.length !== 0) {
-        throw new CodegenError({ pos: expr.pos }, `Set.${method} takes no arguments`);
-      }
-      return this.emitIterConstruction(callee.receiver, baseType, "set_values", elem, "key");
-    }
-    if (method === "entries") {
-      throw new CodegenError(
-        { pos: callee.pos },
-        "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
-      );
-    }
-    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
+    return this.emitOrdinaryCallPlan(expr, this.resolveSetMethodCallPlan(callee, baseType));
   }
 
   // Phase 1.5-3.5d helpers: resolve / lower optional chain accesses.
@@ -14254,43 +14393,22 @@ class Emitter {
           throw new CodegenError({ pos: prop.pos }, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
         }
         if (isMapType(baseType)) {
-          const v = mapValue(baseType)!;
-          const m = prop.name;
-          if (m === "set") {
+          const plan = this.resolveMapMethodCallPlan(prop, baseType);
+          if (plan.returnType.kind === "void") {
             throw new CodegenError({ pos: expr.pos }, "Map.set returns void in this dialect and cannot be used as a value");
           }
           // Phase 1.5-3c: Map.get returns `V | undefined`. Callers must narrow
           // with `if (x !== undefined)` before using as V; the runtime returns
           // an opt struct for scalar V and a NULL-sentinel pointer / fat
           // pointer for class / iface V.
-          if (m === "get") return makeUnion([v, T_UNDEFINED]);
-          if (m === "has" || m === "delete") return T_BOOLEAN;
-          if (m === "values") return { kind: "iter", elem: v };
-          if (m === "keys") return { kind: "iter", elem: mapKey(baseType)! };
-          if (m === "entries") {
-            throw new CodegenError(
-              { pos: prop.pos },
-              "Map.entries() is only allowed as the right-hand side of `for (const [k, v] of m.entries())` (binding to a value is unsupported)",
-            );
-          }
-          throw new CodegenError({ pos: prop.pos }, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+          return plan.returnType;
         }
         if (isSetType(baseType)) {
-          const m = prop.name;
-          if (m === "add") {
+          const plan = this.resolveSetMethodCallPlan(prop, baseType);
+          if (plan.returnType.kind === "void") {
             throw new CodegenError({ pos: expr.pos }, "Set.add returns void in this dialect and cannot be used as a value");
           }
-          if (m === "has" || m === "delete") return T_BOOLEAN;
-          if (m === "values" || m === "keys") {
-            return { kind: "iter", elem: setElem(baseType)! };
-          }
-          if (m === "entries") {
-            throw new CodegenError(
-              { pos: prop.pos },
-              "Set.entries() is only allowed as the right-hand side of `for (const [a, b] of s.entries())` (binding to a value is unsupported)",
-            );
-          }
-          throw new CodegenError({ pos: prop.pos }, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+          return plan.returnType;
         }
         if (isPromiseType(baseType)) {
           if (prop.name === "then") {
