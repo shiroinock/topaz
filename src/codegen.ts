@@ -84,6 +84,7 @@ type TopazType =
   | { kind: "array"; elem: TopazType }
   | { kind: "map"; key: TopazType; value: TopazType }
   | { kind: "set"; elem: TopazType }
+  | { kind: "promise"; value: TopazType }
   | { kind: "class"; name: string }
   | { kind: "iface"; name: string }
   | DunionType
@@ -140,6 +141,7 @@ function isScalarType(t: TopazType): boolean {
 function isArrayType(t: TopazType): boolean { return t.kind === "array"; }
 function isMapType(t: TopazType): boolean { return t.kind === "map"; }
 function isSetType(t: TopazType): boolean { return t.kind === "set"; }
+function isPromiseType(t: TopazType): boolean { return t.kind === "promise"; }
 function isClassType(t: TopazType): boolean { return t.kind === "class"; }
 function isInterfaceType(t: TopazType): boolean { return t.kind === "iface"; }
 function isUndefinedType(t: TopazType): boolean { return t.kind === "undefined"; }
@@ -196,7 +198,7 @@ function isReferenceType(t: TopazType): boolean {
     }
     return false;
   }
-  return isArrayType(t) || isMapType(t) || isSetType(t) || isClassType(t);
+  return isArrayType(t) || isMapType(t) || isSetType(t) || isPromiseType(t) || isClassType(t);
 }
 
 // Phase 1.5-3b: helpers for union/undefined.
@@ -291,6 +293,44 @@ function setOf(elem: TopazType): TopazType | undefined {
   return { kind: "set", elem };
 }
 
+function promiseOf(value: TopazType): TopazType | undefined {
+  if (value.kind === "unknown" || value.kind === "undefined") return undefined;
+  if (value.kind === "union") {
+    if (isStringLiteralUnion(value)) return { kind: "promise", value };
+    const inner = withoutUndefined(value);
+    if (inner !== undefined && containsUndefined(value) && promiseOf(inner) !== undefined) {
+      return { kind: "promise", value };
+    }
+    return undefined;
+  }
+  if (
+    value.kind === "void" ||
+    value.kind === "number" ||
+    value.kind === "bigint" ||
+    value.kind === "boolean" ||
+    value.kind === "string" ||
+    value.kind === "string_buffer" ||
+    value.kind === "bigint_buffer" ||
+    value.kind === "string_literal" ||
+    value.kind === "array" ||
+    value.kind === "map" ||
+    value.kind === "set" ||
+    value.kind === "promise" ||
+    value.kind === "class" ||
+    value.kind === "iface" ||
+    value.kind === "dunion" ||
+    value.kind === "fn" ||
+    value.kind === "iter"
+  ) {
+    return { kind: "promise", value };
+  }
+  return undefined;
+}
+
+function isReservedBuiltinTypeName(name: string): boolean {
+  return name === "Array" || name === "Map" || name === "Set" || name === "Iterator" || name === "Promise";
+}
+
 // Structural equality. Replaces the old string `===` comparisons; do not use
 // `===` directly on TopazType (objects compare by reference).
 function typeEq(a: TopazType, b: TopazType): boolean {
@@ -318,6 +358,10 @@ function typeEq(a: TopazType, b: TopazType): boolean {
   if (a.kind === "set") {
     if (b.kind !== "set") return false;
     return typeEq(a.elem, b.elem);
+  }
+  if (a.kind === "promise") {
+    if (b.kind !== "promise") return false;
+    return typeEq(a.value, b.value);
   }
   if (a.kind === "class") {
     if (b.kind !== "class") return false;
@@ -493,6 +537,7 @@ function typeIdent(t: TopazType): string {
   if (t.kind === "array") return `topaz_array_${arrayShortName(t)}`;
   if (t.kind === "map") return `topaz_map_${mapShortName(t)}`;
   if (t.kind === "set") return `topaz_set_${setShortName(t)}`;
+  if (t.kind === "promise") return `topaz_promise_${typeIdent(t.value).slice("topaz_".length)}`;
   if (t.kind === "class") return `topaz_class_${t.name}`;
   if (t.kind === "iface") return `topaz_iface_${t.name}`;
   if (t.kind === "dunion") {
@@ -596,7 +641,8 @@ function decimalBigIntDigits(text: string): string {
 function isBuiltinName(name: string): boolean {
   // `undefined` lowers via emitUndefinedLiteral, never via a binding lookup.
   // `console` is a synthetic namespace handled directly in emitCall.
-  return name === "undefined" || name === "console";
+  // `Promise` is a type-owned namespace with deferred value/runtime behavior.
+  return name === "undefined" || name === "console" || name === "Promise";
 }
 
 // Phase 1.5-6e-2: capture analysis no longer needs an `isReferencePosition`
@@ -646,6 +692,9 @@ function cTypeName(t: TopazType): string {
   }
   if (t.kind === "bigint") {
     return "topaz_bigint *";
+  }
+  if (t.kind === "promise") {
+    return "void *";
   }
   if (t.kind === "dunion") {
     return typeIdent(t);
@@ -2187,7 +2236,7 @@ class Emitter {
       this.withSfVoid(sf, () => {
         const name = cls.name;
         const clsAnchor: { pos: number } = { pos: cls.pos };
-        if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
+        if (isReservedBuiltinTypeName(name)) {
           throw new CodegenError(clsAnchor, `cannot redefine built-in '${name}'`);
         }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
@@ -2237,7 +2286,7 @@ class Emitter {
       this.withSfVoid(sf, () => {
       const name = iface.name;
       const ifaceAnchor: { pos: number } = { pos: iface.pos };
-      if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
+      if (isReservedBuiltinTypeName(name)) {
         throw new CodegenError(ifaceAnchor, `cannot redefine built-in '${name}'`);
       }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
@@ -2268,7 +2317,7 @@ class Emitter {
       this.withSfVoid(sf, () => {
       const name = alias.name;
       const aliasAnchor: { pos: number } = { pos: alias.pos };
-      if (name === "Array" || name === "Map" || name === "Set" || name === "Iterator") {
+      if (isReservedBuiltinTypeName(name)) {
         throw new CodegenError(aliasAnchor, `cannot redefine built-in '${name}'`);
       }
       if (this.classes.has(name) || this.genericClasses.has(name)) {
@@ -3922,6 +3971,7 @@ class Emitter {
       // Phase 1.5-6 prep: type alias substitution. Lookup sits between
       // typeParamScope (so a `T` param shadows a same-named alias inside a
       // generic body) and the built-ins (`Array` / `Map` / `Set` / `Iterator`
+      // / `Promise`
       // collision is rejected at declaration time, so the ordering here is
       // only relevant for error message clarity). Resolution is memoized;
       // `resolving` guards against cycles like `type A = B; type B = A;`.
@@ -3984,6 +4034,20 @@ class Emitter {
         }
         this.recordSetMonomorph(s);
         return s;
+      }
+      if (refName === "Promise") {
+        if (node.typeArgs.length !== 1) {
+          throw this.typeErr(nodeAnchor, "Promise<T> requires exactly one type argument");
+        }
+        const value = this.typeFromAnnotation(node.typeArgs[0], nodeAnchor, sf);
+        const p = promiseOf(value);
+        if (p === undefined) {
+          throw this.typeErr(
+            nodeAnchor,
+            `Promise<T>: payload type ${typeIdent(value)} is unsupported (must be value-representable or void; unknown, undefined, and unsupported unions are deferred)`,
+          );
+        }
+        return p;
       }
       // Phase 1.5-3.5g-iterator: Iterator<T> as first-class type. Elem must be
       // scalar / class / interface (same shape constraint as Map / Set values).
@@ -9178,6 +9242,13 @@ class Emitter {
     return this.emitLineWrite(fn, this.emitWithExpected(arg, T_STRING), { pos: expr.pos });
   }
 
+  private promiseRuntimeDeferredError(anchor: { pos: number }, surface: string): CodegenError {
+    return new CodegenError(
+      anchor,
+      `${surface} is deferred until the Promise runtime/scheduler surface is implemented`,
+    );
+  }
+
   private emitCall(expr: CallExpr): string {
     const callee = expr.callee;
 
@@ -9215,6 +9286,9 @@ class Emitter {
           (prop.name === "log" || prop.name === "error" || prop.name === "warn")
         ) {
           return this.emitConsoleCall(expr, prop.name);
+        }
+        if (receiver.name === "Promise") {
+          throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise.${prop.name}`);
         }
 
         // Phase 1.5-6 prep #26: process.exit(code?) -> never. Lowered to the
@@ -9257,6 +9331,9 @@ class Emitter {
       }
       if (isSetType(baseType)) {
         return this.emitSetMethodCall(expr, prop, baseType);
+      }
+      if (isPromiseType(baseType)) {
+        throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
       }
       if (baseType.kind === "string") {
         return this.emitStringMethodCall(expr, prop);
@@ -11482,6 +11559,12 @@ class Emitter {
         return fnType;
       }
       if (expr.name === "argv") return arrayOf(T_STRING)!;
+      if (expr.name === "Promise") {
+        throw this.promiseRuntimeDeferredError(
+          { pos: expr.pos },
+          "`Promise` value namespace",
+        );
+      }
       throw new CodegenError({ pos: expr.pos }, `unknown identifier '${expr.name}'`);
     }
     if (expr.kind === "prop_access" && expr.optional) {
@@ -11501,6 +11584,9 @@ class Emitter {
             { pos: expr.pos },
             `unsupported \`process.${expr.name}\` as a value (only \`process.argv\`; \`process.exit\` / \`process.stdout.write\` / \`process.stderr.write\` are call-only)`,
           );
+        }
+        if (receiver.name === "Promise") {
+          throw this.promiseRuntimeDeferredError({ pos: expr.pos }, `Promise.${expr.name}`);
         }
       }
     }
@@ -11964,6 +12050,9 @@ class Emitter {
           if (receiver.name === "String") {
             return this.inferStringStaticReturn(expr, prop);
           }
+          if (receiver.name === "Promise") {
+            throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise.${prop.name}`);
+          }
         }
         if (receiver.kind === "prop_access") {
           const receiverProp = receiver;
@@ -12135,6 +12224,9 @@ class Emitter {
             );
           }
           throw new CodegenError({ pos: prop.pos }, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
+        }
+        if (isPromiseType(baseType)) {
+          throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
         }
         if (baseType.kind === "string") {
           return this.inferStringMethodReturn(expr, prop);

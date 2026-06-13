@@ -2915,9 +2915,11 @@ run_fail_case runtime_prelude_bigint_buffer_hidden_fail examples/runtime_prelude
 run_fail_case regexp_literal_deferred_fail examples/regexp_literal_deferred_fail.ts "expected expression"
 run_fail_case regexp_constructor_deferred_fail examples/regexp_constructor_deferred_fail.ts "\`new RegExp\` is unsupported"
 run_fail_case regexp_string_test_deferred_fail examples/regexp_string_test_deferred_fail.ts "unsupported method '.test' on topaz_string"
+run_case promise_type_annotation $'promise annotations\nready'
 run_tsc_bridge_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "async functions are unsupported"
 run_tsc_bridge_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "unsupported expression AwaitExpression"
-run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "unknown identifier 'Promise'"
+run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise.resolve is deferred until the Promise runtime/scheduler surface is implemented"
+run_fail_case promise_payload_unknown_deferred_fail examples/promise_payload_unknown_deferred_fail.ts "Promise<T>: payload type topaz_unknown is unsupported"
 run_fail_case for_await_deferred_fail examples/for_await_deferred_fail.ts "expected '('"
 
 run_case for_of_array $'15\n-7\n0\n2\n9\n3\nalpha\nbeta\ngamma\n102\n101\n103\nsquare\ncircle\n25\ntrue\n4'
