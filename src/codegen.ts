@@ -91,6 +91,7 @@ type TopazType =
   | { kind: "map"; key: TopazType; value: TopazType }
   | { kind: "set"; elem: TopazType }
   | { kind: "promise"; value: TopazType }
+  | { kind: "promise_like"; value: TopazType }
   | { kind: "brand"; base: TopazType; key: string }
   | { kind: "class"; name: string }
   | { kind: "iface"; name: string }
@@ -395,6 +396,7 @@ function isArrayType(t: TopazType): boolean { return t.kind === "array"; }
 function isMapType(t: TopazType): boolean { return t.kind === "map"; }
 function isSetType(t: TopazType): boolean { return t.kind === "set"; }
 function isPromiseType(t: TopazType): boolean { return t.kind === "promise"; }
+function isPromiseLikeType(t: TopazType): boolean { return t.kind === "promise_like"; }
 function isClassType(t: TopazType): boolean { return t.kind === "class"; }
 function isInterfaceType(t: TopazType): boolean { return t.kind === "iface"; }
 function isUndefinedType(t: TopazType): boolean { return t.kind === "undefined"; }
@@ -463,7 +465,7 @@ function isReferenceType(t: TopazType): boolean {
     }
     return false;
   }
-  return isArrayType(t) || isMapType(t) || isSetType(t) || isPromiseType(t) || isClassType(t);
+  return isArrayType(t) || isMapType(t) || isSetType(t) || isPromiseType(t) || isPromiseLikeType(t) || isClassType(t);
 }
 
 // Phase 1.5-3b: helpers for union/undefined.
@@ -529,7 +531,7 @@ function arrayOf(elem: TopazType): TopazType | undefined {
   // variants are guaranteed to be concrete classes.
   if (
     !isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)
-    && elem.kind !== "fn" && elem.kind !== "dunion" && elem.kind !== "array" && !isBrandType(elem)
+    && elem.kind !== "fn" && elem.kind !== "dunion" && elem.kind !== "array" && elem.kind !== "promise_like" && !isBrandType(elem)
   ) return undefined;
   return { kind: "array", elem };
 }
@@ -595,8 +597,20 @@ function promiseOf(value: TopazType): TopazType | undefined {
   return undefined;
 }
 
+function promiseAnnotationOf(value: TopazType): TopazType | undefined {
+  const p = promiseOf(value);
+  if (p !== undefined) return p;
+  if (value.kind === "promise_like") return { kind: "promise", value };
+  return undefined;
+}
+
+function promiseLikeOf(value: TopazType): TopazType | undefined {
+  if (promiseOf(value) === undefined) return undefined;
+  return { kind: "promise_like", value };
+}
+
 function isReservedBuiltinTypeName(name: string): boolean {
-  return name === "Array" || name === "Map" || name === "Set" || name === "Iterator" || name === "Promise";
+  return name === "Array" || name === "Map" || name === "Set" || name === "Iterator" || name === "Promise" || name === "PromiseLike";
 }
 
 // Structural equality. Replaces the old string `===` comparisons; do not use
@@ -629,6 +643,10 @@ function typeEq(a: TopazType, b: TopazType): boolean {
   }
   if (a.kind === "promise") {
     if (b.kind !== "promise") return false;
+    return typeEq(a.value, b.value);
+  }
+  if (a.kind === "promise_like") {
+    if (b.kind !== "promise_like") return false;
     return typeEq(a.value, b.value);
   }
   if (a.kind === "brand") {
@@ -741,6 +759,7 @@ function elemTag(t: TopazType): string {
     // `topaz_set_dunion_A_or_B` mangle is unique per variant set.
     return typeIdent(t).slice("topaz_".length);
   }
+  if (t.kind === "promise_like") return typeIdent(t).slice("topaz_".length);
   if (t.kind === "undefined") {
     throwInternalCodegenError("elemTag: bare undefined cannot be a container element");
   }
@@ -811,6 +830,7 @@ function typeIdent(t: TopazType): string {
   if (t.kind === "map") return `topaz_map_${mapShortName(t)}`;
   if (t.kind === "set") return `topaz_set_${setShortName(t)}`;
   if (t.kind === "promise") return `topaz_promise_${typeIdent(t.value).slice("topaz_".length)}`;
+  if (t.kind === "promise_like") return `topaz_promise_like_${typeIdent(t.value).slice("topaz_".length)}`;
   if (t.kind === "brand") {
     const base = typeIdent(t.base).slice("topaz_".length);
     return `topaz_brand_${cIdentFragment(t.key)}__${base}`;
@@ -974,6 +994,9 @@ function cTypeName(t: TopazType): string {
     return "topaz_bigint *";
   }
   if (t.kind === "promise") {
+    return "void *";
+  }
+  if (t.kind === "promise_like") {
     return "void *";
   }
   if (t.kind === "dunion") {
@@ -2754,6 +2777,9 @@ class Emitter {
       }
       const ret = this.typeFromAnnotation(fnReturnType, retAnchor, sf);
       if (fn.isAsync && ret.kind !== "promise") {
+        if (ret.kind === "promise_like") {
+          throw new CodegenError(retAnchor, "async function return annotation must be Promise<T>; PromiseLike<T> bridge is deferred");
+        }
         throw new CodegenError(retAnchor, `async function return annotation must be Promise<T>, got ${typeIdent(ret)}`);
       }
       const params = this.collectParams(fn.params, sf);
@@ -3415,7 +3441,7 @@ class Emitter {
     const elem = arrayElem(t)!;
     if (
       !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion"
-      && elem.kind !== "array" && elem.kind !== "brand"
+      && elem.kind !== "array" && elem.kind !== "brand" && elem.kind !== "promise_like"
     ) {
       throwInternalCodegenError(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
@@ -3561,6 +3587,7 @@ class Emitter {
     // of the container macros (see emit() containerMonomorphSlot order).
     if (elem.kind === "dunion") return typeIdent(elem);
     if (elem.kind === "array") return cTypeName(elem);
+    if (elem.kind === "promise_like") return cTypeName(elem);
     throwInternalCodegenError(`unexpected container element type ${typeIdent(elem)}`);
   }
 
@@ -3936,6 +3963,9 @@ class Emitter {
     }
     const returnType = this.typeFromAnnotation(methodReturnType, retAnchor, sf);
     if (m.isAsync && returnType.kind !== "promise") {
+      if (returnType.kind === "promise_like") {
+        throw new CodegenError(retAnchor, "async method return annotation must be Promise<T>; PromiseLike<T> bridge is deferred");
+      }
       throw new CodegenError(retAnchor, `async method return annotation must be Promise<T>, got ${typeIdent(returnType)}`);
     }
     info.methods.set(mname, { params, returnType, decl: m });
@@ -4871,11 +4901,25 @@ class Emitter {
           throw this.typeErr(nodeAnchor, "Promise<T> requires exactly one type argument");
         }
         const value = this.typeFromAnnotation(node.typeArgs[0], nodeAnchor, sf);
-        const p = promiseOf(value);
+        const p = promiseAnnotationOf(value);
         if (p === undefined) {
           throw this.typeErr(
             nodeAnchor,
             `Promise<T>: payload type ${typeIdent(value)} is unsupported (must be value-representable or void; unknown, undefined, and unsupported unions are deferred)`,
+          );
+        }
+        return p;
+      }
+      if (refName === "PromiseLike") {
+        if (node.typeArgs.length !== 1) {
+          throw this.typeErr(nodeAnchor, "PromiseLike<T> requires exactly one type argument");
+        }
+        const value = this.typeFromAnnotation(node.typeArgs[0], nodeAnchor, sf);
+        const p = promiseLikeOf(value);
+        if (p === undefined) {
+          throw this.typeErr(
+            nodeAnchor,
+            `PromiseLike<T>: payload type ${typeIdent(value)} is unsupported (must be value-representable or void; unknown, undefined, and unsupported unions are deferred)`,
           );
         }
         return p;
@@ -5138,10 +5182,7 @@ class Emitter {
             }
             const operandType = this.inferAwaitOperandTypeWithExpectedPayload(init.operand, expectedPayload);
             if (operandType.kind !== "promise") {
-              throw new CodegenError(
-                { pos: init.operand.pos },
-                `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
-              );
+              throw this.awaitOperandMustBePromiseError({ pos: init.operand.pos }, operandType);
             }
             let bindingType = operandType.value;
             if (expectedPayload !== undefined) {
@@ -5179,10 +5220,7 @@ class Emitter {
               const awaitExpr = initializerAwaits[0];
               const operandType = this.inferType(awaitExpr.operand);
               if (operandType.kind !== "promise") {
-                throw new CodegenError(
-                  { pos: awaitExpr.operand.pos },
-                  `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
-                );
+                throw this.awaitOperandMustBePromiseError({ pos: awaitExpr.operand.pos }, operandType);
               }
               const awaitedPayload = operandType.value;
               let expectedInitializerType: TopazType | undefined = undefined;
@@ -5270,10 +5308,7 @@ class Emitter {
         if (expr.kind === "await_expr") {
           const operandType = this.inferType(expr.operand);
           if (operandType.kind !== "promise") {
-            throw new CodegenError(
-              { pos: expr.operand.pos },
-              `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
-            );
+            throw this.awaitOperandMustBePromiseError({ pos: expr.operand.pos }, operandType);
           }
           const awaitedPayload = operandType.value;
           steps.push({
@@ -5302,10 +5337,7 @@ class Emitter {
             const awaitExpr = statementAwaits[0];
             const operandType = this.inferType(awaitExpr.operand);
             if (operandType.kind !== "promise") {
-              throw new CodegenError(
-                { pos: awaitExpr.operand.pos },
-                `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
-              );
+              throw this.awaitOperandMustBePromiseError({ pos: awaitExpr.operand.pos }, operandType);
             }
             const awaitedPayload = operandType.value;
             const tempName = `__topaz_stmt_await_${steps.length}`;
@@ -5365,10 +5397,7 @@ class Emitter {
             const expectedAwaitPayload = isDirectReturnAwait ? payloadType : undefined;
             const operandType = this.inferAwaitOperandTypeWithExpectedPayload(awaitExpr.operand, expectedAwaitPayload);
             if (operandType.kind !== "promise") {
-              throw new CodegenError(
-                { pos: awaitExpr.operand.pos },
-                `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
-              );
+              throw this.awaitOperandMustBePromiseError({ pos: awaitExpr.operand.pos }, operandType);
             }
             const awaitedPayload = operandType.value;
             let returnExpr: Expr | undefined = undefined;
@@ -5703,10 +5732,7 @@ class Emitter {
 
     const operandType = this.inferType(awaitExpr.operand);
     if (operandType.kind !== "promise") {
-      throw new CodegenError(
-        { pos: awaitExpr.operand.pos },
-        `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
-      );
+      throw this.awaitOperandMustBePromiseError({ pos: awaitExpr.operand.pos }, operandType);
     }
     this.assertNotVoid(operandType.value, { pos: awaitExpr.pos }, "await method receiver");
     const awaitedTempExpr: IdentExpr = {
@@ -6861,8 +6887,27 @@ class Emitter {
     );
   }
 
+  private awaitOperandMustBePromiseError(anchor: { pos: number }, operandType: TopazType): CodegenError {
+    if (operandType.kind === "promise_like") {
+      return new CodegenError(
+        anchor,
+        "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred",
+      );
+    }
+    return new CodegenError(
+      anchor,
+      `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+    );
+  }
+
   private asyncArrowPayloadType(returnType: TopazType, anchor: { pos: number }): TopazType {
     if (returnType.kind === "promise") return returnType.value;
+    if (returnType.kind === "promise_like") {
+      throw new CodegenError(
+        anchor,
+        "async arrow return annotation/context must be Promise<T>; PromiseLike<T> bridge is deferred",
+      );
+    }
     throw new CodegenError(
       anchor,
       `async arrow return annotation/context must be Promise<T>, got ${typeIdent(returnType)}`,

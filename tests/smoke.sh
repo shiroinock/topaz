@@ -2973,6 +2973,7 @@ run_case promise_then_two_handler_mixed_return $'sync tail\nfulfilled value bran
 run_case promise_then_undefined_handlers $'sync tail\nfulfilled explicit undefined\nrejected recovery\nrecover\nfulfilled bypass\n3\npromise recovery\npromise recover\nvoid fulfilled explicit undefined\nvoid recovery\nvoid recover\nfulfilled result\n2\nrejected result\n7\nvoid fulfilled result\nvoid recovery result\npromise recovery result\n11'
 run_case promise_undefined_passthrough_handlers $'sync tail\nthen fulfilled\n10\nthen rejected\nthen rejected\ncatch fulfilled\n30\ncatch rejected\ncatch rejected\nfinally fulfilled\n50\nfinally rejected\nfinally rejected\nvoid then fulfilled\nthen recovery\n20\ncatch recovery\n40\nfinally recovery\n60'
 run_case promise_handler_sentinel_normalization $'7\n8\n9\n10\n11\n12\n13\n14\n15'
+run_case promise_like_type_annotation "callback"
 run_case promise_finally_return_promise $'sync tail\ncleanup fulfilled preserve\ncleanup rejected preserve\ncleanup fulfilled override\ncleanup rejected override\nnested cleanup start\nfifo marker\ncleanup throw before promise\nnested cleanup inner\nthrow override\n66\nfulfilled value\n1\npreserved rejection\nsource\nfulfilled override\nfulfilled cleanup\nrejected override\nrejected cleanup\nnested result\n5'
 run_case promise_finally_ignored_return $'sync tail\ncleanup number\ncleanup string\ncleanup boolean\ncleanup literal\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n10\nrejected string preserved\nsource string\nrejected bool preserved\nsource bool\nliteral result\n5\nfifo final then\n7\noverride catch\n88\nstring recovery\n2\nbool recovery\n3'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
@@ -3068,6 +3069,10 @@ run_fail_case promise_finally_return_promise_fail examples/promise_finally_retur
 run_fail_case promise_finally_non_fn_fail examples/promise_finally_non_fn_fail.ts "Promise.finally callback must be a function value"
 run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"
+run_fail_case promise_like_await_deferred_fail examples/promise_like_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
+run_fail_case promise_like_async_return_fail examples/promise_like_async_return_fail.ts "async function return annotation must be Promise<T>; PromiseLike<T> bridge is deferred"
+run_fail_case promise_like_resolve_deferred_fail examples/promise_like_resolve_deferred_fail.ts "Promise.resolve payload type topaz_promise_like_number is unsupported"
+run_fail_case promise_like_unknown_payload_fail examples/promise_like_unknown_payload_fail.ts "PromiseLike<T>: payload type topaz_unknown is unsupported"
 run_fail_case promise_reject_no_context_fail examples/promise_reject_no_context_fail.ts "Promise.reject requires a contextual Promise<T> target"
 run_fail_case promise_reject_non_class_fail examples/promise_reject_non_class_fail.ts "Promise.reject error must be a class instance"
 run_fail_case promise_reject_wrong_arity_fail examples/promise_reject_wrong_arity_fail.ts "Promise.reject expects exactly one argument, got 2"
