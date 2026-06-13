@@ -299,6 +299,18 @@ type OrdinaryCallPlan =
       label: string;
     }
   | {
+      kind: "array_method";
+      callee: PropAccessExpr;
+      receiver: Expr;
+      receiverType: TopazType;
+      methodName: string;
+      arrayName: string;
+      elemType: TopazType;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
       kind: "string_method";
       callee: PropAccessExpr;
       receiver: Expr;
@@ -5033,6 +5045,28 @@ class Emitter {
         end: plan.callee.end,
       };
     } else if (plan.kind === "set_method") {
+      const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
+      this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: plan.receiver,
+        receiverType: plan.receiverType,
+      });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: plan.receiver.pos,
+        end: plan.receiver.end,
+      };
+      transformedCallee = {
+        kind: "prop_access",
+        receiver: receiverTempExpr,
+        name: plan.methodName,
+        optional: false,
+        pos: plan.callee.pos,
+        end: plan.callee.end,
+      };
+    } else if (plan.kind === "array_method") {
       const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
       this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
       preAwaitReceiverTemps.push({
@@ -11511,6 +11545,96 @@ class Emitter {
     return [];
   }
 
+  private resolveArrayMethodCallPlan(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+    baseType: TopazType,
+  ): OrdinaryCallPlan {
+    const elem = arrayElem(baseType)!;
+    const methodName = callee.name;
+    let params: Array<ParamInfo> = [];
+    let returnType: TopazType = T_VOID;
+    if (methodName === "includes") {
+      if (expr.args.length === 0) {
+        throw new CodegenError({ pos: expr.pos }, "Array.includes expects exactly one argument");
+      }
+      if (expr.args.length > 1) {
+        const fromIndexArg = expr.args[1];
+        throw new CodegenError({ pos: fromIndexArg.pos }, "Array.includes `fromIndex` argument is unsupported");
+      }
+      this.expectType(expr.args[0], elem);
+      if (
+        elem.kind !== "number" &&
+        elem.kind !== "boolean" &&
+        elem.kind !== "string" &&
+        !isClassType(elem) &&
+        !isInterfaceType(elem)
+      ) {
+        throw new CodegenError(
+          { pos: expr.pos },
+          `Array.includes is unsupported for element type ${typeIdent(elem)}`,
+        );
+      }
+      params = [this.makeParamInfo("value", elem)];
+      returnType = T_BOOLEAN;
+    } else if (methodName === "slice") {
+      if (expr.args.length > 2) {
+        throw new CodegenError({ pos: expr.pos }, "Array.slice expects at most two arguments");
+      }
+      for (const arg of expr.args) {
+        const argType = this.inferType(arg);
+        if (argType.kind !== "number") {
+          throw new CodegenError(
+            { pos: arg.pos },
+            `Array.slice argument must be number, got ${typeIdent(argType)}`,
+          );
+        }
+      }
+      params = [
+        this.makeOptionalParamInfo("start", T_NUMBER),
+        this.makeOptionalParamInfo("end", T_NUMBER),
+      ];
+      returnType = baseType;
+    } else if (methodName === "join") {
+      if (expr.args.length > 1) {
+        throw new CodegenError({ pos: expr.pos }, "Array.join expects at most one argument");
+      }
+      if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") {
+        throw new CodegenError(
+          { pos: expr.pos },
+          `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
+        );
+      }
+      if (expr.args.length === 1) {
+        const sepArg = expr.args[0];
+        const sepType = this.inferType(sepArg);
+        if (sepType.kind !== "string") {
+          throw new CodegenError(
+            { pos: sepArg.pos },
+            `Array.join separator must be string, got ${typeIdent(sepType)}`,
+          );
+        }
+      }
+      this.recordArrayJoinMonomorph(baseType);
+      params = [this.makeOptionalParamInfo("separator", T_STRING)];
+      returnType = T_STRING;
+    } else {
+      throw new CodegenError({ pos: callee.pos }, `unsupported method '.${methodName}' on ${typeIdent(baseType)}`);
+    }
+    return {
+      kind: "array_method",
+      callee,
+      receiver: callee.receiver,
+      receiverType: baseType,
+      methodName,
+      arrayName: arrayShortName(baseType),
+      elemType: elem,
+      params,
+      returnType,
+      label: `Array.${methodName}`,
+    };
+  }
+
   private resolveMapMethodCallPlan(
     callee: PropAccessExpr,
     baseType: TopazType,
@@ -12069,6 +12193,20 @@ class Emitter {
       }
 
       const receiverType = this.inferType(receiver);
+      if (isArrayType(receiverType)) {
+        if (
+          awaitExpr !== undefined &&
+          callee.name !== "includes" &&
+          callee.name !== "slice" &&
+          callee.name !== "join"
+        ) {
+          return undefined;
+        }
+        if (callee.name === "includes" || callee.name === "slice" || callee.name === "join") {
+          return this.resolveArrayMethodCallPlan(expr, callee, receiverType);
+        }
+        return undefined;
+      }
       if (isMapType(receiverType)) {
         return this.resolveMapMethodCallPlan(callee, receiverType);
       }
@@ -12312,6 +12450,9 @@ class Emitter {
         return this.emitIterConstruction(plan.receiver, plan.receiverType, "set_values", plan.elemType, "key");
       }
     }
+    if (plan.kind === "array_method") {
+      return this.emitArrayMethodCall(expr, plan.callee, plan.receiverType);
+    }
     if (plan.kind === "string_method") {
       const base = this.emitExpression(plan.receiver);
       if (plan.methodName === "charCodeAt") {
@@ -12435,6 +12576,12 @@ class Emitter {
 
       const baseType = this.inferType(prop.receiver);
       if (isArrayType(baseType)) {
+        if (prop.name === "includes" || prop.name === "slice" || prop.name === "join") {
+          const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+          if (ordinaryPlan !== undefined) {
+            return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
+          }
+        }
         return this.emitArrayMethodCall(expr, prop, baseType);
       }
       if (isMapType(baseType)) {
@@ -14825,47 +14972,10 @@ class Emitter {
             return result;
           }
           if (prop.name === "slice") {
-            if (expr.args.length > 2) {
-              throw new CodegenError({ pos: expr.pos }, "Array.slice expects at most two arguments");
-            }
-            for (const arg of expr.args) {
-              const at = this.inferType(arg);
-              if (at.kind !== "number") {
-                throw new CodegenError(
-                  { pos: arg.pos },
-                  `Array.slice argument must be number, got ${typeIdent(at)}`,
-                );
-              }
-            }
-            // dst monomorph is the same as src; no new Array<T> to register.
-            return baseType;
+            return this.resolveArrayMethodCallPlan(expr, prop, baseType).returnType;
           }
           if (prop.name === "includes") {
-            if (expr.args.length === 0) {
-              throw new CodegenError({ pos: expr.pos }, "Array.includes expects exactly one argument");
-            }
-            if (expr.args.length > 1) {
-              const fromIndexArg = expr.args[1];
-              throw new CodegenError({ pos: fromIndexArg.pos }, "Array.includes `fromIndex` argument is unsupported");
-            }
-            const target = expr.args[0];
-            // Side-effect: re-check that `target` matches elem so emit-side
-            // and infer-side reject in lockstep.
-            this.emitWithExpected(target, elem);
-            // Reject unsupported elem types up-front (mirrors emitArrayMethodCall).
-            if (
-              elem.kind !== "number" &&
-              elem.kind !== "boolean" &&
-              elem.kind !== "string" &&
-              !isClassType(elem) &&
-              !isInterfaceType(elem)
-            ) {
-              throw new CodegenError(
-                { pos: expr.pos },
-                `Array.includes is unsupported for element type ${typeIdent(elem)}`,
-              );
-            }
-            return T_BOOLEAN;
+            return this.resolveArrayMethodCallPlan(expr, prop, baseType).returnType;
           }
           if (prop.name === "filter") {
             if (expr.args.length !== 1) {
@@ -14883,27 +14993,7 @@ class Emitter {
             return baseType;
           }
           if (prop.name === "join") {
-            if (expr.args.length > 1) {
-              throw new CodegenError({ pos: expr.pos }, "Array.join expects at most one argument");
-            }
-            if (elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string") {
-              throw new CodegenError(
-                { pos: expr.pos },
-                `Array.join is unsupported for element type ${typeIdent(elem)}; only scalar (number / boolean / string) elements are supported`,
-              );
-            }
-            if (expr.args.length === 1) {
-              const sepArg = expr.args[0];
-              const sepType = this.inferType(sepArg);
-              if (sepType.kind !== "string") {
-                throw new CodegenError(
-                  { pos: sepArg.pos },
-                  `Array.join separator must be string, got ${typeIdent(sepType)}`,
-                );
-              }
-            }
-            this.recordArrayJoinMonomorph(baseType);
-            return T_STRING;
+            return this.resolveArrayMethodCallPlan(expr, prop, baseType).returnType;
           }
           throw new CodegenError({ pos: prop.pos }, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
         }

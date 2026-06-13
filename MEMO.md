@@ -421,6 +421,8 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 - [x] **5.32 process write call descriptor await** — 5.31 の void-returning descriptor frontier を raw `process.stdout.write` / `process.stderr.write` と public `std/process` の `writeStdout` / `writeStderr` / `writeError` へ広げ、statement/discard position に限って one direct awaited string argument を lowering するようにした。raw writes は newline を追加せず、`writeError` は line-oriented stderr のまま、effect provenance は `src/builtin_descriptors.ts` の `io.stdout` / `io.stderr` に残す。value position、`process.exit` / `exit`、nested process arguments、assignment await、general expression decomposition、scheduler / task queue work は引き続き deferred。決定ログは `docs/adr/0499-process-write-call-descriptor-await.md`。
 
+- [x] **5.33 Array method call descriptor await** — 5.20-5.32 の descriptor-backed call-argument await frontier を callback-less Array receiver methods (`includes` / `slice` / `join`) へ広げ、既存の Array arity / type diagnostics と return types を通常 call plan から共有するようにした。block-bodied async declaration / arrow / method / anonymous function expression で、declaration initializer / terminal return / expression-statement discard の direct awaited argument を受理し、receiver は await 前に frame temp へ保存する。Array callback methods (`map` / `filter`)、mutating/spread methods (`push`)、`process.exit`、Promise APIs、thenable assimilation、scheduler / task queue work は引き続き deferred。決定ログは `docs/adr/0500-array-method-call-descriptor-await.md`。
+
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
