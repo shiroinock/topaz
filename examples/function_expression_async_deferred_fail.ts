@@ -1,7 +1,5 @@
-const f: () => Promise<number> = async function (): Promise<number> {
-  return 1;
-};
+/// <reference lib="es2015.promise" />
 
-f().then((value: number): void => {
-  console.log(value);
-});
+const f: () => Promise<number> = async function (): Promise<number> {
+  return await Promise.resolve(1);
+};

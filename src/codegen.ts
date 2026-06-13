@@ -5047,7 +5047,7 @@ class Emitter {
   private functionExprAsArrow(fn: FunctionExpr): ArrowExpr {
     return {
       kind: "arrow_expr",
-      isAsync: false,
+      isAsync: fn.isAsync,
       params: fn.params,
       returnType: fn.returnType,
       body: { kind: "arrow_block_body", stmts: fn.body },
@@ -5060,11 +5060,14 @@ class Emitter {
     if (fn.name !== undefined) {
       throw new CodegenError({ pos: fn.pos }, "named function expressions are deferred");
     }
-    if (fn.isAsync) {
-      throw new CodegenError({ pos: fn.pos }, "async function expressions are deferred");
-    }
     if (this.functionExprBodyContainsThis(fn)) {
       throw new CodegenError({ pos: fn.pos }, "function expression `this` is deferred");
+    }
+    if (fn.isAsync && this.functionExprBodyContainsAwait(fn)) {
+      throw new CodegenError(
+        { pos: fn.pos },
+        "async function expression with await is deferred until async function expression frame lowering",
+      );
     }
   }
 
@@ -5081,6 +5084,13 @@ class Emitter {
   private functionExprBodyContainsThis(fn: FunctionExpr): boolean {
     for (const s of fn.body) {
       if (this.stmtContainsThis(s)) return true;
+    }
+    return false;
+  }
+
+  private functionExprBodyContainsAwait(fn: FunctionExpr): boolean {
+    for (const s of fn.body) {
+      if (this.collectAwaitExprsInStmt(s).length > 0) return true;
     }
     return false;
   }
