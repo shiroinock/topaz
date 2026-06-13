@@ -4451,11 +4451,18 @@ class Emitter {
   private tryMakePhantomObjectBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
     if (alias.typeParams.length !== 1) return undefined;
     const payloadTypeParam = alias.typeParams[0];
-    if (payloadTypeParam.constraint !== undefined || payloadTypeParam.defaultType !== undefined) return undefined;
     const body = alias.body;
     if (body.kind !== "type_literal") return undefined;
     const fieldKey = this.brandAliasTemplateFieldKey(body, payloadTypeParam.name);
     if (fieldKey === undefined) return undefined;
+    if (payloadTypeParam.defaultType !== undefined) return undefined;
+    const payloadConstraint = payloadTypeParam.constraint;
+    if (payloadConstraint !== undefined && !this.isBrandPayloadTypeParamConstraint(payloadConstraint)) {
+      throw this.typeErr(
+        { pos: payloadConstraint.pos },
+        "phantom object brand helper payload constraint must be string, PropertyKey, or string | number | symbol",
+      );
+    }
     return { kind: "phantom_object", fieldKey, payloadDefault: undefined };
   }
 
