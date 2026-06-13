@@ -572,6 +572,7 @@ export type ClassMethodMember = {
   kind: "class_method";
   modifiers: Array<ClassMemberModifier>;
   isCtor: boolean;
+  isAsync: boolean;
   name: string;
   params: Array<FunctionParam>;
   returnType: TypeNode | undefined;

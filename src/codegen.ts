@@ -3546,6 +3546,9 @@ class Emitter {
   // `isCtor`). Generic-ctor / missing-body rejection live in convert.
   private collectConstructor(info: ClassInfo, m: ClassMethodMember, sf: SourceModule): void {
     const ctorAnchor: { pos: number } = { pos: m.pos };
+    if (m.isAsync) {
+      throw new CodegenError(ctorAnchor, "async constructors are unsupported");
+    }
     const existingCtor = info.ctor;
     if (existingCtor !== undefined) {
       throw new CodegenError(ctorAnchor, `class '${info.name}' has multiple constructors`);
@@ -3566,7 +3569,18 @@ class Emitter {
       throw new CodegenError(methodAnchor, `method '${mname}' conflicts with a field of the same name`);
     }
     const params = this.collectParams(m.params, sf);
-    const returnType = this.typeFromAnnotation(m.returnType, methodAnchor, sf);
+    const methodReturnType = m.returnType;
+    if (m.isAsync && methodReturnType === undefined) {
+      throw new CodegenError(methodAnchor, "async method return annotation must be Promise<T>");
+    }
+    let retAnchor: { pos: number } = methodAnchor;
+    if (methodReturnType !== undefined) {
+      retAnchor = { pos: methodReturnType.pos };
+    }
+    const returnType = this.typeFromAnnotation(methodReturnType, retAnchor, sf);
+    if (m.isAsync && returnType.kind !== "promise") {
+      throw new CodegenError(retAnchor, `async method return annotation must be Promise<T>, got ${typeIdent(returnType)}`);
+    }
     info.methods.set(mname, { params, returnType, decl: m });
   }
 
@@ -3734,9 +3748,21 @@ class Emitter {
   private emitMethodDefinition(info: ClassInfo, method: MethodInfo): string {
     this.currentClass = info.name;
     const prevRet = this.currentReturnType;
+    const prevAsyncPayload = this.currentAsyncReturnPayloadType;
+    const prevAsyncContinuationTarget = this.currentAsyncContinuationTarget;
     const prevLive = this.liveTryFrames;
     const prevFinallyReturn = this.finallyReturnContext;
-    this.currentReturnType = method.returnType;
+    const methodReturnType = method.returnType;
+    let asyncPayload: TopazType | undefined = undefined;
+    if (method.decl.isAsync) {
+      if (methodReturnType.kind !== "promise") {
+        throwInternalCodegenError("async method signature is not Promise<T>");
+      }
+      asyncPayload = methodReturnType.value;
+    }
+    this.currentReturnType = asyncPayload === undefined ? methodReturnType : asyncPayload;
+    this.currentAsyncReturnPayloadType = asyncPayload;
+    this.currentAsyncContinuationTarget = undefined;
     this.liveTryFrames = 0;
     this.finallyReturnContext = undefined;
     this.scope.push();
@@ -3749,6 +3775,8 @@ class Emitter {
     let body = "";
     if (methodSf === undefined) {
       throwInternalCodegenError(`missing source module for method '${info.name}.${method.decl.name}'`);
+    } else if (asyncPayload !== undefined) {
+      body = this.emitAsyncMethodBody(method.decl.body, methodSf, asyncPayload);
     } else {
       body = this.emitBlockBoundary(method.decl.body, methodSf);
     }
@@ -3756,9 +3784,49 @@ class Emitter {
     this.scope.pop();
     this.currentClass = undefined;
     this.currentReturnType = prevRet;
+    this.currentAsyncReturnPayloadType = prevAsyncPayload;
+    this.currentAsyncContinuationTarget = prevAsyncContinuationTarget;
     this.liveTryFrames = prevLive;
     this.finallyReturnContext = prevFinallyReturn;
     return rendered;
+  }
+
+  private emitAsyncMethodBody(block: BlockStmt, sf: SourceModule, payloadType: TopazType): string {
+    return this.withSfString(sf, () => {
+      for (const s of block.stmts) {
+        const found = this.collectAwaitExprsInStmt(s);
+        if (found.length > 0) {
+          const first = found[0];
+          throw new CodegenError(
+            { pos: first.pos },
+            "async method with await is deferred until async method frame lowering",
+          );
+        }
+      }
+      const lines: string[] = [];
+      lines.push("{");
+      lines.push("  topaz_try_frame __topaz_async_frame;");
+      lines.push("  topaz_try_push(&__topaz_async_frame);");
+      lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
+      this.liveTryFrames++;
+      for (const s of block.stmts) {
+        lines.push(this.emitStatement(s, 2));
+        this.applyCarryNarrowing(s);
+      }
+      this.liveTryFrames--;
+      lines.push("    topaz_try_pop();");
+      if (payloadType.kind === "void") {
+        lines.push("    return topaz_promise_resolve_void();");
+      } else {
+        lines.push("    topaz_panic((topaz_string){ \"topaz: async method fell through without a value\", 48 });");
+        lines.push("    return topaz_promise_resolve_void();");
+      }
+      lines.push("  } else {");
+      lines.push("    return topaz_promise_reject(topaz_throw_value);");
+      lines.push("  }");
+      lines.push("}");
+      return lines.join("\n");
+    });
   }
 
   // Phase 1.4b: each interface gets a vtable struct. Fields become get/set

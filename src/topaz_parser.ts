@@ -487,6 +487,11 @@ export class Parser {
       break;
     }
 
+    let isAsync: boolean = false;
+    if (this.matchKeyword("async")) {
+      isAsync = true;
+    }
+
     const head: Token = this.current();
     let name: string = "";
     let isCtor: boolean = false;
@@ -501,6 +506,9 @@ export class Parser {
       this.pos += 1;
     } else {
       throw this.error(head, "expected class member name");
+    }
+    if (isAsync && isCtor) {
+      throw this.error(head, "async constructors are unsupported");
     }
 
     const after: Token = this.current();
@@ -520,6 +528,7 @@ export class Parser {
         kind: "class_method",
         modifiers: modifiers,
         isCtor: isCtor,
+        isAsync: isAsync,
         name: name,
         params: params,
         returnType: returnType,
@@ -527,6 +536,9 @@ export class Parser {
         pos: modStart.pos,
         end: body.end,
       };
+    }
+    if (isAsync) {
+      throw this.error(head, "async class fields are unsupported");
     }
 
     // field

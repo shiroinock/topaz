@@ -364,7 +364,11 @@ class Converter {
     m: ts.MethodDeclaration | ts.ConstructorDeclaration,
     isCtor: boolean,
   ): ClassMethodMember {
-    this.rejectAsyncStar(m);
+    const isAsync = this.hasAsyncModifier(m);
+    if (isCtor && isAsync) {
+      throw this.err(m, "async constructors are unsupported");
+    }
+    this.rejectStar(m);
     if (!m.body) throw this.err(m, "class method must have a body");
     const modifiers = this.collectClassMemberModifiers(m);
     let name: string;
@@ -386,6 +390,7 @@ class Converter {
       kind: "class_method",
       modifiers,
       isCtor,
+      isAsync,
       name,
       params,
       returnType,
@@ -420,6 +425,8 @@ class Converter {
             break;
           case ts.SyntaxKind.OverrideKeyword:
             mods.push("override");
+            break;
+          case ts.SyntaxKind.AsyncKeyword:
             break;
           case ts.SyntaxKind.ExportKeyword:
           case ts.SyntaxKind.DefaultKeyword:

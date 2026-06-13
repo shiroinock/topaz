@@ -387,6 +387,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **5.6 async frame await lowering** — top-level `async function` declaration 内の複数 `const` / `let` await binding を compiler-generated async frame に lowering し、frame が pc / output Promise / params / await payload locals を保持して Promise continuation から再開する。prefix は同期 turn で実行し、各 suspension 後の segment と final `.then` は microtask drain で順序通り実行する。top-level await、non-async await、non-Promise operand、`return await`、try/catch/finally 内 await、任意式位置 await、await 間をまたぐ通常 local capture、thenable assimilation は引き続き deferred。決定ログは `docs/adr/0473-async-frame-await-lowering.md`。
 - [x] **5.7 async arrow no-await lowering** — `await` を含まない `async (...) => ...` を通常の `fn(...): Promise<T>` arrow value として受理し、body は同期実行、`return T` / expression body / void fallthrough / throw class instance を fulfilled / rejected Promise に包む。capture は既存 arrow と同じ by-value snapshot で、suspension point をまたぐ保存はまだ行わない。async arrow 内 `await`、async method、Promise rejection handler、`PromiseLike`、thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0474-no-await-async-arrow-lowering.md`。
 - [x] **5.8 async arrow await-frame lowering** — block-bodied `async (...) => Promise<T>` arrow 内の top-level `const` / `let` await binding を 5.6 の async frame machinery に接続し、frame が arrow params / await payload locals / capture env pointer を保持して suspension 後も既存 capture-by-value env を読む。prefix は同期 turn で実行し、複数 suspension と final `.then` は FIFO microtask queue で再開する。async method、function expression、top-level await、arbitrary await、`return await`、try/catch/finally 内 await、await 間をまたぐ通常 local capture、Promise rejection handler、`PromiseLike`、thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0475-async-arrow-await-frame-lowering.md`。
+- [x] **5.9 no-await async method lowering** — `await` を含まない class `async method(): Promise<T>` を通常 method ABI の `Promise<T>` return として受理し、method body は payload `T` として検査して同期実行、`return T` / `Promise<void>` fallthrough / throw class instance を fulfilled / rejected Promise に包む。interface 実装は既存 exact method signature check に委ね、async method await-frame lowering、async function expression、rejection handler、`PromiseLike`、thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0476-no-await-async-method-lowering.md`。
 
 Release/version allocation:
 
@@ -410,11 +411,12 @@ Post-MVP ecosystem items:
   `Promise.resolve` / contextual `Promise.reject` value allocation, and
   fulfillment-only `Promise.then` continuations, and no-await top-level async
   function lowering, one top-level await binding, and multi-suspension await
-  frames, and no-await async arrow lowering are complete; next stages are
-  async arrow frame lowering / async method, rejection handler Promise method
-  surface, explicit `PromiseLike` bridge, controlled static thenable
-  assimilation, Node-compatible scheduler mode, and future Topaz-owned
-  parallel scheduler mode
+  frames, no-await async arrow lowering, async arrow frame lowering, and
+  no-await async method lowering are complete; next stages are async method
+  await-frame lowering, async function expressions, rejection handler Promise
+  method surface, explicit `PromiseLike` bridge, controlled static thenable
+  assimilation, Node-compatible scheduler mode, and future Topaz-owned parallel
+  scheduler mode
 - branded / brand / opaque / nominal / `unique symbol` compatibility: prioritize
   erasable type-only TS patterns before runtime-emitting constructs
 - v0.2 guidance follow-through: compile-time policy enforcement, runtime

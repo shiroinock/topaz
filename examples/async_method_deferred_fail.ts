@@ -1,6 +1,6 @@
 class AsyncBox {
   async value(): Promise<number> {
-    return 1;
+    return await Promise.resolve(1);
   }
 }
 
