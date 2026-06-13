@@ -378,6 +378,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **4.45 runtime substrate saturation guard** — 通常 `pnpm test` で detailed runtime substrate report の 56 symbol 分類、8 本の active migration lane count、closed legacy string-buffer / bigint-limb lane、residual C hash substrate と runtime prelude equality bridge の split を `runtime_substrate_saturation_guard` として固定した。runtime behavior / generated runtime / codegen / release artifact / tag / GitHub Release state は変更しない。決定ログは `docs/adr/0464-runtime-substrate-saturation-guard.md`。
 - [x] **4.46 runtime prelude intrinsic boundary guard** — 通常 `pnpm test` で `StringBuffer` / `BigIntBuffer` pseudo type と代表的な `__topaz_*` intrinsic handling が `runtime/prelude.ts` 専用境界に残り、prelude 側の active client / user-source hidden-helper fail / active intrinsic-family lane docs が揃っていることを `runtime_prelude_intrinsic_boundary_guard` として固定した。runtime behavior / runtime header / generated runtime / codegen behavior / release state は変更しない。決定ログは `docs/adr/0465-runtime-prelude-intrinsic-boundary-guard.md`。
 - [x] **4.47 pre-v0.2 intrinsic boundary handoff sync** — Phase 4.46 の `runtime_prelude_intrinsic_boundary_guard` を pre-v0.2 / v0.2 release-readiness surface と release skill に反映し、56 symbol の `runtime/runtime.h` substrate saturation guard とは別の `runtime/prelude.ts` intrinsic access boundary として operator が監査できるようにした。runtime behavior / runtime header / generated runtime / codegen behavior / release tag / GitHub Release state は変更しない。決定ログは `docs/adr/0466-pre-v0-2-intrinsic-boundary-handoff.md`。
+- [x] **5.0 post-v0.2 TypeScript compatibility priority reset** — v0.2 guidance follow-through よりも TS 構文 / 型互換性の体感カバー率を優先する方針へ切り替え、次 track を async/await 互換ロードマップと branded / brand / opaque / nominal / `unique symbol` 系の型専用互換性に絞った。async は Node-compatible single-thread scheduler と将来の Topaz-owned parallel scheduler を分けて扱い、brand 系は runtime object 追加ではなく erasable / type-only pattern から優先する。enum は低優先のまま clear reject 継続。runtime behavior / codegen behavior / release state は変更しない。決定ログは `docs/adr/0467-post-v0-2-typescript-compatibility-priorities.md`。
 
 Release/version allocation:
 
@@ -387,18 +388,24 @@ Release/version allocation:
 - `v0.1.3` — runtime TS prelude checkpoint。internal runtime prelude injection / embedding、stable hidden prelude symbols と移行済み pure helper、`StringBuffer` / `BigIntBuffer` intrinsic substrate family、closed legacy lanes、pre-v0.2.0 に pin した残りの C substrate boundary をまとめる。public language surface / runtime semantics は拡張しない。
 - `v0.1.y` — MVP-preserving patch。crash fix、diagnostic/doc/workflow 修正、self-host/release gate 安定化。言語 surface や runtime semantics の拡張はしない。
 - `v0.2.0` — capability/effect inference、manifest generation、`doctor` / `check` / `explain`。optional policy file と zero-config build の関係を実装へ進める。
-- `v0.3.0` — async/await / Promise execution。ADR `0327` の fiber-based design を実装 track に移す。
-- `v0.4.0` — RegExp execution。ADR `0326` の minimal regexp surface を実装する。
-- `v0.5.0` — generic method/interface support。Phase 2.3c で設計した staged surface を実装する。
-- `v0.6.0` — remaining BigInt surface。division/modulo、containers、format/parse/performance などを段階的に広げる。
-- `v0.7.0+` — LLM migration tool、Wasm/WASI backend、multi-platform artifacts、signing/notarization/attestation など、配布・移行・target 拡張の大きい track。
+- `v0.3.0` — async/await compatibility track。ADR `0327` の fiber-based design を、`Promise<T>` MVP から async function / `await` / async arrow / async method / Promise method surface / explicit `PromiseLike` bridge / controlled static thenable assimilation へ段階実装する。Node-compatible single-thread scheduler を互換 mode とし、Topaz-owned parallel scheduler は opt-in / effect-safe task API として後続設計へ分ける。
+- `v0.4.0` — branded / brand / opaque / nominal / `unique symbol` compatibility track。既存 TS の nominal-ish pattern を、runtime object 追加ではなく erasable / type-only intersection brand から優先して受ける。`enum` は runtime-emitting TS 構文なので低優先の clear reject 継続。
+- `v0.5.0` — RegExp execution。ADR `0326` の minimal regexp surface を実装する。
+- `v0.6.0` — generic method/interface support。Phase 2.3c で設計した staged surface を実装する。
+- `v0.7.0` — remaining BigInt surface。division/modulo、containers、format/parse/performance などを段階的に広げる。
+- `v0.8.0+` — LLM migration tool、Wasm/WASI backend、multi-platform artifacts、signing/notarization/attestation など、配布・移行・target 拡張の大きい track。
 
 Post-MVP ecosystem items:
 
 - restore current self-host fixed-point gate (old blocker `src/codegen.ts:7843:15` cleanup target frame walk cleared by ADR `0347`; `src/codegen.ts:9612:24` `fixedTmps.length.toString()` cleared by ADR `0348`; `pnpm run test:selfhost` now reaches `PASS [selfhost_fixed_point]` and writes the final native compiler as `build/topaz`)
+- async/await compatibility roadmap: `Promise<T>` MVP, async function lowering,
+  async arrow / async method, Promise method surface, explicit `PromiseLike`
+  bridge, controlled static thenable assimilation, Node-compatible scheduler
+  mode, and future Topaz-owned parallel scheduler mode
+- branded / brand / opaque / nominal / `unique symbol` compatibility: prioritize
+  erasable type-only TS patterns before runtime-emitting constructs
 - v0.2 guidance follow-through: compile-time policy enforcement, runtime
   sandboxing, schema expansion, and richer policy discovery remain future work
-- async implementation
 - regexp implementation
 - generic method/interface implementation
 - remaining bigint surface

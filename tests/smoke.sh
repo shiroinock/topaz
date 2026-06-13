@@ -396,6 +396,7 @@ release_state_handoff_v0_1_3="docs/releases/v0.1.3-release-state-handoff.md"
 pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
 release_readiness_v0_2_0="docs/releases/v0.2.0-rc-readiness.md"
 runtime_migration_doc="docs/runtime-ts-migration.md"
+phase_5_0_adr="docs/adr/0467-post-v0-2-typescript-compatibility-priorities.md"
 for fragment in \
   'pnpm run check:runtime-header' \
   'pnpm run check:runtime-prelude' \
@@ -865,6 +866,27 @@ for fragment in \
   fi
 done
 echo "PASS [release_v0_2_0_notes_contract]"
+if [[ ! -f "${phase_5_0_adr}" ]]; then
+  echo "FAIL [phase_5_0_typescript_compatibility_priority_contract]: missing ${phase_5_0_adr}" >&2
+  exit 1
+fi
+for fragment in \
+  'post-v0.2 TypeScript compatibility priorities' \
+  'async/await compatibility' \
+  'PromiseLike' \
+  'controlled static thenable assimilation' \
+  'Node-compatible single-thread' \
+  'Topaz-owned parallel scheduler' \
+  'branded / brand / opaque / nominal / `unique symbol`' \
+  'erasable type-only patterns' \
+  'enum' \
+  'low priority'; do
+  if ! grep -Fq "${fragment}" "${phase_5_0_adr}" MEMO.md; then
+    echo "FAIL [phase_5_0_typescript_compatibility_priority_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [phase_5_0_typescript_compatibility_priority_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \
