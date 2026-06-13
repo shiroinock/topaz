@@ -423,6 +423,8 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 - [x] **5.33 Array method call descriptor await** — 5.20-5.32 の descriptor-backed call-argument await frontier を callback-less Array receiver methods (`includes` / `slice` / `join`) へ広げ、既存の Array arity / type diagnostics と return types を通常 call plan から共有するようにした。block-bodied async declaration / arrow / method / anonymous function expression で、declaration initializer / terminal return / expression-statement discard の direct awaited argument を受理し、receiver は await 前に frame temp へ保存する。Array callback methods (`map` / `filter`)、mutating/spread methods (`push`)、`process.exit`、Promise APIs、thenable assimilation、scheduler / task queue work は引き続き deferred。決定ログは `docs/adr/0500-array-method-call-descriptor-await.md`。
 
+- [x] **5.34 Array.push call descriptor await** — 5.33 の Array receiver descriptor frontier を statement-only の fixed-argument `Array<T>.push(...)` へ広げ、receiver と await より左の fixed 引数を suspension 前に frame temp へ保存し、再開後は既存の `emitArrayPushCall` に戻して mutation order を保つようにした。`Array.push` は Topaz では引き続き `void` で、value position の `xs.push(await value)` は既存 diagnostic のまま reject。ordinary `Array.push(...items)` spread は維持するが await-lowered push とは組み合わせず、callback Array methods、`process.exit`、Promise APIs、thenable assimilation、scheduler / task queue work は引き続き deferred。決定ログは `docs/adr/0501-array-push-call-descriptor-await.md`。
+
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。

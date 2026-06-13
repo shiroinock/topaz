@@ -2963,6 +2963,7 @@ run_case async_await_fs_write_mkdir_call_arg $'declared pre\ndeclared path\narro
 run_case async_await_child_process_exec_call_arg $'declared pre\ndeclared cmd\narrow pre\narrow args\nmethod pre\nmethod cmd\nexpr pre\nexpr args\nsync tail\ndeclared child\ndeclared after\narrow child\narrow after\nmethod child\nmethod after\nexpr child\nexpr after\ndeclared then\narrow then\nmethod then\nexpr then'
 run_case async_await_process_write_call_arg $'declared pre\ndeclared payload\narrow pre\narrow payload\nmethod raw pre\nmethod raw payload\nmethod public pre\nmethod public payload\nexpr pre\nexpr payload\nsync tail\ndeclared out\ndeclared after\narrow out\narrow after\nmethod raw after\nmethod public after\nexpr after\ndeclared then\narrow then\nmethod raw then\nmethod public then\nexpr then'
 run_case async_await_array_method_call_arg $'declared recv\narrow recv\nmethod recv\nexpr recv\ndiscard recv\nsync tail\ndeclared after\ntrue\narrow after\n2\n2\n3\nmethod after\nred|blue|green\ndiscard after\ndeclared then\ntrue\narrow then\n2\nmethod then\nred|blue|green\nexpr then\n2\n3\ndiscard then\ntrue'
+run_case async_await_array_push_call_arg $'declared recv\ndeclared awaited\narrow recv\narrow prefix\narrow awaited\nmethod awaited\nexpr recv\nexpr prefix\nexpr awaited\nsync tail\ndeclared after\n1\n1\narrow after\n2\n10\n20\nmethod after\n2\n30\nexpr suffix\nexpr after\n3\n40\n50\n60\ndeclared then\n1\narrow then\n2\nmethod then\n2\nexpr then\n3'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -2978,6 +2979,7 @@ run_fail_case await_call_arg_child_process_deferred_fail examples/await_call_arg
 run_fail_case await_call_arg_process_write_deferred_fail examples/await_call_arg_process_write_deferred_fail.ts "process.stdout.write returns void and cannot be used as a value"
 run_fail_case await_call_arg_method_deferred_fail examples/await_call_arg_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_collection_void_deferred_fail examples/await_call_arg_collection_void_deferred_fail.ts "Map.set returns void in this dialect and cannot be used as a value"
+run_fail_case await_call_arg_array_push_deferred_fail examples/await_call_arg_array_push_deferred_fail.ts "Array.push returns void in this dialect and cannot be used as a value"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_statement_deferred_fail examples/await_expression_statement_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_try_deferred_fail examples/await_try_deferred_fail.ts "await inside try/catch/finally is deferred"

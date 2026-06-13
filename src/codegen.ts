@@ -11618,6 +11618,18 @@ class Emitter {
       this.recordArrayJoinMonomorph(baseType);
       params = [this.makeOptionalParamInfo("separator", T_STRING)];
       returnType = T_STRING;
+    } else if (methodName === "push") {
+      if (expr.args.length === 0) {
+        throw new CodegenError({ pos: expr.pos }, "Array.push expects at least one argument");
+      }
+      for (let i = 0; i < expr.args.length; i++) {
+        const arg = expr.args[i];
+        if (arg.kind === "spread_expr") {
+          throw new CodegenError({ pos: arg.pos }, "spread in call arguments is unsupported");
+        }
+        params.push(this.makeParamInfo(`value${i}`, elem));
+      }
+      returnType = T_VOID;
     } else {
       throw new CodegenError({ pos: callee.pos }, `unsupported method '.${methodName}' on ${typeIdent(baseType)}`);
     }
@@ -12198,11 +12210,12 @@ class Emitter {
           awaitExpr !== undefined &&
           callee.name !== "includes" &&
           callee.name !== "slice" &&
-          callee.name !== "join"
+          callee.name !== "join" &&
+          callee.name !== "push"
         ) {
           return undefined;
         }
-        if (callee.name === "includes" || callee.name === "slice" || callee.name === "join") {
+        if (callee.name === "includes" || callee.name === "slice" || callee.name === "join" || callee.name === "push") {
           return this.resolveArrayMethodCallPlan(expr, callee, receiverType);
         }
         return undefined;
@@ -12576,7 +12589,10 @@ class Emitter {
 
       const baseType = this.inferType(prop.receiver);
       if (isArrayType(baseType)) {
-        if (prop.name === "includes" || prop.name === "slice" || prop.name === "join") {
+        if (
+          (prop.name === "includes" || prop.name === "slice" || prop.name === "join") ||
+          (prop.name === "push" && firstSpread === undefined)
+        ) {
           const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
           if (ordinaryPlan !== undefined) {
             return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
