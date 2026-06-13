@@ -135,6 +135,8 @@ type AwaitReturnInfo = {
   stmt: ReturnStmt;
   awaitExpr: AwaitExpr;
   returnExpr: Expr | undefined;
+  preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+  preAwaitArgTemps: Array<AwaitCallArgTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -4523,8 +4525,8 @@ class Emitter {
                 const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
                 transformedInitializer = this.replaceAwaitExprInExpr(initMaybe, awaitExpr, tempExpr);
               } else {
-                const callAwait = this.tryBuildCallArgAwaitInitializer(initMaybe, awaitExpr, tempName, steps.length);
-                transformedInitializer = callAwait.transformedInitializer;
+                const callAwait = this.tryBuildCallArgAwaitExpression(initMaybe, awaitExpr, tempName, steps.length);
+                transformedInitializer = callAwait.transformedExpr;
                 preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
                 preAwaitArgTemps = callAwait.preAwaitArgTemps;
               }
@@ -4579,12 +4581,6 @@ class Emitter {
               );
             }
             const awaitExpr = returnAwaits[0];
-            if (!this.simpleAwaitReplacementSupported(valueMaybe, awaitExpr)) {
-              throw new CodegenError(
-                { pos: awaitExpr.pos },
-                this.unsupportedAwaitLoweringMessage(),
-              );
-            }
             const operandType = this.inferType(awaitExpr.operand);
             if (operandType.kind !== "promise") {
               throw new CodegenError(
@@ -4596,11 +4592,21 @@ class Emitter {
             const isDirectReturnAwait = value.kind === "await_expr";
             let returnExpr: Expr | undefined = undefined;
             let returnType = awaitedPayload;
+            let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+            let preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
             const tempName = `__topaz_return_await_${steps.length}`;
             if (!isDirectReturnAwait) {
               this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
-              const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
-              const transformedReturnExpr = this.replaceAwaitExprInExpr(valueMaybe, awaitExpr, tempExpr);
+              let transformedReturnExpr: Expr = valueMaybe;
+              if (this.simpleAwaitReplacementSupported(valueMaybe, awaitExpr)) {
+                const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
+                transformedReturnExpr = this.replaceAwaitExprInExpr(valueMaybe, awaitExpr, tempExpr);
+              } else {
+                const callAwait = this.tryBuildCallArgAwaitExpression(valueMaybe, awaitExpr, tempName, steps.length);
+                transformedReturnExpr = callAwait.transformedExpr;
+                preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
+                preAwaitArgTemps = callAwait.preAwaitArgTemps;
+              }
               returnExpr = transformedReturnExpr;
               returnType = this.inferType(transformedReturnExpr);
             }
@@ -4615,6 +4621,8 @@ class Emitter {
               stmt: s,
               awaitExpr,
               returnExpr,
+              preAwaitReceiverTemps,
+              preAwaitArgTemps,
               index: i,
               pc: steps.length,
               operandType,
@@ -4687,20 +4695,20 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, initializer expression await, bare call-argument await in declaration initializers, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
   }
 
-  private tryBuildCallArgAwaitInitializer(
-    initializer: Expr,
+  private tryBuildCallArgAwaitExpression(
+    expr: Expr,
     awaitExpr: AwaitExpr,
     awaitedTempName: string,
     stepOrdinal: number,
   ): {
-    transformedInitializer: Expr;
+    transformedExpr: Expr;
     preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
     preAwaitArgTemps: Array<AwaitCallArgTemp>;
   } {
-    const rootMaybe = this.unwrapParenExpr(initializer);
+    const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "call_expr") {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
@@ -4821,7 +4829,7 @@ class Emitter {
     }
 
     return {
-      transformedInitializer: {
+      transformedExpr: {
         kind: "call_expr",
         callee: transformedCallee,
         typeArgs: root.typeArgs,
@@ -5023,14 +5031,31 @@ class Emitter {
     lines: string[],
     indent: string,
   ): void {
-    if (step.kind !== "initializer") return;
-    for (const receiverTemp of step.preAwaitReceiverTemps) {
-      const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
-      lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
-    }
-    for (const temp of step.preAwaitArgTemps) {
-      const expr = this.emitWithExpected(temp.arg, temp.argType);
-      lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+    switch (step.kind) {
+      case "initializer": {
+        for (const receiverTemp of step.preAwaitReceiverTemps) {
+          const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
+          lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
+        }
+        for (const temp of step.preAwaitArgTemps) {
+          const expr = this.emitWithExpected(temp.arg, temp.argType);
+          lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+        }
+        return;
+      }
+      case "return": {
+        for (const receiverTemp of step.preAwaitReceiverTemps) {
+          const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
+          lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
+        }
+        for (const temp of step.preAwaitArgTemps) {
+          const expr = this.emitWithExpected(temp.arg, temp.argType);
+          lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+        }
+        return;
+      }
+      case "binding":
+        return;
     }
   }
 
@@ -5074,6 +5099,14 @@ class Emitter {
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
         }
+      }
+    }
+    if (returnStep !== undefined) {
+      for (const receiverTemp of returnStep.preAwaitReceiverTemps) {
+        fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
+      }
+      for (const temp of returnStep.preAwaitArgTemps) {
+        fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
       }
     }
     if (returnStep !== undefined && returnStep.awaitedType.kind !== "void") {
@@ -5210,6 +5243,16 @@ class Emitter {
             lines.push("        return;");
           }
         } else {
+          for (const receiverTemp of current.preAwaitReceiverTemps) {
+            this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
+            lines.push(`        ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
+            lines.push(`        (void)${receiverTemp.tempName};`);
+          }
+          for (const temp of current.preAwaitArgTemps) {
+            this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
+            lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
+            lines.push(`        (void)${temp.tempName};`);
+          }
           if (current.awaitedType.kind !== "void") {
             this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
             lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);

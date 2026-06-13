@@ -1,5 +1,6 @@
 async function answer(): Promise<number> {
-  return plusOne(await Promise.resolve(42));
+  plusOne(await Promise.resolve(42));
+  return 43;
 }
 
 function plusOne(n: number): number {
