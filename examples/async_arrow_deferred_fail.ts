@@ -1,5 +1,8 @@
+/// <reference lib="es2015.promise" />
+
 const answer = async (): Promise<number> => {
-  return 1;
+  const n = await Promise.resolve(42);
+  return n;
 };
 
-console.log(answer());
+answer();

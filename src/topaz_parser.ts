@@ -1477,12 +1477,21 @@ export class Parser {
       if (t.word === "import") {
         return this.parseImportMetaUrl();
       }
+      if (t.word === "async") {
+        const save: number = this.pos;
+        this.pos += 1;
+        if (this.isPunct(this.current(), "(") && this.looksLikeArrow()) {
+          return this.parseArrow(true, t.pos);
+        }
+        this.pos = save;
+        throw this.error(t, "async expressions are unsupported (only async arrow functions are supported)");
+      }
     }
     if (this.isPunct(t, "(")) {
       // arrow function detection lookahead — handle simple `() => ...`
       // and `(x: T, y: U) => ...` shapes. Bare paren-expr falls through.
       if (this.looksLikeArrow()) {
-        return this.parseArrow();
+        return this.parseArrow(false, t.pos);
       }
       this.pos += 1;
       const inner: Expr = this.parseExpr();
@@ -1738,7 +1747,7 @@ export class Parser {
     return false;
   }
 
-  parseArrow(): Expr {
+  parseArrow(isAsync: boolean, startPos: number): Expr {
     const start: Token = this.expectPunct("(");
     const params: Array<ArrowParam> = [];
     while (!this.matchPunct(")")) {
@@ -1768,10 +1777,11 @@ export class Parser {
     })();
     return {
       kind: "arrow_expr",
+      isAsync: isAsync,
       params: params,
       returnType: returnType,
       body: body,
-      pos: start.pos,
+      pos: startPos,
       end: endPos,
     };
   }

@@ -337,6 +337,7 @@ export type ArrowBody =
 
 export type ArrowExpr = {
   kind: "arrow_expr";
+  isAsync: boolean;
   params: Array<ArrowParam>;
   returnType: TypeNode | undefined;
   body: ArrowBody;

@@ -1307,7 +1307,8 @@ class Converter {
   }
 
   convertArrow(e: ts.ArrowFunction): ArrowExpr {
-    this.rejectAsyncStar(e);
+    const isAsync = this.hasAsyncModifier(e);
+    this.rejectStar(e);
     if (e.typeParameters && e.typeParameters.length > 0) {
       throw this.err(e, "generic arrow function is unsupported");
     }
@@ -1332,6 +1333,7 @@ class Converter {
     }
     return {
       kind: "arrow_expr",
+      isAsync,
       params,
       returnType,
       body,

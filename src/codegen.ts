@@ -4802,6 +4802,36 @@ class Emitter {
     );
   }
 
+  private collectAwaitExprsInArrow(arrow: ArrowExpr): Array<AwaitExpr> {
+    const out: Array<AwaitExpr> = [];
+    const body = arrow.body;
+    if (body.kind === "arrow_expr_body") {
+      this.collectAwaitExprsInExprInto(body.expr, out);
+    } else {
+      for (const s of body.stmts) this.collectAwaitExprsInStmtInto(s, out);
+    }
+    return out;
+  }
+
+  private checkAsyncArrowNoAwait(arrow: ArrowExpr): void {
+    if (!arrow.isAsync) return;
+    const awaits = this.collectAwaitExprsInArrow(arrow);
+    if (awaits.length === 0) return;
+    const first = awaits[0];
+    throw new CodegenError(
+      { pos: first.pos },
+      "async arrow with await is deferred until async arrow frame lowering",
+    );
+  }
+
+  private asyncArrowPayloadType(returnType: TopazType, anchor: { pos: number }): TopazType {
+    if (returnType.kind === "promise") return returnType.value;
+    throw new CodegenError(
+      anchor,
+      `async arrow return annotation/context must be Promise<T>, got ${typeIdent(returnType)}`,
+    );
+  }
+
   // Phase 1.4c-2: format a monomorph's C signature from its resolved
   // FunctionSig. Distinct from formatSignature(fn) which re-resolves via
   // typeFromAnnotation; here the substitution has already been applied and we
@@ -4856,6 +4886,7 @@ class Emitter {
         `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
+    this.checkAsyncArrowNoAwait(arrow);
     const params: ParamInfo[] = [];
     for (let i = 0; i < arrow.params.length; i++) {
       const p = arrow.params[i];
@@ -4886,7 +4917,20 @@ class Emitter {
     } else {
       throw new CodegenError({ pos: arrow.pos }, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
-    if (returnType.kind === "void" && arrow.body.kind === "arrow_expr_body") {
+    let asyncPayloadType: TopazType | undefined = undefined;
+    if (arrow.isAsync) {
+      if (arrowReturnType !== undefined) {
+        asyncPayloadType = this.asyncArrowPayloadType(returnType, { pos: arrowReturnType.pos });
+      } else if (expectedFn !== undefined) {
+        asyncPayloadType = this.asyncArrowPayloadType(returnType, { pos: arrow.pos });
+      } else {
+        const payloadType = returnType;
+        asyncPayloadType = payloadType;
+        returnType = { kind: "promise", value: payloadType };
+      }
+    }
+    const bodyReturnType = asyncPayloadType === undefined ? returnType : asyncPayloadType;
+    if (bodyReturnType.kind === "void" && arrow.body.kind === "arrow_expr_body") {
       let bodyType: TopazType = T_VOID;
       if (inferredExprBodyType !== undefined) {
         bodyType = inferredExprBodyType;
@@ -5051,6 +5095,7 @@ class Emitter {
   ): FnType {
     const cbAnchor: { pos: number } = { pos: cb.pos };
     if (cb.kind === "arrow_expr") {
+      this.checkAsyncArrowNoAwait(cb);
       const cbBody = cb.body;
       if (cb.params.length !== paramTypes.length) {
         throw new CodegenError(
@@ -5081,17 +5126,42 @@ class Emitter {
         params.push({ name: p.name, type: pt, isOptional: false });
       }
       let returnType: TopazType = T_VOID;
+      let inferredExprBodyType: TopazType | undefined = undefined;
       const cbReturnType = cb.returnType;
       if (cbReturnType !== undefined) {
         const returnAnchor: { pos: number } = { pos: cbReturnType.pos };
         returnType = this.typeFromAnnotation(cbReturnType, returnAnchor, g_currentModule!);
       } else if (cbBody.kind === "arrow_expr_body") {
-        returnType = this.inferArrowExpressionBodyType(cb, params);
+        const inferred = this.inferArrowExpressionBodyType(cb, params);
+        inferredExprBodyType = inferred;
+        returnType = inferred;
       } else {
         throw new CodegenError(
           { pos: cb.pos },
           `block-bodied arrow callback requires an explicit return type annotation`,
         );
+      }
+      let asyncPayloadType: TopazType | undefined = undefined;
+      if (cb.isAsync) {
+        if (cbReturnType !== undefined) {
+          asyncPayloadType = this.asyncArrowPayloadType(returnType, { pos: cbReturnType.pos });
+        } else {
+          const payloadType = returnType;
+          asyncPayloadType = payloadType;
+          returnType = { kind: "promise", value: payloadType };
+        }
+      }
+      const bodyReturnType = asyncPayloadType === undefined ? returnType : asyncPayloadType;
+      if (bodyReturnType.kind === "void" && cbBody.kind === "arrow_expr_body") {
+        let bodyType: TopazType = T_VOID;
+        if (inferredExprBodyType !== undefined) {
+          bodyType = inferredExprBodyType;
+        } else {
+          bodyType = this.inferArrowExpressionBodyType(cb, params);
+        }
+        if (bodyType.kind !== "void") {
+          throw new CodegenError({ pos: cb.pos }, "void-returning arrows require block bodies");
+        }
       }
       return { kind: "fn", params, returnType };
     }
@@ -5270,7 +5340,7 @@ class Emitter {
   // closure's view, and mutating the captured field inside the arrow does not
   // propagate back. Documented as a divergence in CLAUDE.md.
   private emitArrowFunction(arrow: ArrowExpr, expectedType?: TopazType): string {
-    // Phase 1.5-6e-2: generic / async arrows are rejected in convert. Param
+    // Phase 1.5-6e-2: generic arrows are rejected in convert. Param
     // types: annotation is mandatory unless the expected fn type can
     // contextually supply them (default / optional / rest / destructuring
     // params are rejected in convert). Names must be unique.
@@ -5286,6 +5356,7 @@ class Emitter {
         `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
+    this.checkAsyncArrowNoAwait(arrow);
     const params: ParamInfo[] = [];
     const seenNames = new Set<string>();
     for (let i = 0; i < arrow.params.length; i++) {
@@ -5326,7 +5397,20 @@ class Emitter {
     } else {
       throw new CodegenError({ pos: arrow.pos }, "arrow function requires an explicit return type annotation (no contextual type available)");
     }
-    if (returnType.kind === "void" && arrow.body.kind === "arrow_expr_body") {
+    let asyncPayloadType: TopazType | undefined = undefined;
+    if (arrow.isAsync) {
+      if (arrowReturnType !== undefined) {
+        asyncPayloadType = this.asyncArrowPayloadType(returnType, { pos: arrowReturnType.pos });
+      } else if (expectedFn !== undefined) {
+        asyncPayloadType = this.asyncArrowPayloadType(returnType, { pos: arrow.pos });
+      } else {
+        const payloadType = returnType;
+        asyncPayloadType = payloadType;
+        returnType = { kind: "promise", value: payloadType };
+      }
+    }
+    const bodyReturnType = asyncPayloadType === undefined ? returnType : asyncPayloadType;
+    if (bodyReturnType.kind === "void" && arrow.body.kind === "arrow_expr_body") {
       let bodyType: TopazType = T_VOID;
       if (inferredExprBodyType !== undefined) {
         bodyType = inferredExprBodyType;
@@ -5377,13 +5461,17 @@ class Emitter {
     // instead of the raw identifier.
     const prevCaptureContext = this.captureContext;
     const prevRet = this.currentReturnType;
+    const prevAsyncPayload = this.currentAsyncReturnPayloadType;
+    const prevAsyncContinuationTarget = this.currentAsyncContinuationTarget;
     const prevLive = this.liveTryFrames;
     const prevFinallyReturn = this.finallyReturnContext;
     // Phase 1.5-6e-2: an arrow is a function boundary — `continue` inside the
     // body must not see the outer loop context. Save / clear / restore.
     const prevLoopCtx = this.resetLoopCtx();
     this.captureContext = { envType: envName, envIsEmpty, captures };
-    this.currentReturnType = returnType;
+    this.currentReturnType = bodyReturnType;
+    this.currentAsyncReturnPayloadType = asyncPayloadType;
+    this.currentAsyncContinuationTarget = undefined;
     this.liveTryFrames = 0;
     this.finallyReturnContext = undefined;
     // Barrier must come BEFORE the scope.push so that the new (inner) frame
@@ -5395,7 +5483,9 @@ class Emitter {
     for (const p of params) {
       this.scope.declareBinding(p.name, p.type, /* isConst */ false, arrowAnchor);
     }
-    const bodyText: string = this.emitArrowBodyText(arrow, returnType);
+    const bodyText: string = asyncPayloadType === undefined
+      ? this.emitArrowBodyText(arrow, returnType)
+      : this.emitAsyncArrowBodyText(arrow, asyncPayloadType);
 
     // C function signature: env is `void *` so the same callable shape
     // works for both capturing and non-capturing arrows.
@@ -5416,6 +5506,8 @@ class Emitter {
     this.scope.popBarrier();
     this.captureContext = prevCaptureContext;
     this.currentReturnType = prevRet;
+    this.currentAsyncReturnPayloadType = prevAsyncPayload;
+    this.currentAsyncContinuationTarget = prevAsyncContinuationTarget;
     this.liveTryFrames = prevLive;
     this.finallyReturnContext = prevFinallyReturn;
     this.restoreLoopCtx(prevLoopCtx);
@@ -5462,6 +5554,49 @@ class Emitter {
     // the return-type coercion the same way an explicit return statement would.
     const exprStr = this.emitWithExpected(body.expr, returnType);
     return `{\n  return ${exprStr};\n}`;
+  }
+
+  private emitAsyncArrowBodyText(arrow: ArrowExpr, payloadType: TopazType): string {
+    const body = arrow.body;
+    const lines: string[] = [];
+    lines.push("{");
+    lines.push("  topaz_try_frame __topaz_async_frame;");
+    lines.push("  topaz_try_push(&__topaz_async_frame);");
+    lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
+    this.liveTryFrames++;
+    if (body.kind === "arrow_block_body") {
+      for (const s of body.stmts) {
+        lines.push(this.emitStatement(s, 2));
+        this.applyCarryNarrowing(s);
+      }
+      this.liveTryFrames--;
+      lines.push("    topaz_try_pop();");
+      if (payloadType.kind === "void") {
+        lines.push("    return topaz_promise_resolve_void();");
+      } else {
+        lines.push("    topaz_panic((topaz_string){ \"topaz: async arrow fell through without a value\", 47 });");
+        lines.push("    return topaz_promise_resolve_void();");
+      }
+    } else if (payloadType.kind === "void") {
+      const exprStr = this.emitExpression(body.expr);
+      lines.push(`    ${exprStr};`);
+      this.liveTryFrames--;
+      lines.push("    topaz_try_pop();");
+      lines.push("    return topaz_promise_resolve_void();");
+    } else {
+      const exprStr = this.emitWithExpected(body.expr, payloadType);
+      const rv = `__topaz_async_arrow_ret_${this.tmpCounter++}`;
+      const ct = cTypeName(payloadType);
+      lines.push(`    ${ct} ${rv} = ${exprStr};`);
+      this.liveTryFrames--;
+      lines.push("    topaz_try_pop();");
+      lines.push(`    return topaz_promise_resolve_copy(&${rv}, sizeof(${rv}));`);
+    }
+    lines.push("  } else {");
+    lines.push("    return topaz_promise_reject(topaz_throw_value);");
+    lines.push("  }");
+    lines.push("}");
+    return lines.join("\n");
   }
 
   // Phase 1.5-3.5e: emit an identifier as the outer scope sees it (for
