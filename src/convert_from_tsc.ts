@@ -1471,6 +1471,8 @@ class Converter {
         return { kind: "type_ref", name: "bigint", typeArgs: [], ...this.span(t) };
       case ts.SyntaxKind.StringKeyword:
         return { kind: "type_ref", name: "string", typeArgs: [], ...this.span(t) };
+      case ts.SyntaxKind.SymbolKeyword:
+        return { kind: "type_ref", name: "symbol", typeArgs: [], ...this.span(t) };
       case ts.SyntaxKind.BooleanKeyword:
         return { kind: "type_ref", name: "boolean", typeArgs: [], ...this.span(t) };
       case ts.SyntaxKind.VoidKeyword: {

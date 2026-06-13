@@ -4421,7 +4421,7 @@ class Emitter {
     if (payloadConstraint !== undefined && !this.isBrandPayloadTypeParamConstraint(payloadConstraint)) {
       throw this.typeErr(
         { pos: payloadConstraint.pos },
-        "brand template payload constraint must be string or PropertyKey",
+        "brand template payload constraint must be string, PropertyKey, or string | number | symbol",
       );
     }
     const payloadDefaultNode = payloadTypeParam.defaultType;
@@ -4439,11 +4439,29 @@ class Emitter {
   }
 
   private isBrandPayloadTypeParamConstraint(node: TypeNode): boolean {
-    return (
-      node.kind === "type_ref" &&
-      (node.name === "string" || node.name === "PropertyKey") &&
-      node.typeArgs.length === 0
-    );
+    if (node.kind === "type_ref") {
+      return (node.name === "string" || node.name === "PropertyKey") && node.typeArgs.length === 0;
+    }
+    if (node.kind !== "type_union" || node.variants.length !== 3) return false;
+    let hasString = false;
+    let hasNumber = false;
+    let hasSymbol = false;
+    for (const variant of node.variants) {
+      if (variant.kind !== "type_ref" || variant.typeArgs.length !== 0) return false;
+      if (variant.name === "string") {
+        if (hasString) return false;
+        hasString = true;
+      } else if (variant.name === "number") {
+        if (hasNumber) return false;
+        hasNumber = true;
+      } else if (variant.name === "symbol") {
+        if (hasSymbol) return false;
+        hasSymbol = true;
+      } else {
+        return false;
+      }
+    }
+    return hasString && hasNumber && hasSymbol;
   }
 
   private brandPayloadSpelling(node: TypeNode): string | undefined {
