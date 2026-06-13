@@ -4348,14 +4348,15 @@ class Emitter {
       );
     }
     const payloadType = member.type;
-    if (payloadType.kind !== "type_str_lit") {
+    const payload = this.brandPayloadSpelling(payloadType);
+    if (payload === undefined) {
       throw this.typeErr(
         { pos: payloadType.pos },
-        "unsupported brand intersection shape: phantom field type must be a string literal",
+        "unsupported brand intersection shape: phantom field type must be a string literal or typeof Identifier",
       );
     }
     const fieldKey = member.nameKind === "computed_identifier" ? `[${member.name}]` : member.name;
-    const key = `${aliasName}:${fieldKey}:${payloadType.value}`;
+    const key = `${aliasName}:${fieldKey}:${payload}`;
     return { kind: "brand", base, key };
   }
 
@@ -4408,6 +4409,12 @@ class Emitter {
     return node.kind === "type_ref" && node.name === "string" && node.typeArgs.length === 0;
   }
 
+  private brandPayloadSpelling(node: TypeNode): string | undefined {
+    if (node.kind === "type_str_lit") return node.value;
+    if (node.kind === "type_query") return `typeof ${node.name}`;
+    return undefined;
+  }
+
   private brandAliasTemplateFieldKey(
     node: TypeLiteralNode,
     payloadParam: string,
@@ -4443,13 +4450,14 @@ class Emitter {
         `unsupported brand template base type ${typeIdent(base)} (expected string / number / boolean / bigint)`,
       );
     }
-    if (payloadNode.kind !== "type_str_lit") {
+    const payload = this.brandPayloadSpelling(payloadNode);
+    if (payload === undefined) {
       throw this.typeErr(
         { pos: payloadNode.pos },
-        `brand template alias '${aliasName}' payload type argument must be a string literal`,
+        `brand template alias '${aliasName}' payload type argument must be a string literal or typeof Identifier`,
       );
     }
-    const key = `${aliasName}:${template.fieldKey}:${payloadNode.value}`;
+    const key = `${aliasName}:${template.fieldKey}:${payload}`;
     return { kind: "brand", base, key };
   }
 
@@ -4472,6 +4480,9 @@ class Emitter {
         }
       }
       return { kind: "string_literal", value: v };
+    }
+    if (node.kind === "type_query") {
+      throw this.typeErr(nodeAnchor, "type query types are unsupported outside brand payloads");
     }
     // Phase 1.5-3b: `T | undefined` only. cTypeName enforces the shape; we
     // accept any union here so error messages can say "scalar | undefined is

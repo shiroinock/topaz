@@ -96,6 +96,7 @@ import type {
   SpreadExpr,
   TypeNode,
   TypeRef,
+  TypeQuery,
   TypeUnion,
   TypeIntersection,
   TypeArrayShorthand,
@@ -1437,6 +1438,18 @@ class Converter {
         ...this.span(t),
       };
       return r;
+    }
+    if (ts.isTypeQueryNode(t)) {
+      const exprName = t.exprName;
+      if (!ts.isIdentifier(exprName)) {
+        throw this.err(exprName, "qualified type queries are unsupported (expected typeof Identifier)");
+      }
+      const q: TypeQuery = {
+        kind: "type_query",
+        name: exprName.text,
+        ...this.span(t),
+      };
+      return q;
     }
     if (ts.isUnionTypeNode(t)) {
       const u: TypeUnion = {

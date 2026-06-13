@@ -3428,16 +3428,22 @@ run_fail_case brand_string_phantom_non_brand_as_fail examples/brand_string_phant
 run_fail_case brand_string_phantom_bad_shape_fail examples/brand_string_phantom_bad_shape_fail.ts "unsupported brand intersection shape"
 
 run_case brand_unique_symbol_phantom $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_type_query_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_fail_case brand_unique_symbol_cross_assign_fail examples/brand_unique_symbol_cross_assign_fail.ts "topaz_brand_TeamId"
 run_fail_case brand_unique_symbol_implicit_fail examples/brand_unique_symbol_implicit_fail.ts "type mismatch"
 run_fail_case brand_unique_symbol_bad_computed_fail examples/brand_unique_symbol_bad_computed_fail.ts "unsupported computed phantom field name"
 run_fail_case brand_unique_symbol_structural_computed_fail examples/brand_unique_symbol_structural_computed_fail.ts "computed type literal fields are unsupported"
+run_fail_case brand_type_query_cross_assign_fail examples/brand_type_query_cross_assign_fail.ts "topaz_brand_TeamId"
+run_fail_case brand_type_query_implicit_fail examples/brand_type_query_implicit_fail.ts "type mismatch"
+run_fail_case brand_type_query_qualified_fail examples/brand_type_query_qualified_fail.ts "qualified type queries are unsupported"
 
 run_case brand_generic_template $'u1\nu1\no1\ntrue\ntrue\nu1\n42\n42'
 run_case brand_generic_computed_template $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_constrained $'u1\nu1\no1\ntrue\ntrue\nu1'
 run_case brand_generic_computed_template_constrained $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_generic_template_type_query_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_template_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
+run_fail_case brand_generic_template_type_query_cross_assign_fail examples/brand_generic_template_type_query_cross_assign_fail.ts "topaz_brand_Brand_3a__5b_UserIdBrand_5d__3a_typeof_20_UserIdBrand"
 run_fail_case brand_generic_template_implicit_fail examples/brand_generic_template_implicit_fail.ts "type mismatch"
 run_fail_case brand_generic_template_bad_payload_fail examples/brand_generic_template_bad_payload_fail.ts "payload type argument must be a string literal"
 run_fail_case brand_generic_template_bad_shape_fail examples/brand_generic_template_bad_shape_fail.ts "generic type alias 'Brand' is unsupported"

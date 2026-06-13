@@ -2002,6 +2002,19 @@ export class Parser {
       this.pos += 1;
       return { kind: "type_ref", name: "undefined", typeArgs: [], pos: t.pos, end: t.end };
     }
+    if (this.isKeyword(t, "typeof")) {
+      this.pos += 1;
+      this.skipNewlines();
+      const name: Token = this.current();
+      if (name.kind !== "ident") {
+        throw this.error(name, "unsupported type query: expected typeof Identifier");
+      }
+      this.pos += 1;
+      if (this.isPunct(this.current(), ".")) {
+        throw this.error(this.current(), "qualified type queries are unsupported (expected typeof Identifier)");
+      }
+      return { kind: "type_query", name: name.text, pos: t.pos, end: name.end };
+    }
     if (this.isPunct(t, "(")) {
       // fn type `(x: T, y: U) => R`
       return this.parseFnTypeOrParen();

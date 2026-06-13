@@ -14,6 +14,7 @@
 
 export type TypeNode =
   | TypeRef
+  | TypeQuery
   | TypeUnion
   | TypeIntersection
   | TypeArrayShorthand
@@ -28,6 +29,13 @@ export type TypeRef = {
   kind: "type_ref";
   name: string;
   typeArgs: Array<TypeNode>;
+  pos: number;
+  end: number;
+};
+
+export type TypeQuery = {
+  kind: "type_query";
+  name: string;
   pos: number;
   end: number;
 };
