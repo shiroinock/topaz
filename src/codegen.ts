@@ -12184,6 +12184,20 @@ class Emitter {
       }
       params = [this.makeParamInfo("count", T_NUMBER)];
       returnType = T_STRING;
+    } else if (methodName === "indexOf") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, "String.indexOf expects exactly one argument");
+      }
+      const searchArg = expr.args[0];
+      const argType = this.inferType(searchArg);
+      if (argType.kind !== "string") {
+        throw new CodegenError(
+          { pos: searchArg.pos },
+          `String.indexOf argument must be string, got ${typeIdent(argType)}`,
+        );
+      }
+      params = [this.makeParamInfo("search", T_STRING)];
+      returnType = T_NUMBER;
     } else if (methodName === "trimStart") {
       if (expr.args.length !== 0) {
         throw new CodegenError({ pos: expr.pos }, "String.trimStart expects no arguments");
@@ -12353,6 +12367,7 @@ class Emitter {
         if (
           awaitExpr !== undefined &&
           callee.name !== "charCodeAt" &&
+          callee.name !== "indexOf" &&
           callee.name !== "slice" &&
           callee.name !== "repeat" &&
           callee.name !== "trimStart" &&
@@ -12598,6 +12613,13 @@ class Emitter {
         const idx = this.emitWithExpected(expr.args[0], T_NUMBER);
         const helper = this.requireInternalPreludeFunctionCName("__topaz_string_char_code_at", { pos: expr.pos });
         return `${helper}(${base}, ${idx})`;
+      }
+      if (plan.methodName === "indexOf") {
+        const search = this.emitWithExpected(expr.args[0], T_STRING);
+        const helper = this.requireInternalPreludeFunctionCName("__topaz_string_index_of", {
+          pos: expr.pos,
+        });
+        return `${helper}(${base}, ${search})`;
       }
       if (plan.methodName === "slice") {
         let startExpr = "(double)NAN";
@@ -13268,8 +13290,8 @@ class Emitter {
     return this.emitOrdinaryCallPlan(expr, this.resolveNumberMethodCallPlan(expr, callee, T_NUMBER));
   }
 
-  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.59 prelude migration:
-  // String.prototype.charCodeAt / .slice / .repeat / .trimStart /
+  // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.59 and 5.37 prelude migration:
+  // String.prototype.charCodeAt / .indexOf / .slice / .repeat / .trimStart /
   // .startsWith / .endsWith. Arguments are exact Topaz types (no JS coercion).
   // Missing slice args lower to `(double)NAN` so the runtime prelude helper
   // picks the default. startsWith / endsWith intentionally accept only search.

@@ -496,6 +496,28 @@ function __topaz_string_ends_with(s: string, search: string): boolean {
   return true;
 }
 
+function __topaz_string_index_of(s: string, search: string): number {
+  if (search.length === 0) return 0;
+  if (search.length > s.length) return -1;
+  const limit: number = s.length - search.length;
+  let start: number = 0;
+  while (start <= limit) {
+    let matched: boolean = true;
+    let i: number = 0;
+    while (i < search.length) {
+      if (s.charCodeAt(start + i) !== search.charCodeAt(i)) {
+        matched = false;
+        i = search.length;
+      } else {
+        i = i + 1;
+      }
+    }
+    if (matched) return start;
+    start = start + 1;
+  }
+  return -1;
+}
+
 function __topaz_string_is_trim_start_code(code: number): boolean {
   return code === 32 || code === 9 || code === 10 || code === 13 || code === 12 || code === 11;
 }

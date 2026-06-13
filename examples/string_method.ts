@@ -99,3 +99,11 @@ while (i < src.length) {
   i = i + 1;
 }
 console.log(pieces);  // abcdef
+
+// --- indexOf: ASCII byte search ---
+const haystack: string = "banana";
+console.log(haystack.indexOf("ba"));  // 0
+console.log(haystack.indexOf("na"));  // 2
+console.log(haystack.indexOf("zz"));  // -1
+console.log(haystack.indexOf(""));    // 0
+console.log(haystack.indexOf("an"));  // 1 (first repeated occurrence)

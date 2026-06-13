@@ -1837,7 +1837,7 @@ run_cli_smoke() {
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_char_code_at.c -o build/runtime_prelude_string_char_code_at
   local string_char_code_at_out
   string_char_code_at_out=$(./build/runtime_prelude_string_char_code_at)
-  if [[ "$string_char_code_at_out" != $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef' ]]; then
+  if [[ "$string_char_code_at_out" != $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef\n0\n2\n-1\n0\n1' ]]; then
     echo "FAIL [runtime_prelude_string_char_code_at]:" >&2
     echo "  expected string_method output" >&2
     printf '%s\n' "$string_char_code_at_out" | sed 's/^/  got: /' >&2
@@ -1887,12 +1887,35 @@ run_cli_smoke() {
   cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_slice.c -o build/runtime_prelude_string_slice
   local string_slice_out
   string_slice_out=$(./build/runtime_prelude_string_slice)
-  if [[ "$string_slice_out" != $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef' ]]; then
+  if [[ "$string_slice_out" != $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef\n0\n2\n-1\n0\n1' ]]; then
     echo "FAIL [runtime_prelude_string_slice]:" >&2
     printf '%s\n' "$string_slice_out" | sed 's/^/  got: /' >&2
     exit 1
   fi
   echo "PASS [runtime_prelude_string_slice]"
+
+  node dist/cli.js examples/string_method.ts --emit-c-only -o build/runtime_prelude_string_index_of > /dev/null
+  if ! grep -q "topaz_fn_runtime_prelude___topaz_string_index_of" build/runtime_prelude_string_index_of.c; then
+    echo "FAIL [runtime_prelude_string_index_of]: missing stable String.indexOf prelude symbol" >&2
+    exit 1
+  fi
+  if grep -Eq "\btopaz_string_index_of\s*\(" build/runtime_prelude_string_index_of.c; then
+    echo "FAIL [runtime_prelude_string_index_of]: stale String.indexOf C helper call emitted" >&2
+    exit 1
+  fi
+  if grep -Eq "static inline topaz_number topaz_string_index_of\s*\(" build/runtime_prelude_string_index_of.c; then
+    echo "FAIL [runtime_prelude_string_index_of]: stale String.indexOf C helper definition embedded" >&2
+    exit 1
+  fi
+  cc -O2 -Iruntime -Wall -Wextra build/runtime_prelude_string_index_of.c -o build/runtime_prelude_string_index_of
+  local string_index_of_out
+  string_index_of_out=$(./build/runtime_prelude_string_index_of)
+  if [[ "$string_index_of_out" != $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef\n0\n2\n-1\n0\n1' ]]; then
+    echo "FAIL [runtime_prelude_string_index_of]:" >&2
+    printf '%s\n' "$string_index_of_out" | sed 's/^/  got: /' >&2
+    exit 1
+  fi
+  echo "PASS [runtime_prelude_string_index_of]"
 
   node dist/cli.js examples/array_method_slice.ts --emit-c-only -o build/runtime_prelude_array_slice_normalize > /dev/null
   if ! grep -q "topaz_fn_runtime_prelude___topaz_slice_normalize" build/runtime_prelude_array_slice_normalize.c; then
@@ -2966,6 +2989,7 @@ run_case async_await_array_method_call_arg $'declared recv\narrow recv\nmethod r
 run_case async_await_array_push_call_arg $'declared recv\ndeclared awaited\narrow recv\narrow prefix\narrow awaited\nmethod awaited\nexpr recv\nexpr prefix\nexpr awaited\nsync tail\ndeclared after\n1\n1\narrow after\n2\n10\n20\nmethod after\n2\n30\nexpr suffix\nexpr after\n3\n40\n50\n60\ndeclared then\n1\narrow then\n2\nmethod then\n2\nexpr then\n3'
 run_case async_await_promise_resolve_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\nsync tail\ndeclared after\nmethod nested\nmethod after\nexpr after\ndeclared then\narrow then\nmethod then\nexpr then\n11\n22'
 run_case async_await_assignment_statement $'declared pre\narrow pre\nmethod pre\nexpr pre\narray pre\nsync tail\ndeclared post\narrow post\nmethod post\nexpr post\narray post\ndeclared then\n11\narrow then\n22\nmethod then\n35\nexpr then\n44\narray then\n66'
+run_case async_await_string_index_of_return $'return search\nsync tail\nthen\n1'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -3058,6 +3082,7 @@ run_fail_case runtime_prelude_string_concat_hidden_fail examples/runtime_prelude
 run_fail_case runtime_prelude_string_repeat_hidden_fail examples/runtime_prelude_string_repeat_hidden_fail.ts "unknown identifier '__topaz_string_repeat'"
 run_fail_case runtime_prelude_array_slice_normalize_hidden_fail examples/runtime_prelude_array_slice_normalize_hidden_fail.ts "unknown identifier '__topaz_slice_normalize'"
 run_fail_case runtime_prelude_string_char_code_at_hidden_fail examples/runtime_prelude_string_char_code_at_hidden_fail.ts "unknown identifier '__topaz_string_char_code_at'"
+run_fail_case runtime_prelude_string_index_of_hidden_fail examples/runtime_prelude_string_index_of_hidden_fail.ts "unknown identifier '__topaz_string_index_of'"
 run_fail_case runtime_prelude_string_byte_at_hidden_fail examples/runtime_prelude_string_byte_at_hidden_fail.ts "unknown identifier '__topaz_string_byte_at'"
 run_fail_case runtime_prelude_string_buffer_hidden_fail examples/runtime_prelude_string_buffer_hidden_fail.ts "unknown identifier '__topaz_string_buffer_new'"
 run_fail_case runtime_prelude_bigint_eq_hidden_fail examples/runtime_prelude_bigint_eq_hidden_fail.ts "unknown identifier '__topaz_bigint_eq'"
@@ -3210,11 +3235,13 @@ run_case module_const_hoist $'true\nfalse\ntrue\nfalse\ntrue\ntrue\n51\n-1\n42\n
 run_fail_case module_const_hoist_let_fail examples/module_const_hoist_let_fail.ts "unknown identifier 'counter'"
 run_fail_case module_const_hoist_nonscalar_fail examples/module_const_hoist_nonscalar_fail.ts "unknown identifier 'GREETING'"
 
-run_case string_method $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef'
+run_case string_method $'5\n104\n101\n101\n111\ntrue\ntrue\nell\n3\nllo\n3\nhello\n5\nlo\nhell\nll\n0\ntrue\nlo\n0\nbcd\n6\nbcdabcdef\nace\n101\n119\nrld\n122\nabcdef\n0\n2\n-1\n0\n1'
 run_fail_case string_char_code_at_arity_fail examples/string_char_code_at_arity_fail.ts "String.charCodeAt expects exactly one argument"
 run_fail_case string_char_code_at_arg_type_fail examples/string_char_code_at_arg_type_fail.ts "String.charCodeAt argument must be number"
 run_fail_case string_slice_arg_type_fail examples/string_slice_arg_type_fail.ts "String.slice argument must be number"
 run_fail_case string_slice_too_many_args_fail examples/string_slice_too_many_args_fail.ts "String.slice expects at most two arguments"
+run_fail_case string_index_of_arity_fail examples/string_index_of_arity_fail.ts "String.indexOf expects exactly one argument"
+run_fail_case string_index_of_arg_type_fail examples/string_index_of_arg_type_fail.ts "String.indexOf argument must be string, got topaz_number"
 run_case string_starts_ends_with $'true\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nrelative\nrelative\nbare\nmodule\nmodule\nother'
 run_fail_case string_starts_with_arity_fail examples/string_starts_with_arity_fail.ts "String.startsWith expects exactly one argument"
 run_fail_case string_starts_with_arg_type_fail examples/string_starts_with_arg_type_fail.ts "String.startsWith argument must be string, got topaz_number"
@@ -3225,7 +3252,7 @@ run_fail_case string_repeat_arity_fail examples/string_repeat_arity_fail.ts "Str
 run_fail_case string_repeat_arg_type_fail examples/string_repeat_arg_type_fail.ts "String.repeat argument must be number, got topaz_string"
 run_case string_trim_start $'topaz\n5\nok\n2\nready\n5\n0\ntrue\npre-value\nbc\nxxx\nname'
 run_fail_case string_trim_start_arity_fail examples/string_trim_start_arity_fail.ts "String.trimStart expects no arguments"
-run_fail_case string_unsupported_method_fail examples/string_unsupported_method_fail.ts "unsupported method '.indexOf' on topaz_string"
+run_fail_case string_unsupported_method_fail examples/string_unsupported_method_fail.ts "unsupported method '.match' on topaz_string"
 
 run_case string_from_char_code $'A\na\n0\nz\nB\n1\n72\nHello\n5\nA\nz\nmark=!\n1\n1\n127\nA\nA\nD\nZ\nabcde'
 run_fail_case string_from_char_code_arity_fail examples/string_from_char_code_arity_fail.ts "String.fromCharCode expects exactly one argument"
