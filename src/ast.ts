@@ -147,6 +147,7 @@ export type Expr =
   | TypeofExpr
   | TernaryExpr
   | AssignExpr
+  | AwaitExpr
   | ArrowExpr
   | NonNullExpr
   | SpreadExpr;
@@ -312,6 +313,13 @@ export type AssignExpr = {
   op: string;
   target: Expr;
   value: Expr;
+  pos: number;
+  end: number;
+};
+
+export type AwaitExpr = {
+  kind: "await_expr";
+  operand: Expr;
   pos: number;
   end: number;
 };

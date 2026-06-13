@@ -1231,6 +1231,11 @@ export class Parser {
       const operand: Expr = this.parseUnary();
       return { kind: "typeof_expr", operand: operand, pos: t.pos, end: operand.end };
     }
+    if (this.isKeyword(t, "await")) {
+      this.pos += 1;
+      const operand: Expr = this.parseUnary();
+      return { kind: "await_expr", operand: operand, pos: t.pos, end: operand.end };
+    }
     return this.parsePostfix();
   }
 

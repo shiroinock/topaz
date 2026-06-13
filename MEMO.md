@@ -383,6 +383,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **5.2 Promise.resolve/reject value surface** — `Promise.resolve()` / `Promise.resolve(value)` / contextual `Promise.reject(classInstance)` を Topaz-owned opaque Promise value allocation に接続した。fulfilled/rejected state と payload copy / rejection class pointer を runtime に保持するだけで、`.then` / `.catch` / `.finally`、microtask queue、thenable assimilation、async function / `await` / for-await lowering は引き続き deferred。次の async slice は scheduler continuation substrate、async function lowering、`await` の順に進める。決定ログは `docs/adr/0469-promise-resolve-reject-value-surface.md`。
 - [x] **5.3 Promise.then fulfillment continuations** — `Promise<T>.then(onFulfilled)` を fulfillment-only continuation として受理し、single-thread FIFO microtask queue を generated `main()` 終了前に drain する。callback は同期実行せず、callback 例外は chained Promise rejection へ変換し、rejected source は handler 未対応のため同じ rejection payload を伝播する。`.then(onFulfilled, onRejected)` / `.catch` / `.finally` / Promise-return callback の thenable assimilation / async function / `await` / for-await lowering は引き続き deferred。決定ログは `docs/adr/0470-promise-then-fulfillment-continuations.md`。
 - [x] **5.4 async function no-await lowering** — top-level `async function` declaration のうち `await` を含まない同期 body を受理し、`return expr` は payload `T` として検査して fulfilled `Promise<T>` に包み、`throw` は関数境界で rejected Promise に変換する。`Promise<T>` 以外の return annotation、async generic function、async arrow / method、`await`、thenable assimilation、rejection handler、scheduler API は引き続き deferred。決定ログは `docs/adr/0471-async-function-no-await-lowering.md`。
+- [x] **5.5 basic await binding lowering** — top-level `async function` declaration 内の 1 個の `const` / `let` await binding (`const x = await promise`) を、generated continuation runner + context struct と既存 FIFO Promise queue へ lowering する。prefix は同期 turn で実行し、await 後 suffix / final `.then` は microtask drain で実行する。top-level await、non-async await、non-Promise operand、複数 await、`return await`、try/catch/finally 内 await、任意式位置 await、複数 suspension / cleanup dispatch / thenable assimilation は引き続き deferred。決定ログは `docs/adr/0472-basic-await-binding-lowering.md`。
 
 Release/version allocation:
 
@@ -405,10 +406,11 @@ Post-MVP ecosystem items:
 - async/await compatibility roadmap: `Promise<T>` type frontier,
   `Promise.resolve` / contextual `Promise.reject` value allocation, and
   fulfillment-only `Promise.then` continuations, and no-await top-level async
-  function lowering are complete; next stages are `await`, async arrow / async
-  method, rejection handler Promise method surface, explicit `PromiseLike`
-  bridge, controlled static thenable assimilation, Node-compatible scheduler
-  mode, and future Topaz-owned parallel scheduler mode
+  function lowering, and one top-level await binding are complete; next stages
+  are multi-suspension await frames, async arrow / async method, rejection
+  handler Promise method surface, explicit `PromiseLike` bridge, controlled
+  static thenable assimilation, Node-compatible scheduler mode, and future
+  Topaz-owned parallel scheduler mode
 - branded / brand / opaque / nominal / `unique symbol` compatibility: prioritize
   erasable type-only TS patterns before runtime-emitting constructs
 - v0.2 guidance follow-through: compile-time policy enforcement, runtime

@@ -956,6 +956,13 @@ class Converter {
     if (ts.isBinaryExpression(e)) return this.convertBinary(e);
     if (ts.isArrowFunction(e)) return this.convertArrow(e);
     if (ts.isNonNullExpression(e)) return this.convertNonNull(e);
+    if (ts.isAwaitExpression(e)) {
+      return {
+        kind: "await_expr",
+        operand: this.convertExpr(e.expression),
+        ...this.span(e),
+      };
+    }
     if (ts.isSpreadElement(e)) {
       const s: SpreadExpr = {
         kind: "spread_expr",

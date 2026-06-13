@@ -27,6 +27,7 @@ import {
   PrefixOpExpr,
   PostfixOpExpr,
   AssignExpr,
+  AwaitExpr,
   ForOfStmt,
   VarDeclStmt,
   VarDestrDeclStmt,
@@ -115,6 +116,14 @@ type CheckedNodePathBasenameArgs = {
 type CheckedParseIntArgs = {
   sArg: Expr;
   radixArg: Expr;
+};
+
+type AwaitBindingInfo = {
+  stmt: VarDeclStmt;
+  awaitExpr: AwaitExpr;
+  index: number;
+  operandType: TopazType;
+  bindingType: TopazType;
 };
 
 const T_NUMBER: TopazType = { kind: "number" };
@@ -1336,6 +1345,7 @@ class Emitter {
   private currentClass: string | undefined = undefined;
   private currentReturnType: TopazType | undefined = undefined;
   private currentAsyncReturnPayloadType: TopazType | undefined = undefined;
+  private currentAsyncContinuationTarget: string | undefined = undefined;
   // Phase 1.5-6i prep: enclosing-construct stack for `continue` validation.
   // Topaz nodes carry no `.parent`, so we maintain the nearest loop / switch
   // context explicitly with linked frames. A nested arrow is a function
@@ -1432,6 +1442,7 @@ class Emitter {
   private promiseThenFwdLines: Array<string> = [];
   private promiseThenDefLines: Array<string> = [];
   private promiseThenRunners: Set<string> = new Set<string>();
+  private asyncAwaitCounter: number = 0;
   private fnValueWrappers: Set<string> = new Set<string>();
   private captureContext:
     | { envType: string; envIsEmpty: boolean; captures: Map<string, TopazType> }
@@ -4230,7 +4241,7 @@ class Emitter {
       if (asyncPayload === undefined) {
         throwInternalCodegenError("async function payload missing");
       }
-      body = this.emitAsyncFunctionBody(fn.body, sf, asyncPayload);
+      body = this.emitAsyncFunctionBody(fn.body, sf, asyncPayload, sig);
     } else {
       body = this.emitBlockBoundary(fn.body, sf);
     }
@@ -4243,8 +4254,17 @@ class Emitter {
     return rendered;
   }
 
-  private emitAsyncFunctionBody(block: BlockStmt, sf: SourceModule, payloadType: TopazType): string {
+  private emitAsyncFunctionBody(
+    block: BlockStmt,
+    sf: SourceModule,
+    payloadType: TopazType,
+    sig: TopLevelFunctionSig,
+  ): string {
     return this.withSfString(sf, () => {
+      const awaitBinding = this.findAsyncAwaitBinding(block, payloadType);
+      if (awaitBinding !== undefined) {
+        return this.emitAsyncFunctionBodyWithAwaitBinding(block, payloadType, sig, awaitBinding);
+      }
       const lines: string[] = [];
       lines.push("{");
       lines.push("  topaz_try_frame __topaz_async_frame;");
@@ -4269,6 +4289,449 @@ class Emitter {
       lines.push("}");
       return lines.join("\n");
     });
+  }
+
+  private findAsyncAwaitBinding(block: BlockStmt, payloadType: TopazType): AwaitBindingInfo | undefined {
+    let awaitCount = 0;
+    let hasAwaitAnchor = false;
+    let awaitAnchorPos = block.pos;
+    for (const s of block.stmts) {
+      const found = this.collectAwaitExprsInStmt(s);
+      if (found.length > 0 && !hasAwaitAnchor) {
+        for (const first of found) {
+          awaitAnchorPos = first.pos;
+          hasAwaitAnchor = true;
+          break;
+        }
+      }
+      awaitCount += found.length;
+    }
+    if (awaitCount === 0) return undefined;
+    const awaitAnchor: { pos: number } = { pos: awaitAnchorPos };
+    for (const s of block.stmts) {
+      if (this.stmtHasAwaitInsideTry(s)) {
+        throw new CodegenError(awaitAnchor, "await inside try/catch/finally is deferred");
+      }
+    }
+    if (awaitCount > 1) {
+      throw new CodegenError(awaitAnchor, "more than one await in an async function is deferred");
+    }
+
+    let awaitIndex = -1;
+    let awaitStmt: VarDeclStmt | undefined = undefined;
+    let awaitExpr: AwaitExpr | undefined = undefined;
+    for (let i = 0; i < block.stmts.length; i++) {
+      const s = block.stmts[i];
+      if (s.kind === "var_decl") {
+        const initMaybe = s.init;
+        if (initMaybe !== undefined) {
+          const init = this.unwrapParenExpr(initMaybe);
+          if (init.kind === "await_expr") {
+            awaitIndex = i;
+            awaitStmt = s;
+            awaitExpr = init;
+            break;
+          }
+        }
+      }
+    }
+    if (awaitStmt === undefined) {
+      throw new CodegenError(
+        awaitAnchor,
+        "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
+      );
+    }
+    const supportedStmt = awaitStmt;
+    if (awaitExpr === undefined) {
+      throw new CodegenError(
+        awaitAnchor,
+        "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
+      );
+    }
+    const supportedExpr = awaitExpr;
+    if (supportedStmt.declKind !== "const" && supportedStmt.declKind !== "let") {
+      throw new CodegenError({ pos: supportedStmt.pos }, "await binding must use `const` or `let`");
+    }
+    for (let i = 0; i < awaitIndex; i++) {
+      const s = block.stmts[i];
+      if (s.kind === "var_decl" || s.kind === "var_destr_decl") {
+        throw new CodegenError(
+          { pos: s.pos },
+          "pre-await local declarations are deferred until async frame local capture is implemented",
+        );
+      }
+    }
+    const operandType = this.inferType(supportedExpr.operand);
+    if (operandType.kind !== "promise") {
+      throw new CodegenError(
+        { pos: supportedExpr.operand.pos },
+        `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+      );
+    }
+    let bindingType = operandType.value;
+    const typeMaybe = supportedStmt.type;
+    if (typeMaybe !== undefined) {
+      const annotated = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
+      this.assertNotVoid(annotated, { pos: supportedStmt.pos }, "await binding type");
+      if (!typeEq(bindingType, annotated) && !this.isAssignableTo(bindingType, annotated)) {
+        throw new CodegenError(
+          { pos: supportedStmt.pos },
+          `type mismatch: expected ${typeIdent(annotated)}, got ${typeIdent(bindingType)}`,
+        );
+      }
+      bindingType = annotated;
+    }
+    if (payloadType.kind === "void") {
+      // Keep payloadType threaded here so type-checking work above mirrors the
+      // no-await path; void async functions are otherwise handled by return lowering.
+    }
+    return { stmt: supportedStmt, awaitExpr: supportedExpr, index: awaitIndex, operandType, bindingType };
+  }
+
+  private emitAsyncFunctionBodyWithAwaitBinding(
+    block: BlockStmt,
+    payloadType: TopazType,
+    sig: TopLevelFunctionSig,
+    awaitBinding: AwaitBindingInfo,
+  ): string {
+    const id = this.asyncAwaitCounter++;
+    const ctxName = `__topaz_async_await_${id}_ctx`;
+    const runnerName = `__topaz_async_await_${id}_runner`;
+    const sourceVar = `__topaz_await_source_${id}`;
+    const ctxVar = `__topaz_await_ctx_${id}`;
+    this.recordAsyncAwaitRunner(ctxName, runnerName, payloadType, sig.params, awaitBinding, block.stmts.slice(awaitBinding.index + 1));
+
+    const lines: string[] = [];
+    lines.push("{");
+    lines.push("  topaz_try_frame __topaz_async_frame;");
+    lines.push("  topaz_try_push(&__topaz_async_frame);");
+    lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
+    this.liveTryFrames++;
+    const prefix = block.stmts.slice(0, awaitBinding.index);
+    for (const s of prefix) {
+      lines.push(this.emitStatement(s, 2));
+      this.applyCarryNarrowing(s);
+    }
+    const operandExpr = this.emitWithExpected(awaitBinding.awaitExpr.operand, awaitBinding.operandType);
+    lines.push(`    void *${sourceVar} = ${operandExpr};`);
+    lines.push(`    ${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_calloc(1, sizeof(${ctxName}));`);
+    for (const p of sig.params) {
+      lines.push(`    ${ctxVar}->${p.name} = ${p.name};`);
+    }
+    this.liveTryFrames--;
+    lines.push(`    topaz_try_pop();`);
+    lines.push(`    return topaz_promise_then(${sourceVar}, ${runnerName}, ${ctxVar});`);
+    lines.push("  } else {");
+    lines.push("    return topaz_promise_reject(topaz_throw_value);");
+    lines.push("  }");
+    lines.push("}");
+    return lines.join("\n");
+  }
+
+  private recordAsyncAwaitRunner(
+    ctxName: string,
+    runnerName: string,
+    payloadType: TopazType,
+    params: Array<ParamInfo>,
+    awaitBinding: AwaitBindingInfo,
+    suffix: Array<Stmt>,
+  ): void {
+    const fields: string[] = [];
+    if (params.length === 0) fields.push("  int __topaz_unused;");
+    for (const p of params) fields.push(`  ${cTypeName(p.type)} ${p.name};`);
+    this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n${fields.join("\n")}\n} ${ctxName};`);
+    this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
+
+    const prevContinuationTarget = this.currentAsyncContinuationTarget;
+    const prevLive = this.liveTryFrames;
+    const prevFinallyReturn = this.finallyReturnContext;
+    this.currentAsyncContinuationTarget = "target";
+    this.liveTryFrames = 0;
+    this.finallyReturnContext = undefined;
+    this.scope.push();
+    this.scope.declareBinding(
+      awaitBinding.stmt.name,
+      awaitBinding.bindingType,
+      awaitBinding.stmt.declKind === "const",
+      { pos: awaitBinding.stmt.pos },
+    );
+
+    const lines: string[] = [];
+    lines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target) {`);
+    lines.push(`  ${ctxName} *ctx = (${ctxName} *)__topaz_ctx;`);
+    if (params.length === 0) lines.push("  (void)ctx;");
+    for (const p of params) {
+      lines.push(`  ${cTypeName(p.type)} ${p.name} = ctx->${p.name};`);
+    }
+    if (awaitBinding.bindingType.kind === "void") {
+      lines.push("  (void)source;");
+    } else {
+      const awaitC = cTypeName(awaitBinding.bindingType);
+      lines.push(`  ${awaitC} ${awaitBinding.stmt.name} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+    }
+    lines.push("  topaz_try_frame __topaz_async_frame;");
+    lines.push("  topaz_try_push(&__topaz_async_frame);");
+    lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
+    this.liveTryFrames++;
+    for (const s of suffix) {
+      lines.push(this.emitStatement(s, 2));
+      this.applyCarryNarrowing(s);
+    }
+    this.liveTryFrames--;
+    lines.push("    topaz_try_pop();");
+    if (payloadType.kind === "void") {
+      lines.push("    topaz_promise_fulfill_void(target);");
+    } else {
+      lines.push("    topaz_panic((topaz_string){ \"topaz: async continuation fell through without a value\", 54 });");
+    }
+    lines.push("  } else {");
+    lines.push("    topaz_promise_reject_with(target, topaz_throw_value);");
+    lines.push("  }");
+    lines.push("}");
+
+    this.scope.pop();
+    this.currentAsyncContinuationTarget = prevContinuationTarget;
+    this.liveTryFrames = prevLive;
+    this.finallyReturnContext = prevFinallyReturn;
+    this.promiseThenDefLines.push(lines.join("\n"));
+  }
+
+  private collectAwaitExprsInStmt(stmt: Stmt): Array<AwaitExpr> {
+    const out: Array<AwaitExpr> = [];
+    this.collectAwaitExprsInStmtInto(stmt, out);
+    return out;
+  }
+
+  private collectAwaitExprsInStmtInto(stmt: Stmt, out: Array<AwaitExpr>): void {
+    switch (stmt.kind) {
+      case "expr_stmt":
+        this.collectAwaitExprsInExprInto(stmt.expr, out);
+        return;
+      case "var_decl":
+        {
+          const initMaybe = stmt.init;
+          if (initMaybe !== undefined) this.collectAwaitExprsInExprInto(initMaybe, out);
+        }
+        return;
+      case "var_destr_decl":
+        this.collectAwaitExprsInExprInto(stmt.init, out);
+        return;
+      case "block_stmt":
+        for (const s of stmt.stmts) this.collectAwaitExprsInStmtInto(s, out);
+        return;
+      case "if_stmt":
+        this.collectAwaitExprsInExprInto(stmt.cond, out);
+        this.collectAwaitExprsInStmtInto(stmt.thenBranch, out);
+        {
+          const elseBranchMaybe = stmt.elseBranch;
+          if (elseBranchMaybe !== undefined) this.collectAwaitExprsInStmtInto(elseBranchMaybe, out);
+        }
+        return;
+      case "while_stmt":
+        this.collectAwaitExprsInExprInto(stmt.cond, out);
+        this.collectAwaitExprsInStmtInto(stmt.body, out);
+        return;
+      case "do_while_stmt":
+        this.collectAwaitExprsInStmtInto(stmt.body, out);
+        this.collectAwaitExprsInExprInto(stmt.cond, out);
+        return;
+      case "for_stmt":
+        {
+          const initMaybe = stmt.init;
+          if (initMaybe !== undefined) {
+            if (initMaybe.kind === "for_init_decl") this.collectAwaitExprsInStmtInto(initMaybe.decl, out);
+            else this.collectAwaitExprsInExprInto(initMaybe.expr, out);
+          }
+        }
+        {
+          const condMaybe = stmt.cond;
+          if (condMaybe !== undefined) this.collectAwaitExprsInExprInto(condMaybe, out);
+        }
+        {
+          const updateMaybe = stmt.update;
+          if (updateMaybe !== undefined) this.collectAwaitExprsInExprInto(updateMaybe, out);
+        }
+        this.collectAwaitExprsInStmtInto(stmt.body, out);
+        return;
+      case "for_of_stmt":
+        this.collectAwaitExprsInExprInto(stmt.source, out);
+        this.collectAwaitExprsInStmtInto(stmt.body, out);
+        return;
+      case "switch_stmt":
+        this.collectAwaitExprsInExprInto(stmt.discriminant, out);
+        for (const c of stmt.cases) {
+          const testMaybe = c.test;
+          if (testMaybe !== undefined) this.collectAwaitExprsInExprInto(testMaybe, out);
+          for (const s of c.stmts) this.collectAwaitExprsInStmtInto(s, out);
+        }
+        return;
+      case "try_stmt":
+        this.collectAwaitExprsInStmtInto(stmt.tryBlock, out);
+        {
+          const catchClauseMaybe = stmt.catchClause;
+          if (catchClauseMaybe !== undefined) this.collectAwaitExprsInStmtInto(catchClauseMaybe.body, out);
+        }
+        {
+          const finallyBlockMaybe = stmt.finallyBlock;
+          if (finallyBlockMaybe !== undefined) this.collectAwaitExprsInStmtInto(finallyBlockMaybe, out);
+        }
+        return;
+      case "return_stmt":
+        {
+          const valueMaybe = stmt.value;
+          if (valueMaybe !== undefined) this.collectAwaitExprsInExprInto(valueMaybe, out);
+        }
+        return;
+      case "throw_stmt":
+        this.collectAwaitExprsInExprInto(stmt.value, out);
+        return;
+      case "break_stmt":
+      case "continue_stmt":
+      case "empty_stmt":
+        return;
+    }
+  }
+
+  private collectAwaitExprsInExprInto(expr: Expr, out: Array<AwaitExpr>): void {
+    switch (expr.kind) {
+      case "await_expr":
+        out.push(expr);
+        this.collectAwaitExprsInExprInto(expr.operand, out);
+        return;
+      case "template_lit":
+        for (const sub of expr.subs) this.collectAwaitExprsInExprInto(sub.expr, out);
+        return;
+      case "array_lit":
+        for (const el of expr.elems) this.collectAwaitExprsInExprInto(el.expr, out);
+        return;
+      case "object_lit":
+        for (const m of expr.props) {
+          if (m.kind === "prop_kv") this.collectAwaitExprsInExprInto(m.value, out);
+          else if (m.kind === "prop_spread") this.collectAwaitExprsInExprInto(m.expr, out);
+        }
+        return;
+      case "paren_expr":
+        this.collectAwaitExprsInExprInto(expr.inner, out);
+        return;
+      case "call_expr":
+        this.collectAwaitExprsInExprInto(expr.callee, out);
+        for (const a of expr.args) this.collectAwaitExprsInExprInto(a, out);
+        return;
+      case "new_expr":
+        this.collectAwaitExprsInExprInto(expr.callee, out);
+        for (const a of expr.args) this.collectAwaitExprsInExprInto(a, out);
+        return;
+      case "prop_access":
+        this.collectAwaitExprsInExprInto(expr.receiver, out);
+        return;
+      case "elem_access":
+        this.collectAwaitExprsInExprInto(expr.receiver, out);
+        this.collectAwaitExprsInExprInto(expr.index, out);
+        return;
+      case "prefix_op":
+        this.collectAwaitExprsInExprInto(expr.operand, out);
+        return;
+      case "postfix_op":
+        this.collectAwaitExprsInExprInto(expr.operand, out);
+        return;
+      case "typeof_expr":
+        this.collectAwaitExprsInExprInto(expr.operand, out);
+        return;
+      case "non_null":
+        this.collectAwaitExprsInExprInto(expr.operand, out);
+        return;
+      case "spread_expr":
+        this.collectAwaitExprsInExprInto(expr.operand, out);
+        return;
+      case "bin_op":
+        this.collectAwaitExprsInExprInto(expr.lhs, out);
+        this.collectAwaitExprsInExprInto(expr.rhs, out);
+        return;
+      case "instanceof_expr":
+        this.collectAwaitExprsInExprInto(expr.lhs, out);
+        this.collectAwaitExprsInExprInto(expr.rhs, out);
+        return;
+      case "ternary_expr":
+        this.collectAwaitExprsInExprInto(expr.cond, out);
+        this.collectAwaitExprsInExprInto(expr.thenBranch, out);
+        this.collectAwaitExprsInExprInto(expr.elseBranch, out);
+        return;
+      case "assign_expr":
+        this.collectAwaitExprsInExprInto(expr.target, out);
+        this.collectAwaitExprsInExprInto(expr.value, out);
+        return;
+      case "ident":
+      case "num_lit":
+      case "bigint_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "this_expr":
+      case "import_meta_url":
+      case "arrow_expr":
+        return;
+    }
+  }
+
+  private stmtHasAwaitInsideTry(stmt: Stmt): boolean {
+    switch (stmt.kind) {
+      case "try_stmt":
+        if (this.collectAwaitExprsInStmt(stmt.tryBlock).length > 0) return true;
+        {
+          const catchClauseMaybe = stmt.catchClause;
+          if (catchClauseMaybe !== undefined) {
+            if (this.collectAwaitExprsInStmt(catchClauseMaybe.body).length > 0) return true;
+          }
+        }
+        {
+          const finallyBlockMaybe = stmt.finallyBlock;
+          if (finallyBlockMaybe !== undefined) {
+            if (this.collectAwaitExprsInStmt(finallyBlockMaybe).length > 0) return true;
+          }
+        }
+        return false;
+      case "block_stmt":
+        for (const s of stmt.stmts) if (this.stmtHasAwaitInsideTry(s)) return true;
+        return false;
+      case "if_stmt":
+        if (this.stmtHasAwaitInsideTry(stmt.thenBranch)) return true;
+        {
+          const elseBranchMaybe = stmt.elseBranch;
+          if (elseBranchMaybe !== undefined) {
+            if (this.stmtHasAwaitInsideTry(elseBranchMaybe)) return true;
+          }
+        }
+        return false;
+      case "while_stmt":
+        return this.stmtHasAwaitInsideTry(stmt.body);
+      case "do_while_stmt":
+        return this.stmtHasAwaitInsideTry(stmt.body);
+      case "for_stmt":
+        return this.stmtHasAwaitInsideTry(stmt.body);
+      case "for_of_stmt":
+        return this.stmtHasAwaitInsideTry(stmt.body);
+      case "switch_stmt":
+        for (const c of stmt.cases) {
+          for (const s of c.stmts) if (this.stmtHasAwaitInsideTry(s)) return true;
+        }
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  private awaitUnsupportedError(expr: AwaitExpr): CodegenError {
+    if (this.currentAsyncReturnPayloadType === undefined) {
+      return new CodegenError(
+        { pos: expr.pos },
+        "`await` requires an async function (top-level await is unsupported)",
+      );
+    }
+    return new CodegenError(
+      { pos: expr.pos },
+      "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
+    );
   }
 
   // Phase 1.4c-2: format a monomorph's C signature from its resolved
@@ -5198,6 +5661,9 @@ class Emitter {
         this.collectCapturesWalkExpr(e.target, localSet, onIdent, onThis, onArrow);
         this.collectCapturesWalkExpr(e.value, localSet, onIdent, onThis, onArrow);
         return;
+      case "await_expr":
+        this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onThis, onArrow);
+        return;
       case "non_null":
         this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onThis, onArrow);
         return;
@@ -5859,6 +6325,7 @@ class Emitter {
       }
       const currentReturnType: TopazType = currentReturnTypeMaybe;
       const asyncPayloadMaybe = this.currentAsyncReturnPayloadType;
+      const asyncContinuationTargetMaybe = this.currentAsyncContinuationTarget;
       const returnValueMaybe = stmt.value;
       if (returnValueMaybe === undefined) {
         if (currentReturnType.kind !== "void") {
@@ -5876,6 +6343,12 @@ class Emitter {
           return `${pad}{ ${reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${cleanupLabel}; }`;
         }
         if (asyncPayloadMaybe !== undefined) {
+          if (asyncContinuationTargetMaybe !== undefined) {
+            if (this.liveTryFrames > 0) {
+              return `${pad}{ ${this.popFrames()}topaz_promise_fulfill_void(${asyncContinuationTargetMaybe}); return; }`;
+            }
+            return `${pad}{ topaz_promise_fulfill_void(${asyncContinuationTargetMaybe}); return; }`;
+          }
           if (this.liveTryFrames > 0) {
             return `${pad}{ ${this.popFrames()}return topaz_promise_resolve_void(); }`;
           }
@@ -5914,10 +6387,18 @@ class Emitter {
         // expression to the wrong handler.
         const rv = `__topaz_ret_${this.tmpCounter++}`;
         const ct = cTypeName(currentReturnType);
+        if (asyncContinuationTargetMaybe !== undefined) {
+          return `${pad}{ ${ct} ${rv} = ${retExpr}; ${this.popFrames()}topaz_promise_fulfill_copy(${asyncContinuationTargetMaybe}, &${rv}, sizeof(${rv})); return; }`;
+        }
         if (asyncPayloadMaybe !== undefined) {
           return `${pad}{ ${ct} ${rv} = ${retExpr}; ${this.popFrames()}return topaz_promise_resolve_copy(&${rv}, sizeof(${rv})); }`;
         }
         return `${pad}{ ${ct} ${rv} = ${retExpr}; ${this.popFrames()}return ${rv}; }`;
+      }
+      if (asyncContinuationTargetMaybe !== undefined) {
+        const rv = `__topaz_ret_${this.tmpCounter++}`;
+        const ct = cTypeName(currentReturnType);
+        return `${pad}{ ${ct} ${rv} = ${retExpr}; topaz_promise_fulfill_copy(${asyncContinuationTargetMaybe}, &${rv}, sizeof(${rv})); return; }`;
       }
       if (asyncPayloadMaybe !== undefined) {
         const rv = `__topaz_ret_${this.tmpCounter++}`;
@@ -6938,6 +7419,9 @@ class Emitter {
       case "assign_expr":
         this.checkTryBodyNoEscapeExpr(e.target);
         this.checkTryBodyNoEscapeExpr(e.value);
+        return;
+      case "await_expr":
+        this.checkTryBodyNoEscapeExpr(e.operand);
         return;
       case "non_null":
         this.checkTryBodyNoEscapeExpr(e.operand);
@@ -8403,6 +8887,9 @@ class Emitter {
     }
     if (expr.kind === "array_lit") {
       return this.emitArrayLiteral(expr, /* expected */ undefined);
+    }
+    if (expr.kind === "await_expr") {
+      throw this.awaitUnsupportedError(expr);
     }
     if (expr.kind === "non_null") {
       // Phase 1.5-3.5c: stmt-expression around a single evaluation of the
@@ -12033,6 +12520,9 @@ class Emitter {
       this.recordArrayMonomorph(arr);
       return arr;
     }
+    if (expr.kind === "await_expr") {
+      throw this.awaitUnsupportedError(expr);
+    }
     if (expr.kind === "non_null") {
       // Phase 1.5-3.5c: `e!` asserts at runtime that the optional carries a
       // value, and yields the underlying T. Only `T | undefined` is accepted
@@ -12965,6 +13455,9 @@ class Emitter {
 
   private emitWithExpected(expr: Expr, expected: TopazType): string {
     const exprAnchor: { pos: number } = { pos: expr.pos };
+    if (expr.kind === "await_expr") {
+      throw this.awaitUnsupportedError(expr);
+    }
     if (expr.kind === "call_expr") {
       if (this.isPromiseStaticCall(expr, "reject")) {
         return this.emitPromiseRejectWithExpected(expr, expected);

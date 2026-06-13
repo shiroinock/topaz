@@ -2936,8 +2936,13 @@ run_case promise_resolve_value $'number promise\nstring promise\nnumber promise\
 run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejection\nreject values'
 run_case promise_then_fulfilled $'sync\npromise returned\nthen number\n42\nthen string\nready'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
-run_tsc_bridge_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "unsupported expression AwaitExpression"
-run_tsc_bridge_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "unsupported expression AwaitExpression"
+run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
+run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
+run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
+run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "more than one await in an async function is deferred"
+run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_try_deferred_fail examples/await_try_deferred_fail.ts "await inside try/catch/finally is deferred"
 run_fail_case async_function_wrong_return_fail examples/async_function_wrong_return_fail.ts "async function return annotation must be Promise<T>"
 run_fail_case async_function_return_promise_fail examples/async_function_return_promise_fail.ts "type mismatch: expected topaz_number, got topaz_promise_number"
 run_tsc_bridge_fail_case async_arrow_deferred_fail examples/async_arrow_deferred_fail.ts "async functions are unsupported"
