@@ -3470,6 +3470,7 @@ run_case brand_generic_template_never_default_payload $'o1\no1\no1\ntrue\ntrue\n
 run_case brand_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_export_ambient_unique_symbol_marker $'u1\ntrue'
+run_case brand_interface_phantom $'u1\nu1\no1\ntrue\ntrue\nu1\nt1\nn1\no1'
 run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_template_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_type_query_cross_assign_fail examples/brand_generic_template_type_query_cross_assign_fail.ts "topaz_brand_Brand_3a__5b_UserIdBrand_5d__3a_typeof_20_UserIdBrand"
 run_fail_case brand_generic_template_default_cross_assign_fail examples/brand_generic_template_default_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
@@ -3492,6 +3493,8 @@ run_fail_case brand_phantom_object_bad_constraint_fail examples/brand_phantom_ob
 run_fail_case brand_phantom_object_property_key_union_missing_fail examples/brand_phantom_object_property_key_union_missing_fail.ts "phantom object brand helper payload constraint must be string, PropertyKey, or string | number | symbol"
 run_fail_case brand_phantom_object_bad_default_fail examples/brand_phantom_object_bad_default_fail.ts "phantom object brand helper payload default must be a string literal, typeof Identifier, unknown, or never"
 run_fail_case brand_phantom_object_default_cross_assign_fail examples/brand_phantom_object_default_cross_assign_fail.ts "topaz_brand_Phantom_3a___brand_3a_UserId"
+run_fail_case brand_interface_phantom_cross_assign_fail examples/brand_interface_phantom_cross_assign_fail.ts "topaz_brand_OrderIdBrand"
+run_fail_case brand_interface_phantom_bad_shape_fail examples/brand_interface_phantom_bad_shape_fail.ts "unsupported brand intersection shape"
 run_fail_case brand_ambient_unique_symbol_initializer_fail examples/brand_ambient_unique_symbol_initializer_fail.ts "ambient unique-symbol markers cannot have initializers"
 run_fail_case brand_ambient_unique_symbol_wrong_type_fail examples/brand_ambient_unique_symbol_wrong_type_fail.ts "only \`unique symbol\` ambient markers are supported"
 run_fail_case brand_ambient_unique_symbol_non_const_fail examples/brand_ambient_unique_symbol_non_const_fail.ts "only \`declare const ...: unique symbol\` ambient markers are supported"

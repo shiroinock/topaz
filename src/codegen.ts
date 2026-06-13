@@ -1439,6 +1439,11 @@ type BrandAliasTemplateInfo = {
   payloadDefault: string | undefined;
 };
 
+type InterfacePhantomBrandDescriptor = {
+  fieldKey: string;
+  payload: string;
+};
+
 type PreAllocatedAnon = {
   key: string;
   node: TypeLiteralNode;
@@ -1700,6 +1705,8 @@ class Emitter {
   // `type Brand<T, K> = T & { readonly __brand: K }`. These remain separate
   // from ordinary aliases so generic type aliases stay unsupported.
   private brandAliasTemplates: Map<string, BrandAliasTemplateInfo> = new Map<string, BrandAliasTemplateInfo>();
+  private interfacePhantomBrandDescriptors: Map<string, InterfacePhantomBrandDescriptor> =
+    new Map<string, InterfacePhantomBrandDescriptor>();
   private moduleGlobalTypes: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.5-6i prep: pre-allocated recursive-alias anonymous classes keyed by
   // module-local source span. This preserves TypeLiteralNode identity without
@@ -3566,6 +3573,10 @@ class Emitter {
   private collectInterfaceMembers(iface: InterfaceDecl, sf: SourceModule): void {
     this.withSfVoid(sf, () => {
       const info = this.interfaces.get(iface.name)!;
+      const phantomDescriptor = this.tryMakeInterfacePhantomBrandDescriptor(iface);
+      if (phantomDescriptor !== undefined) {
+        this.interfacePhantomBrandDescriptors.set(iface.name, phantomDescriptor);
+      }
       for (const m of iface.members) {
         if (m.kind === "interface_field") {
           const memberAnchor: { pos: number } = { pos: m.pos };
@@ -3573,7 +3584,9 @@ class Emitter {
           if (info.fields.has(fname) || info.methods.has(fname)) {
             throw new CodegenError(memberAnchor, `duplicate member '${fname}' in interface '${info.name}'`);
           }
-          const t = this.typeFromAnnotation(m.type, memberAnchor, sf);
+          const t = phantomDescriptor !== undefined && fname === phantomDescriptor.fieldKey
+            ? this.interfacePhantomBrandFieldRuntimeType(m.type, sf)
+            : this.typeFromAnnotation(m.type, memberAnchor, sf);
           this.assertNotVoid(t, memberAnchor, "interface field type");
           if (t.kind === "fn") {
             throw new CodegenError(memberAnchor, "fn-typed interface fields are unsupported (Phase 1.5-3.5e)");
@@ -3604,6 +3617,22 @@ class Emitter {
         }
       }
     });
+  }
+
+  private tryMakeInterfacePhantomBrandDescriptor(iface: InterfaceDecl): InterfacePhantomBrandDescriptor | undefined {
+    if (iface.members.length !== 1) return undefined;
+    const member = iface.members[0];
+    if (member.kind !== "interface_field") return undefined;
+    if (!member.isReadonly) return undefined;
+    const payload = this.brandPayloadSpelling(member.type);
+    if (payload === undefined) return undefined;
+    return { fieldKey: member.name, payload };
+  }
+
+  private interfacePhantomBrandFieldRuntimeType(node: TypeNode, sf: SourceModule): TopazType {
+    if (node.kind === "type_query") return T_UNKNOWN;
+    if (node.kind === "type_ref" && node.name === "never" && node.typeArgs.length === 0) return T_UNKNOWN;
+    return this.typeFromAnnotation(node, { pos: node.pos }, sf);
   }
 
   // Phase 1.5-6e-3: consumes the Topaz `ClassDecl`. `extends` rejection,
@@ -4316,7 +4345,11 @@ class Emitter {
     let hasPhantom = false;
     let phantomNode: TypeNode = node;
     for (const part of node.variants) {
-      if (part.kind === "type_literal" || this.isPhantomObjectBrandAliasReference(part)) {
+      if (
+        part.kind === "type_literal"
+        || this.isPhantomObjectBrandAliasReference(part)
+        || this.isInterfacePhantomBrandReference(part)
+      ) {
         if (hasPhantom) {
           throw this.typeErr({ pos: part.pos }, "unsupported brand intersection shape: multiple phantom object parts");
         }
@@ -4342,6 +4375,10 @@ class Emitter {
       );
     }
     if (phantomNode.kind === "type_ref") {
+      const interfaceDescriptor = this.interfacePhantomBrandDescriptors.get(phantomNode.name);
+      if (interfaceDescriptor !== undefined) {
+        return this.resolveInterfacePhantomBrandDescriptor(phantomNode.name, interfaceDescriptor, phantomNode, { pos: phantomNode.pos }, base);
+      }
       return this.resolvePhantomObjectBrandAliasTemplate(phantomNode.name, phantomNode, { pos: phantomNode.pos }, base);
     }
     if (phantomNode.kind !== "type_literal") {
@@ -4578,6 +4615,25 @@ class Emitter {
     if (node.kind !== "type_ref") return false;
     const template = this.brandAliasTemplates.get(node.name);
     return template !== undefined && template.kind === "phantom_object";
+  }
+
+  private isInterfacePhantomBrandReference(node: TypeNode): boolean {
+    if (node.kind !== "type_ref") return false;
+    return this.interfacePhantomBrandDescriptors.has(node.name);
+  }
+
+  private resolveInterfacePhantomBrandDescriptor(
+    interfaceName: string,
+    descriptor: InterfacePhantomBrandDescriptor,
+    node: TypeRef,
+    anchor: { pos: number },
+    base: TopazType,
+  ): TopazType {
+    if (node.typeArgs.length !== 0) {
+      throw this.typeErr(anchor, `interface '${interfaceName}' takes no type arguments (Phase 1.4c)`);
+    }
+    const key = `${interfaceName}:${descriptor.fieldKey}:${descriptor.payload}`;
+    return { kind: "brand", base, key };
   }
 
   private resolvePhantomObjectBrandAliasTemplate(
