@@ -200,7 +200,11 @@ type SyntheticCallKind =
   | "console_warn"
   | "string_from_char_code"
   | "parse_int"
-  | "parse_float";
+  | "parse_float"
+  | "path_dirname"
+  | "path_basename"
+  | "path_extname"
+  | "url_file_url_to_path";
 
 type OrdinaryCallPlan =
   | {
@@ -11664,7 +11668,67 @@ class Emitter {
         label: "parseFloat",
       };
     }
+    if (callee.name === "dirname") {
+      this.checkNodePathDirnameArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "path_dirname",
+        params: [this.makeParamInfo("path", T_STRING)],
+        returnType: T_STRING,
+        label: "dirname",
+      };
+    }
+    if (callee.name === "basename") {
+      this.checkNodePathBasenameArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "path_basename",
+        params: [this.makeParamInfo("path", T_STRING), this.makeOptionalParamInfo("ext", T_STRING)],
+        returnType: T_STRING,
+        label: "basename",
+      };
+    }
+    if (callee.name === "extname") {
+      this.checkNodePathExtnameArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "path_extname",
+        params: [this.makeParamInfo("path", T_STRING)],
+        returnType: T_STRING,
+        label: "extname",
+      };
+    }
+    if (callee.name === "fileURLToPath") {
+      this.checkNodeUrlFileURLToPathArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "url_file_url_to_path",
+        params: [this.makeParamInfo("url", T_STRING)],
+        returnType: T_STRING,
+        label: "fileURLToPath",
+      };
+    }
     return undefined;
+  }
+
+  private isDeferredFlatBuiltinAwaitCallee(name: string): boolean {
+    return (
+      name === "resolve" ||
+      name === "join" ||
+      name === "readFileSync" ||
+      name === "existsSync" ||
+      name === "writeFileSync" ||
+      name === "mkdirSync" ||
+      name === "execFileSync" ||
+      name === "exit" ||
+      name === "writeStdout" ||
+      name === "writeStderr" ||
+      name === "writeError"
+    );
   }
 
   private resolveStringMethodCallPlan(
@@ -11813,6 +11877,7 @@ class Emitter {
           label: `${callee.name}()`,
         };
       }
+      if (awaitExpr !== undefined && this.isDeferredFlatBuiltinAwaitCallee(callee.name)) return undefined;
       const calleeType = this.inferType(callee);
       if (calleeType.kind === "fn") {
         return {
@@ -11993,6 +12058,18 @@ class Emitter {
       }
       if (plan.syntheticKind === "parse_float") {
         return this.emitParseFloat(expr);
+      }
+      if (plan.syntheticKind === "path_dirname") {
+        return this.emitNodePathDirname(expr);
+      }
+      if (plan.syntheticKind === "path_basename") {
+        return this.emitNodePathBasename(expr);
+      }
+      if (plan.syntheticKind === "path_extname") {
+        return this.emitNodePathExtname(expr);
+      }
+      if (plan.syntheticKind === "url_file_url_to_path") {
+        return this.emitNodeUrlFileURLToPath(expr);
       }
     }
     if (plan.kind === "class_method") {
@@ -12280,23 +12357,11 @@ class Emitter {
       if (callee.name === "mkdirSync") {
         return this.emitNodeFsMkdirSync(expr);
       }
-      // Phase 1.5-6 prep #18: node:path.dirname / resolve, same call-site
-      // shortcut (loader accepts the `node:path` specifier). bare value use
-      // falls to "unknown identifier" like the node:fs builtins.
-      if (callee.name === "dirname") {
-        return this.emitNodePathDirname(expr);
-      }
+      // Phase 1.5-6 prep #18: node:path.resolve stays a variadic call-site
+      // shortcut. The fixed path/url helpers lower through ordinary call
+      // descriptors below so call-argument await can share their metadata.
       if (callee.name === "resolve") {
         return this.emitNodePathResolve(expr);
-      }
-      // Phase 1.5-6 prep #21: node:path.basename(p, ext?), same call-site
-      // shortcut. arity 1/2 dispatch to distinct runtime entries.
-      if (callee.name === "basename") {
-        return this.emitNodePathBasename(expr);
-      }
-      // Phase 1.5-6 prep #22: node:path.extname(p), same call-site shortcut.
-      if (callee.name === "extname") {
-        return this.emitNodePathExtname(expr);
       }
       // Phase 3.40: node:path.join(...segments) packages checked variadic
       // arguments into an internal Array<string> for the runtime prelude.
@@ -12307,11 +12372,6 @@ class Emitter {
       // { stdio: "inherit" }) -> void。stdio inherit 固定の call-site shortcut。
       if (callee.name === "execFileSync") {
         return this.emitNodeChildProcessExecFileSync(expr);
-      }
-      // Phase 1.5-6 prep #25: node:url.fileURLToPath(url) -> string。
-      // `file://...` URL を local path に変換するだけの 1 引数 string 関数。
-      if (callee.name === "fileURLToPath") {
-        return this.emitNodeUrlFileURLToPath(expr);
       }
       // Phase 3.7: public std/process uses flat named helpers that lower to
       // the existing synthetic process / console runtime entries.
@@ -12327,8 +12387,8 @@ class Emitter {
       if (callee.name === "writeError") {
         return this.emitStdProcessWriteError(expr);
       }
-      // Phase 1.5-6 prep #16 / Phase 5.26: global parseInt(s, radix) /
-      // parseFloat(s) stay call-site-only, but lower through ordinary call
+      // Phase 1.5-6 prep #16 / Phase 5.26 / Phase 5.27: pure fixed/optional
+      // flat builtins stay call-site-only, but lower through ordinary call
       // descriptors so call-argument await can share the same metadata.
       const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
       if (ordinaryPlan !== undefined) {
@@ -14814,23 +14874,10 @@ class Emitter {
         if (callee.name === "mkdirSync") {
           throw new CodegenError({ pos: expr.pos }, "mkdirSync returns void and cannot be used as a value");
         }
-        // Phase 1.5-6 prep #18: node:path.dirname / resolve type as string.
-        if (callee.name === "dirname") {
-          this.checkNodePathDirnameArgs(expr);
-          return T_STRING;
-        }
+        // Phase 1.5-6 prep #18: node:path.resolve remains variadic and outside
+        // the fixed flat-builtin descriptor family.
         if (callee.name === "resolve") {
           this.checkNodePathResolveArgs(expr);
-          return T_STRING;
-        }
-        // Phase 1.5-6 prep #21: node:path.basename types as string.
-        if (callee.name === "basename") {
-          this.checkNodePathBasenameArgs(expr);
-          return T_STRING;
-        }
-        // Phase 1.5-6 prep #22: node:path.extname types as string.
-        if (callee.name === "extname") {
-          this.checkNodePathExtnameArgs(expr);
           return T_STRING;
         }
         // Phase 1.5-6 prep #23: node:path.join types as string.
@@ -14845,11 +14892,6 @@ class Emitter {
             { pos: expr.pos },
             "execFileSync returns void and cannot be used as a value",
           );
-        }
-        // Phase 1.5-6 prep #25: node:url.fileURLToPath types as string.
-        if (callee.name === "fileURLToPath") {
-          this.checkNodeUrlFileURLToPathArgs(expr);
-          return T_STRING;
         }
         // Phase 3.7: public std/process helpers are call-site shortcuts, not
         // first-class function values.
@@ -14877,8 +14919,8 @@ class Emitter {
             "console.error returns void and cannot be used as a value",
           );
         }
-        // Phase 1.5-6 prep #16 / Phase 5.26: parseInt / parseFloat both type
-        // as number through their call-site-only flat builtin descriptors.
+        // Phase 1.5-6 prep #16 / Phase 5.26 / Phase 5.27: pure fixed/optional
+        // flat builtins type through their call-site-only descriptors.
         const flatBuiltinPlan = this.resolveFlatBuiltinCallPlan(expr, callee);
         if (flatBuiltinPlan !== undefined) return flatBuiltinPlan.returnType;
         if (this.genericFunctions.has(callee.name)) {
