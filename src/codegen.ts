@@ -158,6 +158,12 @@ type AwaitCallReceiverTemp = {
   receiverType: TopazType;
 };
 
+type AwaitIndexTemp = {
+  tempName: string;
+  index: Expr;
+  indexType: TopazType;
+};
+
 type AwaitInitializerInfo = {
   kind: "initializer";
   stmt: VarDeclStmt;
@@ -180,6 +186,7 @@ type AwaitStatementInfo = {
   awaitExpr: AwaitExpr;
   transformedExpr?: Expr;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+  preAwaitIndexTemps: Array<AwaitIndexTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   index: number;
   pc: number;
@@ -4773,6 +4780,7 @@ class Emitter {
             stmt: s,
             awaitExpr: expr,
             preAwaitReceiverTemps: [],
+            preAwaitIndexTemps: [],
             preAwaitArgTemps: [],
             index: i,
             pc: steps.length,
@@ -4802,6 +4810,7 @@ class Emitter {
             const tempName = `__topaz_stmt_await_${steps.length}`;
             let transformedExpr: Expr = s.expr;
             let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+            let preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
             let preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
             this.assertNotVoid(awaitedPayload, { pos: awaitExpr.pos }, "await statement value");
             this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
@@ -4809,6 +4818,7 @@ class Emitter {
             if (assignmentAwait !== undefined) {
               transformedExpr = assignmentAwait.transformedExpr;
               preAwaitReceiverTemps = assignmentAwait.preAwaitReceiverTemps;
+              preAwaitIndexTemps = assignmentAwait.preAwaitIndexTemps;
             } else {
               const receiverAwait = this.tryBuildCallReceiverAwaitExpression(s.expr, awaitExpr, tempName);
               if (receiverAwait !== undefined) {
@@ -4826,6 +4836,7 @@ class Emitter {
               awaitExpr,
               transformedExpr,
               preAwaitReceiverTemps,
+              preAwaitIndexTemps,
               preAwaitArgTemps,
               index: i,
               pc: steps.length,
@@ -4978,7 +4989,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, or interface field compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -4990,11 +5001,16 @@ class Emitter {
     awaitExpr: AwaitExpr,
     awaitedTempName: string,
     stepOrdinal: number,
-  ): { transformedExpr: Expr; preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> } | undefined {
+  ): {
+    transformedExpr: Expr;
+    preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+    preAwaitIndexTemps: Array<AwaitIndexTemp>;
+  } | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "assign_expr") return undefined;
     const root = rootMaybe;
     let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+    let preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
     let transformedTarget = root.target;
     if (root.op !== "=") {
       if (!this.isAwaitLowerableCompoundAssignmentOp(root.op)) return undefined;
@@ -5015,6 +5031,31 @@ class Emitter {
           kind: "prop_access",
           receiver: receiverTempExpr,
           name: target.name,
+          optional: false,
+          pos: target.pos,
+          end: target.end,
+        };
+      } else if (target.kind === "elem_access") {
+        const elemTemps = this.tryBuildArrayElementCompoundAssignmentTemps(target, stepOrdinal);
+        if (elemTemps === undefined) return undefined;
+        preAwaitReceiverTemps = [elemTemps.receiverTemp];
+        preAwaitIndexTemps = [elemTemps.indexTemp];
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: elemTemps.receiverTemp.tempName,
+          pos: target.receiver.pos,
+          end: target.receiver.end,
+        };
+        const indexTempExpr: IdentExpr = {
+          kind: "ident",
+          name: elemTemps.indexTemp.tempName,
+          pos: target.index.pos,
+          end: target.index.end,
+        };
+        transformedTarget = {
+          kind: "elem_access",
+          receiver: receiverTempExpr,
+          index: indexTempExpr,
           optional: false,
           pos: target.pos,
           end: target.end,
@@ -5044,7 +5085,48 @@ class Emitter {
       end: root.end,
     };
     this.inferType(transformedExpr);
-    return { transformedExpr, preAwaitReceiverTemps };
+    return { transformedExpr, preAwaitReceiverTemps, preAwaitIndexTemps };
+  }
+
+  private isSafeArrayElementIndex(expr: Expr): boolean {
+    if (expr.kind === "num_lit") return true;
+    if (expr.kind === "ident") return true;
+    if (expr.kind === "this_expr") return true;
+    if (expr.kind === "paren_expr") return this.isSafeArrayElementIndex(expr.inner);
+    if (expr.kind === "prop_access") return this.isSafeLvalueBase(expr.receiver);
+    return false;
+  }
+
+  private tryBuildArrayElementCompoundAssignmentTemps(
+    target: ElemAccessExpr,
+    stepOrdinal: number,
+  ): { receiverTemp: AwaitCallReceiverTemp; indexTemp: AwaitIndexTemp } | undefined {
+    this.checkAssignTarget(target, { pos: target.pos });
+    if (!this.isSafeLvalueBase(target.receiver)) {
+      throw new CodegenError({ pos: target.receiver.pos }, "array element assignment requires a simple receiver (identifier, `this`, or chained property access)");
+    }
+    if (!this.isSafeArrayElementIndex(target.index)) {
+      throw new CodegenError({ pos: target.index.pos }, "array element assignment requires a simple index");
+    }
+    const receiverType = this.inferType(target.receiver);
+    if (!isArrayType(receiverType)) return undefined;
+    this.expectType(target.index, T_NUMBER);
+    const receiverTempName = `__topaz_assign_recv_${stepOrdinal}`;
+    const indexTempName = `__topaz_assign_index_${stepOrdinal}`;
+    this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+    this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
+    return {
+      receiverTemp: {
+        tempName: receiverTempName,
+        receiver: target.receiver,
+        receiverType,
+      },
+      indexTemp: {
+        tempName: indexTempName,
+        index: target.index,
+        indexType: T_NUMBER,
+      },
+    };
   }
 
   private tryBuildFieldCompoundAssignmentReceiverTemp(
@@ -5636,6 +5718,10 @@ class Emitter {
           const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
           lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
         }
+        for (const indexTemp of step.preAwaitIndexTemps) {
+          const indexExpr = this.emitWithExpected(indexTemp.index, indexTemp.indexType);
+          lines.push(`${indent}${frameRef}->${indexTemp.tempName} = ${indexExpr};`);
+        }
         for (const temp of step.preAwaitArgTemps) {
           const expr = this.emitWithExpected(temp.arg, temp.argType);
           lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
@@ -5708,6 +5794,9 @@ class Emitter {
         if (binding.transformedExpr !== undefined) {
           for (const receiverTemp of binding.preAwaitReceiverTemps) {
             fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
+          }
+          for (const indexTemp of binding.preAwaitIndexTemps) {
+            fields.push(`  ${cTypeName(indexTemp.indexType)} ${indexTemp.tempName};`);
           }
           for (const temp of binding.preAwaitArgTemps) {
             fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
@@ -5946,6 +6035,11 @@ class Emitter {
               this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
               lines.push(`        ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
               lines.push(`        (void)${receiverTemp.tempName};`);
+            }
+            for (const indexTemp of current.preAwaitIndexTemps) {
+              this.scope.declareBinding(indexTemp.tempName, indexTemp.indexType, /* isConst */ true, { pos: indexTemp.index.pos });
+              lines.push(`        ${cTypeName(indexTemp.indexType)} ${indexTemp.tempName} = ctx->${indexTemp.tempName};`);
+              lines.push(`        (void)${indexTemp.tempName};`);
             }
             for (const temp of current.preAwaitArgTemps) {
               this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
@@ -10550,6 +10644,42 @@ class Emitter {
     return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
   }
 
+  private emitArrayElementCompoundAssignment(
+    target: ElemAccessExpr,
+    op: string,
+    value: Expr,
+    baseType: TopazType,
+    elemType: TopazType,
+    anchor: { pos: number },
+  ): string {
+    if (!this.isAwaitLowerableCompoundAssignmentOp(op)) {
+      throw new CodegenError(anchor, `unsupported assignment operator '${op}'`);
+    }
+    const id = this.tmpCounter++;
+    const arrayName = arrayShortName(baseType);
+    const baseTmp = `__topaz_ab_${id}`;
+    const indexTmp = `__topaz_ai_${id}`;
+    const oldTmp = `__topaz_ae_old_${id}`;
+    const nextTmp = `__topaz_ae_next_${id}`;
+    const baseStr = this.emitExpression(target.receiver);
+    const indexStr = this.emitWithExpected(target.index, T_NUMBER);
+    const rhsStr = this.emitWithExpected(value, elemType);
+    const elemC = cTypeName(elemType);
+    const baseC = cTypeName(baseType);
+    const oldExpr = `topaz_array_${arrayName}_at(${baseTmp}, ${indexTmp})`;
+    if (op === "+=" && elemType.kind === "string") {
+      const nextExpr = this.emitRuntimePreludeStringConcat(oldTmp, rhsStr, anchor);
+      return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); })`;
+    }
+    if (op === "%=") {
+      const nextExpr = `topaz_fmod(${oldTmp}, ${rhsStr})`;
+      return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); })`;
+    }
+    const binOp = op.slice(0, -1);
+    const nextExpr = `${oldTmp} ${binOp} ${rhsStr}`;
+    return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); })`;
+  }
+
   private emitExpression(expr: Expr): string {
     if (expr.kind === "num_lit") {
       return emitNumberLiteralText(expr.text, expr.value);
@@ -10839,19 +10969,19 @@ class Emitter {
         return `(${lhsStr} = ${rhsStr})`;
       }
       this.inferType(expr); // type-check + const-check
-      // Element-access assignment lowers to topaz_array_X_set; compound
-      // assignment on a[i] is unsupported because we'd evaluate the index twice.
+      // Element-access assignment lowers to topaz_array_X_set. Compound forms
+      // snapshot the array and index once, read the old element, then set.
       const assignTarget = expr.target;
       if (assignTarget.kind === "elem_access") {
         const target = assignTarget;
-        if (op !== "=") {
-          throw new CodegenError(assignAnchor, "compound assignment on array element is unsupported; use a[i] = ...");
-        }
         const baseType = this.inferType(target.receiver);
         const name = arrayShortName(baseType);
         const elem = arrayElem(baseType);
         if (elem === undefined) {
           throw new CodegenError(assignAnchor, "internal error: validated array assignment target missing element type");
+        }
+        if (op !== "=") {
+          return this.emitArrayElementCompoundAssignment(target, op, expr.value, baseType, elem, assignAnchor);
         }
         const base = this.emitExpression(target.receiver);
         const idx = this.emitExpression(target.index);

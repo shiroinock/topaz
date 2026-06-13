@@ -3009,11 +3009,16 @@ run_case async_await_call_arg_expression $'sync tail\nbare call\n3\nchar\nA\npar
 run_case async_await_local_compound_assignment $'local pre\narrow pre\nmethod pre\nexpr pre\nstring pre\nsync tail\narrow post\nmethod post\nexpr post\narrow then\n5\nmethod then\n21\nexpr then\n42\nstring post\nstring then\ntopaz ok\nlocal post\nlocal then\n2'
 run_case async_await_class_field_compound_assignment $'this pre\nobject pre\narrow pre\nstring pre\nexpr pre\nsync tail\narrow post\nexpr post\nobject post\narrow then\n12\nstring post\nexpr then\n37\nobject then\n48\nstring then\ntopaz ok\nthis post\nthis then\n2'
 run_case async_await_interface_field_compound_assignment $'sync pre\n3.5\ntop sync\ndecl pre\narrow pre\nmethod pre\nexpr pre\nsync tail\nmethod post\nexpr post\nfifo marker\narrow post\nmethod then\n17\nexpr then\n34\narrow then\ntopaz ok\ndecl post\ndecl then\n2'
+run_case async_await_array_element_compound_assignment $'sync pre\n15\n1\ntop\ndecl pre\narrow pre\nmethod pre\nexpr pre\nsync tail\nmethod post\nexpr post\nfifo marker\narrow post\nmethod then\n25\nexpr then\n34\narrow then\ntopaz ok\ndecl post\ndecl then\n2'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case async_await_class_field_compound_assignment_side_effect_receiver_fail examples/async_await_class_field_compound_assignment_side_effect_receiver_fail.ts "property assignment requires a simple base"
 run_fail_case async_await_interface_field_compound_assignment_side_effect_receiver_fail examples/async_await_interface_field_compound_assignment_side_effect_receiver_fail.ts "property assignment requires a simple base"
 run_fail_case async_await_interface_field_compound_assignment_multiple_fail examples/async_await_interface_field_compound_assignment_multiple_fail.ts "await expression lowering is deferred"
 run_fail_case async_await_interface_field_compound_assignment_type_mismatch_fail examples/async_await_interface_field_compound_assignment_type_mismatch_fail.ts "type mismatch: expected topaz_number, got topaz_string"
+run_fail_case async_await_array_element_compound_assignment_side_effect_receiver_fail examples/async_await_array_element_compound_assignment_side_effect_receiver_fail.ts "array element assignment requires a simple receiver"
+run_fail_case async_await_array_element_compound_assignment_side_effect_index_fail examples/async_await_array_element_compound_assignment_side_effect_index_fail.ts "array element assignment requires a simple index"
+run_fail_case async_await_array_element_compound_assignment_multiple_fail examples/async_await_array_element_compound_assignment_multiple_fail.ts "await expression lowering is deferred"
+run_fail_case async_await_array_element_compound_assignment_type_mismatch_fail examples/async_await_array_element_compound_assignment_type_mismatch_fail.ts "type mismatch: expected topaz_number, got topaz_string"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
 run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "await expression lowering is deferred"
