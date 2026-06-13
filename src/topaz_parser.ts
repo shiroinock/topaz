@@ -434,10 +434,13 @@ export class Parser {
         constraint = parsedConstraint;
         end = parsedConstraint.end;
       }
-      if (this.isPunct(this.current(), "=")) {
-        throw this.error(this.current(), "default type parameter is unsupported");
+      let defaultType: TypeNode | undefined = undefined;
+      if (this.matchPunct("=")) {
+        const parsedDefault: TypeNode = this.parseType();
+        defaultType = parsedDefault;
+        end = parsedDefault.end;
       }
-      out.push({ name: id.text, constraint: constraint, pos: id.pos, end: end });
+      out.push({ name: id.text, constraint: constraint, defaultType: defaultType, pos: id.pos, end: end });
       if (!this.matchPunct(",")) {
         this.expectPunct(">");
         break;

@@ -3442,14 +3442,20 @@ run_case brand_generic_computed_template $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_constrained $'u1\nu1\no1\ntrue\ntrue\nu1'
 run_case brand_generic_computed_template_constrained $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_type_query_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_generic_template_default_payload $'u1\nu1\nu1\ntrue\ntrue\nu1\nt1\nother'
+run_case brand_generic_computed_template_default_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_template_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_type_query_cross_assign_fail examples/brand_generic_template_type_query_cross_assign_fail.ts "topaz_brand_Brand_3a__5b_UserIdBrand_5d__3a_typeof_20_UserIdBrand"
+run_fail_case brand_generic_template_default_cross_assign_fail examples/brand_generic_template_default_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_implicit_fail examples/brand_generic_template_implicit_fail.ts "type mismatch"
 run_fail_case brand_generic_template_bad_payload_fail examples/brand_generic_template_bad_payload_fail.ts "payload type argument must be a string literal"
+run_fail_case brand_generic_template_bad_default_fail examples/brand_generic_template_bad_default_fail.ts "payload default must be a string literal or typeof Identifier"
+run_fail_case brand_generic_template_base_default_fail examples/brand_generic_template_base_default_fail.ts "base type parameter default is unsupported"
 run_fail_case brand_generic_template_bad_shape_fail examples/brand_generic_template_bad_shape_fail.ts "generic type alias 'Brand' is unsupported"
 run_fail_case brand_generic_template_bad_constraint_fail examples/brand_generic_template_bad_constraint_fail.ts "brand template payload constraint must be string"
 run_fail_case brand_generic_template_base_constraint_fail examples/brand_generic_template_base_constraint_fail.ts "brand template base type parameter constraint is unsupported"
 run_fail_case type_param_constraint_generic_fail examples/type_param_constraint_generic_fail.ts "type parameter constraint is unsupported"
+run_fail_case type_param_default_generic_fail examples/type_param_default_generic_fail.ts "default type parameter is unsupported"
 
 run_case cond_equality $'if-eq\nif-ne\nand\nor\nmixed\ndiffer\n3\n6\n2'
 run_cc_warnfree_case cond_equality

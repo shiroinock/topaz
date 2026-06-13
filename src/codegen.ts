@@ -1434,6 +1434,7 @@ type TypeAliasInfo = {
 
 type BrandAliasTemplateInfo = {
   fieldKey: string;
+  payloadDefault: string | undefined;
 };
 
 type PreAllocatedAnon = {
@@ -2544,11 +2545,14 @@ class Emitter {
       if (cls.typeParams.length > 0) {
         // Validate the type-param declaration eagerly so errors fire even
         // when the class is never instantiated (mirrors generic functions).
-        // Defaults are rejected in convert; constraints stay represented for
-        // brand aliases but remain unsupported for generic classes.
+        // Constraints/defaults stay represented for brand aliases but remain
+        // unsupported for generic classes.
         const typeParams: string[] = [];
         for (const tp of cls.typeParams) {
           const tpAnchor: { pos: number } = { pos: tp.pos };
+          if (tp.defaultType !== undefined) {
+            throw new CodegenError(tpAnchor, "default type parameter is unsupported");
+          }
           if (tp.constraint !== undefined) {
             throw new CodegenError(tpAnchor, "type parameter constraint is unsupported");
           }
@@ -2637,6 +2641,11 @@ class Emitter {
           this.brandAliasTemplates.set(name, template);
           return;
         }
+        for (const tp of alias.typeParams) {
+          if (tp.defaultType !== undefined) {
+            throw new CodegenError({ pos: tp.pos }, "default type parameter is unsupported");
+          }
+        }
         throw new CodegenError(
           aliasAnchor,
           `generic type alias '${name}' is unsupported (Phase 1.5-6 prep)`,
@@ -2701,14 +2710,17 @@ class Emitter {
           throw new CodegenError(fnAnchor, "async generic functions are unsupported");
         }
         // Generic function: defer signature resolution until call sites
-        // supply concrete type arguments. Defaults are rejected in convert;
-        // constraints remain unsupported outside brand aliases.
+        // supply concrete type arguments. Defaults and constraints remain
+        // unsupported outside brand aliases.
         if (this.genericFunctions.has(fname)) {
           throw new CodegenError(fnAnchor, `redeclaration of function '${fname}'`);
         }
         const typeParams: string[] = [];
         for (const tp of fn.typeParams) {
           const tpAnchor: { pos: number } = { pos: tp.pos };
+          if (tp.defaultType !== undefined) {
+            throw new CodegenError(tpAnchor, "default type parameter is unsupported");
+          }
           if (tp.constraint !== undefined) {
             throw new CodegenError(tpAnchor, "type parameter constraint is unsupported");
           }
@@ -4395,6 +4407,13 @@ class Emitter {
         "brand template base type parameter constraint is unsupported",
       );
     }
+    const baseDefault = baseTypeParam.defaultType;
+    if (baseDefault !== undefined) {
+      throw this.typeErr(
+        { pos: baseDefault.pos },
+        "brand template base type parameter default is unsupported",
+      );
+    }
     const payloadConstraint = payloadTypeParam.constraint;
     if (payloadConstraint !== undefined && !this.isStringTypeParamConstraint(payloadConstraint)) {
       throw this.typeErr(
@@ -4402,7 +4421,18 @@ class Emitter {
         "brand template payload constraint must be string",
       );
     }
-    return { fieldKey };
+    const payloadDefaultNode = payloadTypeParam.defaultType;
+    let payloadDefault: string | undefined = undefined;
+    if (payloadDefaultNode !== undefined) {
+      payloadDefault = this.brandPayloadSpelling(payloadDefaultNode);
+      if (payloadDefault === undefined) {
+        throw this.typeErr(
+          { pos: payloadDefaultNode.pos },
+          "brand template payload default must be a string literal or typeof Identifier",
+        );
+      }
+    }
+    return { fieldKey, payloadDefault };
   }
 
   private isStringTypeParamConstraint(node: TypeNode): boolean {
@@ -4437,11 +4467,14 @@ class Emitter {
     anchor: { pos: number },
     sf: SourceModule,
   ): TopazType {
-    if (node.typeArgs.length !== 2) {
+    const hasPayloadDefault = template.payloadDefault !== undefined;
+    if (!hasPayloadDefault && node.typeArgs.length !== 2) {
       throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 2 type arguments`);
     }
+    if (hasPayloadDefault && (node.typeArgs.length < 1 || node.typeArgs.length > 2)) {
+      throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 1 or 2 type arguments`);
+    }
     const baseNode = node.typeArgs[0];
-    const payloadNode = node.typeArgs[1];
     const base = this.typeFromAnnotation(baseNode, { pos: baseNode.pos }, sf);
     const baseKind = brandBase(base).kind;
     if (baseKind !== "string" && baseKind !== "number" && baseKind !== "boolean" && baseKind !== "bigint") {
@@ -4450,12 +4483,19 @@ class Emitter {
         `unsupported brand template base type ${typeIdent(base)} (expected string / number / boolean / bigint)`,
       );
     }
-    const payload = this.brandPayloadSpelling(payloadNode);
+    let payload: string | undefined = template.payloadDefault;
+    if (node.typeArgs.length === 2) {
+      const payloadNode = node.typeArgs[1];
+      payload = this.brandPayloadSpelling(payloadNode);
+      if (payload === undefined) {
+        throw this.typeErr(
+          { pos: payloadNode.pos },
+          `brand template alias '${aliasName}' payload type argument must be a string literal or typeof Identifier`,
+        );
+      }
+    }
     if (payload === undefined) {
-      throw this.typeErr(
-        { pos: payloadNode.pos },
-        `brand template alias '${aliasName}' payload type argument must be a string literal or typeof Identifier`,
-      );
+      throwInternalCodegenError("resolveBrandAliasTemplate: missing payload default");
     }
     const key = `${aliasName}:${template.fieldKey}:${payload}`;
     return { kind: "brand", base, key };
