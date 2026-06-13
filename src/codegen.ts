@@ -11805,6 +11805,21 @@ class Emitter {
     }
   }
 
+  private normalizePromiseThenResultPayload(cb: Expr, resultType: TopazType, label: string): TopazType {
+    if (resultType.kind === "promise") return resultType.value;
+    const promiseType = promiseOf(resultType);
+    if (promiseType === undefined) {
+      throw new CodegenError(
+        { pos: cb.pos },
+        `${label} callback return type ${typeIdent(resultType)} is unsupported (must be value-representable or void)`,
+      );
+    }
+    if (promiseType.kind !== "promise") {
+      throwInternalCodegenError("normalizePromiseThenResultPayload: promiseOf returned non-Promise");
+    }
+    return promiseType.value;
+  }
+
   private inferPromiseThenCall(expr: CallExpr, baseType: TopazType): TopazType {
     if (baseType.kind !== "promise") {
       throwInternalCodegenError("inferPromiseThenCall: base is not Promise<T>");
@@ -11819,31 +11834,23 @@ class Emitter {
     if (expr.args.length === 2) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedResultType = rejectedFnType.returnType;
-      if (resultType.kind === "promise") {
-        if (rejectedResultType.kind !== "promise") {
-          throw new CodegenError(
-            { pos: expr.args[0].pos },
-            "Promise.then callback returning Promise<T> requires both Promise.then callbacks to return the same Promise<T>",
-          );
-        }
-        if (!typeEq(resultType.value, rejectedResultType.value)) {
+      this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true);
+      const fulfilledPayload = this.normalizePromiseThenResultPayload(expr.args[0], resultType, "Promise.then");
+      const rejectedPayload = this.normalizePromiseThenResultPayload(
+        expr.args[1],
+        rejectedResultType,
+        "Promise.then onRejected",
+      );
+      if (!typeEq(fulfilledPayload, rejectedPayload)) {
+        if ((resultType.kind === "promise") === (rejectedResultType.kind === "promise")) {
           throw new CodegenError(
             { pos: expr.args[1].pos },
             `Promise.then onRejected callback return type ${typeIdent(rejectedResultType)} does not match fulfilled callback return type ${typeIdent(resultType)}`,
           );
         }
-      } else if (rejectedResultType.kind === "promise") {
         throw new CodegenError(
           { pos: expr.args[1].pos },
-          "Promise.then onRejected callback returning Promise<T> requires both Promise.then callbacks to return the same Promise<T>",
-        );
-      } else {
-        this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", false);
-      }
-      if (!typeEq(resultType, rejectedResultType)) {
-        throw new CodegenError(
-          { pos: expr.args[1].pos },
-          `Promise.then onRejected callback return type ${typeIdent(rejectedResultType)} does not match fulfilled callback return type ${typeIdent(resultType)}`,
+          `Promise.then onRejected callback normalized return payload ${typeIdent(rejectedPayload)} does not match fulfilled callback payload ${typeIdent(fulfilledPayload)}`,
         );
       }
     }

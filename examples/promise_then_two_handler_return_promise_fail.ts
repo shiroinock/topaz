@@ -5,6 +5,6 @@ class AsyncErr {}
 const source: Promise<number> = Promise.reject(new AsyncErr());
 source.then(
   (n: number): Promise<number> => Promise.resolve(n + 1),
-  (e: unknown): number => 0,
+  (e: unknown): string => "bad",
 );
 console.log("bad");
