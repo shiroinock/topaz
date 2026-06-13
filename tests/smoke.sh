@@ -2976,6 +2976,8 @@ run_case promise_handler_sentinel_normalization $'7\n8\n9\n10\n11\n12\n13\n14\n1
 run_case promise_like_type_annotation "callback"
 run_case promise_like_container_annotation $'map\nset\nnested'
 run_case promise_container_annotation $'2\ntrue\ntrue\nnested'
+run_case promise_iterator_annotation $'2\n2\n6\ntrue\n2\n0'
+run_fail_case promise_iterator_nested_container_deferred_fail examples/promise_iterator_nested_container_deferred_fail.ts "Iterator<T>: element type topaz_array_promise_number is unsupported"
 run_case promise_finally_return_promise $'sync tail\ncleanup fulfilled preserve\ncleanup rejected preserve\ncleanup fulfilled override\ncleanup rejected override\nnested cleanup start\nfifo marker\ncleanup throw before promise\nnested cleanup inner\nthrow override\n66\nfulfilled value\n1\npreserved rejection\nsource\nfulfilled override\nfulfilled cleanup\nrejected override\nrejected cleanup\nnested result\n5'
 run_case promise_finally_ignored_return $'sync tail\ncleanup number\ncleanup string\ncleanup boolean\ncleanup literal\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n10\nrejected string preserved\nsource string\nrejected bool preserved\nsource bool\nliteral result\n5\nfifo final then\n7\noverride catch\n88\nstring recovery\n2\nbool recovery\n3'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'

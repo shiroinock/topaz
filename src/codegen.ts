@@ -1074,6 +1074,7 @@ function zeroValueOfElem(elem: TopazType): string {
   if (elem.kind === "boolean") return "(topaz_boolean)0";
   if (elem.kind === "string") return `(topaz_string){ "", 0 }`;
   if (isClassType(elem)) return `(${cTypeName(elem)})NULL`;
+  if (elem.kind === "promise" || elem.kind === "promise_like") return `(${cTypeName(elem)})NULL`;
   if (isInterfaceType(elem)) return `(${cTypeName(elem)}){ NULL, NULL }`;
   throwInternalCodegenError(`zeroValueOfElem: unsupported ${typeIdent(elem)}`);
 }
@@ -4942,7 +4943,7 @@ class Emitter {
         return p;
       }
       // Phase 1.5-3.5g-iterator: Iterator<T> as first-class type. Elem must be
-      // scalar / class / interface (same shape constraint as Map / Set values).
+      // scalar / class / interface / async opaque pointer.
       // The typedef alone doesn't pull in a _next function — that's recorded
       // at construction sites (Map.values / Map.keys / Set.values / Set.keys).
       if (refName === "Iterator") {
@@ -4954,10 +4955,11 @@ class Emitter {
         if (
           elem.kind !== "number" && elem.kind !== "boolean" && elem.kind !== "string"
           && !isClassType(elem) && !isInterfaceType(elem)
+          && elem.kind !== "promise" && elem.kind !== "promise_like"
         ) {
           throw this.typeErr(
             nodeAnchor,
-            `Iterator<T>: element type ${typeIdent(elem)} is unsupported (must be scalar / class / interface)`,
+            `Iterator<T>: element type ${typeIdent(elem)} is unsupported (must be scalar / class / interface / Promise / PromiseLike)`,
           );
         }
         // Reserve typedef so a bare `Iterator<T>` annotation (e.g. function
