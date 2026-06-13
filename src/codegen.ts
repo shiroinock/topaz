@@ -4966,7 +4966,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, call-expression statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
   }
 
   private tryBuildAssignmentAwaitStatementExpression(
@@ -5100,29 +5100,44 @@ class Emitter {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
 
-    let awaitArgIndex = -1;
-    for (let i = 0; i < root.args.length; i++) {
-      const arg = root.args[i];
-      const unwrapped = this.unwrapParenExpr(arg);
-      if (unwrapped.kind === "await_expr" && unwrapped.pos === awaitExpr.pos && unwrapped.end === awaitExpr.end) {
-        awaitArgIndex = i;
-        break;
-      }
-    }
-    if (awaitArgIndex < 0) {
-      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-    }
-
     const awaitedTempExpr: IdentExpr = {
       kind: "ident",
       name: awaitedTempName,
       pos: awaitExpr.pos,
       end: awaitExpr.end,
     };
+    let awaitArgIndex = -1;
+    let transformedAwaitArg: Expr | undefined = undefined;
+    for (let i = 0; i < root.args.length; i++) {
+      const arg = root.args[i];
+      const found = this.collectAwaitExprsInExpr(arg);
+      if (found.length === 0) continue;
+      if (
+        found.length !== 1 ||
+        found[0].pos !== awaitExpr.pos ||
+        found[0].end !== awaitExpr.end ||
+        awaitArgIndex >= 0
+      ) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      const unwrapped = this.unwrapParenExpr(arg);
+      if (unwrapped.kind === "await_expr" && unwrapped.pos === awaitExpr.pos && unwrapped.end === awaitExpr.end) {
+        transformedAwaitArg = awaitedTempExpr;
+      } else if (this.simpleCallArgumentAwaitReplacementSupported(arg, awaitExpr)) {
+        transformedAwaitArg = this.replaceAwaitExprInExpr(arg, awaitExpr, awaitedTempExpr);
+      } else {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      awaitArgIndex = i;
+    }
+    if (awaitArgIndex < 0 || transformedAwaitArg === undefined) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+
     const signatureArgs: Array<Expr> = [];
     for (let i = 0; i < root.args.length; i++) {
       if (i === awaitArgIndex) {
-        signatureArgs.push(awaitedTempExpr);
+        signatureArgs.push(transformedAwaitArg);
       } else {
         signatureArgs.push(root.args[i]);
       }
@@ -5300,7 +5315,7 @@ class Emitter {
         preAwaitArgTemps.push({ tempName, arg, argType });
         transformedArgs.push({ kind: "ident", name: tempName, pos: arg.pos, end: arg.end });
       } else if (i === awaitArgIndex) {
-        transformedArgs.push(awaitedTempExpr);
+        transformedArgs.push(transformedAwaitArg);
       } else {
         transformedArgs.push(root.args[i]);
       }
@@ -5352,6 +5367,72 @@ class Emitter {
         return (
           this.simpleAwaitReplacementSupported(expr.lhs, target) ||
           this.simpleAwaitReplacementSupported(expr.rhs, target)
+        );
+      default:
+        return false;
+    }
+  }
+
+  private simpleCallArgumentAwaitReplacementSupported(expr: Expr, target: AwaitExpr): boolean {
+    if (expr.kind === "await_expr") return expr.pos === target.pos && expr.end === target.end;
+    switch (expr.kind) {
+      case "paren_expr":
+        return this.simpleCallArgumentAwaitReplacementSupported(expr.inner, target);
+      case "non_null":
+        return this.simpleCallArgumentAwaitReplacementSupported(expr.operand, target);
+      case "prefix_op":
+        if (expr.op === "++" || expr.op === "--") return false;
+        return this.simpleCallArgumentAwaitReplacementSupported(expr.operand, target);
+      case "typeof_expr":
+        return this.simpleCallArgumentAwaitReplacementSupported(expr.operand, target);
+      case "bin_op": {
+        if (expr.op === "&&" || expr.op === "||" || expr.op === "??") return false;
+        const lhsHasAwait = this.collectAwaitExprsInExpr(expr.lhs).length > 0;
+        const rhsHasAwait = this.collectAwaitExprsInExpr(expr.rhs).length > 0;
+        if (lhsHasAwait === rhsHasAwait) return false;
+        if (lhsHasAwait) {
+          return (
+            this.simpleCallArgumentAwaitReplacementSupported(expr.lhs, target) &&
+            this.isSideEffectFreeCallArgumentAwaitPart(expr.rhs)
+          );
+        }
+        return (
+          this.isSideEffectFreeCallArgumentAwaitPart(expr.lhs) &&
+          this.simpleCallArgumentAwaitReplacementSupported(expr.rhs, target)
+        );
+      }
+      default:
+        return false;
+    }
+  }
+
+  private isSideEffectFreeCallArgumentAwaitPart(expr: Expr): boolean {
+    if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
+    switch (expr.kind) {
+      case "ident":
+      case "num_lit":
+      case "bigint_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "this_expr":
+      case "import_meta_url":
+        return true;
+      case "paren_expr":
+        return this.isSideEffectFreeCallArgumentAwaitPart(expr.inner);
+      case "non_null":
+        return this.isSideEffectFreeCallArgumentAwaitPart(expr.operand);
+      case "prefix_op":
+        if (expr.op === "++" || expr.op === "--") return false;
+        return this.isSideEffectFreeCallArgumentAwaitPart(expr.operand);
+      case "typeof_expr":
+        return this.isSideEffectFreeCallArgumentAwaitPart(expr.operand);
+      case "bin_op":
+        if (expr.op === "&&" || expr.op === "||" || expr.op === "??") return false;
+        return (
+          this.isSideEffectFreeCallArgumentAwaitPart(expr.lhs) &&
+          this.isSideEffectFreeCallArgumentAwaitPart(expr.rhs)
         );
       default:
         return false;
