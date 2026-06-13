@@ -399,6 +399,17 @@ function hasStringValueRepresentation(t: TopazType): boolean {
   return t.kind === "string" || t.kind === "string_literal" || isStringLiteralUnion(t);
 }
 
+function isPrimitivePromiseFinallyIgnoredReturn(t: TopazType): boolean {
+  return (
+    t.kind === "number" ||
+    t.kind === "bigint" ||
+    t.kind === "boolean" ||
+    t.kind === "string" ||
+    t.kind === "string_literal" ||
+    isStringLiteralUnion(t)
+  );
+}
+
 function classNameOf(t: TopazType): string | undefined {
   return t.kind === "class" ? t.name : undefined;
 }
@@ -11891,10 +11902,14 @@ class Emitter {
     }
     const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
     const resultType = fnType.returnType;
-    if (resultType.kind !== "void" && resultType.kind !== "promise") {
+    if (
+      resultType.kind !== "void" &&
+      resultType.kind !== "promise" &&
+      !isPrimitivePromiseFinallyIgnoredReturn(resultType)
+    ) {
       throw new CodegenError(
         { pos: expr.args[0].pos },
-        `Promise.finally callback must return void or Promise<T>, got ${typeIdent(resultType)}`,
+        `Promise.finally callback must return void, Promise<T>, or an ignored primitive value, got ${typeIdent(resultType)}`,
       );
     }
     return baseType;
@@ -12034,8 +12049,22 @@ class Emitter {
       lines.push("    void *__topaz_promise_cleanup = ctx->cb.fn(ctx->cb.env);");
       lines.push("    topaz_try_pop();");
       lines.push("    topaz_promise_finally_cleanup_into(__topaz_promise_cleanup, source, target);");
-    } else {
+    } else if (cleanupType.kind === "void") {
       lines.push("    ctx->cb.fn(ctx->cb.env);");
+      lines.push("    topaz_try_pop();");
+      lines.push("    if (source->state == TOPAZ_PROMISE_FULFILLED) {");
+      if (payloadType.kind === "void") {
+        lines.push("      topaz_promise_fulfill_void(target);");
+      } else {
+        lines.push("      topaz_promise_propagate_fulfilled(target, source);");
+      }
+      lines.push("    } else {");
+      lines.push("      topaz_promise_reject_with(target, source->rejected_error);");
+      lines.push("    }");
+    } else {
+      const cleanupC = cTypeName(cleanupType);
+      lines.push(`    ${cleanupC} __topaz_promise_cleanup = ctx->cb.fn(ctx->cb.env);`);
+      lines.push("    (void)__topaz_promise_cleanup;");
       lines.push("    topaz_try_pop();");
       lines.push("    if (source->state == TOPAZ_PROMISE_FULFILLED) {");
       if (payloadType.kind === "void") {

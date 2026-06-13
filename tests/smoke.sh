@@ -2970,6 +2970,7 @@ run_case promise_then_return_promise $'sync tail\nfulfilled callback\nrejected c
 run_case promise_catch_return_promise $'sync tail\nfulfilled bypass\n40\ncatch recover\nrecover\ncatch reject\ncatch nested\nfifo marker\ncatch throw\ninner nested\nthrow rejection\n12\nrecover result\n7\ncatch returned rejection\nreturned\nthrow result\n12\nreturned recovery\n9\nnested result\n5'
 run_case promise_then_two_handler_return_promise $'sync tail\nfulfilled branch\nrejected branch\nrecover\nfulfilled reject branch\nrejected reject branch\nfifo marker\nthrow branch\nthrow rejection\n9\nfulfilled result\n2\nrejected result\n7\nfulfilled returned rejection\nfulfilled returned\nrejected returned rejection\nrejected returned\nthrow result\n9\nfulfilled recovery\n11\nrejected recovery\n13'
 run_case promise_finally_return_promise $'sync tail\ncleanup fulfilled preserve\ncleanup rejected preserve\ncleanup fulfilled override\ncleanup rejected override\nnested cleanup start\nfifo marker\ncleanup throw before promise\nnested cleanup inner\nthrow override\n66\nfulfilled value\n1\npreserved rejection\nsource\nfulfilled override\nfulfilled cleanup\nrejected override\nrejected cleanup\nnested result\n5'
+run_case promise_finally_ignored_return $'sync tail\ncleanup number\ncleanup string\ncleanup boolean\ncleanup literal\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n10\nrejected string preserved\nsource string\nrejected bool preserved\nsource bool\nliteral result\n5\nfifo final then\n7\noverride catch\n88\nstring recovery\n2\nbool recovery\n3'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
@@ -3044,8 +3045,8 @@ run_fail_case promise_catch_return_promise_fail examples/promise_catch_return_pr
 run_fail_case promise_catch_wrong_arity_fail examples/promise_catch_wrong_arity_fail.ts "Promise.catch expects exactly one argument, got 0"
 run_fail_case promise_finally_wrong_arity_fail examples/promise_finally_wrong_arity_fail.ts "Promise.finally expects exactly one argument, got 0"
 run_fail_case promise_finally_parameter_fail examples/promise_finally_parameter_fail.ts "Promise.finally callback arity 1 does not match expected 0"
-run_fail_case promise_finally_non_void_return_fail examples/promise_finally_non_void_return_fail.ts "Promise.finally callback must return void or Promise<T>, got topaz_number"
-run_fail_case promise_finally_return_promise_fail examples/promise_finally_return_promise_fail.ts "Promise.finally callback must return void or Promise<T>, got topaz_class_ThenableCleanup"
+run_fail_case promise_finally_non_void_return_fail examples/promise_finally_non_void_return_fail.ts "Promise.finally callback must return void, Promise<T>, or an ignored primitive value, got topaz_class_PlainCleanup"
+run_fail_case promise_finally_return_promise_fail examples/promise_finally_return_promise_fail.ts "Promise.finally callback must return void, Promise<T>, or an ignored primitive value, got topaz_class_ThenableCleanup"
 run_fail_case promise_finally_non_fn_fail examples/promise_finally_non_fn_fail.ts "Promise.finally callback must be a function value"
 run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"

@@ -1,4 +1,12 @@
 /// <reference lib="es2018.promise" />
 
-Promise.resolve(1).finally((): number => 1);
+class PlainCleanup {
+  value: number;
+
+  constructor(value: number) {
+    this.value = value;
+  }
+}
+
+Promise.resolve(1).finally((): PlainCleanup => new PlainCleanup(1));
 console.log("bad");
