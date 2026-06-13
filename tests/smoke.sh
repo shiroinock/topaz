@@ -3175,9 +3175,11 @@ run_case arrow_infer_return $'42\nxtopaz\nvoid-body\n7\n9'
 run_fail_case arrow_block_infer_return_fail examples/arrow_block_infer_return_fail.ts "arrow function requires an explicit return type annotation"
 run_case arrow_nested_fn_type $'30\n12\n7'
 run_case function_expression $'4\n15\n5'
+run_case function_expression_named $'4\n15\n5'
 run_case async_function_expression_no_await $'function body\nsync tail\nthen inline\n7\nthen block\n42'
 run_case async_function_expression_await $'before function await\nsync tail\nbetween function awaits\nafter function await\nthen function await\n42'
-run_fail_case function_expression_named_deferred_fail examples/function_expression_named_deferred_fail.ts "named function expressions are deferred"
+run_case async_function_expression_named $'named no-await body\nbefore named await\nsync tail\nthen named callback\n7\nthen named no-await\n6\nafter named await\nthen named await\n42'
+run_fail_case function_expression_named_deferred_fail examples/function_expression_named_deferred_fail.ts "named function expression self-binding is deferred"
 run_fail_case function_expression_async_deferred_fail examples/function_expression_async_deferred_fail.ts 'await expression lowering is deferred'
 run_case array_of_fn $'6\n50\n2\n-95\n13\n16\n60\n3\n101\n102\n103\n19\n49\n0\nn=7\nn*2=14'
 run_fail_case map_of_fn_fail examples/map_of_fn_fail.ts "no Map monomorph for key=topaz_string, value=topaz_fn_"

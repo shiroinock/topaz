@@ -6785,8 +6785,9 @@ class Emitter {
   }
 
   private ensureFunctionExprSupported(fn: FunctionExpr): void {
-    if (fn.name !== undefined) {
-      throw new CodegenError({ pos: fn.pos }, "named function expressions are deferred");
+    const name = fn.name;
+    if (name !== undefined && this.functionExprBodyReferencesName(fn, name)) {
+      throw new CodegenError({ pos: fn.pos }, "named function expression self-binding is deferred");
     }
     if (this.functionExprBodyContainsThis(fn)) {
       throw new CodegenError({ pos: fn.pos }, "function expression `this` is deferred");
@@ -6808,6 +6809,186 @@ class Emitter {
       if (this.stmtContainsThis(s)) return true;
     }
     return false;
+  }
+
+  private functionExprBodyReferencesName(fn: FunctionExpr, name: string): boolean {
+    for (const s of fn.body) {
+      if (this.stmtReferencesName(s, name)) return true;
+    }
+    return false;
+  }
+
+  private stmtReferencesName(stmt: Stmt, name: string): boolean {
+    switch (stmt.kind) {
+      case "expr_stmt":
+        return this.exprReferencesName(stmt.expr, name);
+      case "var_decl":
+        {
+          const init = stmt.init;
+          return init !== undefined && this.exprReferencesName(init, name);
+        }
+      case "var_destr_decl":
+        return this.exprReferencesName(stmt.init, name);
+      case "block_stmt":
+        for (const s of stmt.stmts) if (this.stmtReferencesName(s, name)) return true;
+        return false;
+      case "if_stmt":
+        if (this.exprReferencesName(stmt.cond, name)) return true;
+        if (this.stmtReferencesName(stmt.thenBranch, name)) return true;
+        {
+          const elseBranch = stmt.elseBranch;
+          return elseBranch !== undefined && this.stmtReferencesName(elseBranch, name);
+        }
+      case "while_stmt":
+        return this.exprReferencesName(stmt.cond, name) || this.stmtReferencesName(stmt.body, name);
+      case "do_while_stmt":
+        return this.stmtReferencesName(stmt.body, name) || this.exprReferencesName(stmt.cond, name);
+      case "for_stmt":
+        {
+          const init = stmt.init;
+          if (init !== undefined) {
+            if (init.kind === "for_init_decl") {
+              if (this.stmtReferencesName(init.decl, name)) return true;
+            } else if (this.exprReferencesName(init.expr, name)) {
+              return true;
+            }
+          }
+        }
+        {
+          const cond = stmt.cond;
+          if (cond !== undefined && this.exprReferencesName(cond, name)) return true;
+        }
+        {
+          const update = stmt.update;
+          if (update !== undefined && this.exprReferencesName(update, name)) return true;
+        }
+        return this.stmtReferencesName(stmt.body, name);
+      case "for_of_stmt":
+        return this.exprReferencesName(stmt.source, name) || this.stmtReferencesName(stmt.body, name);
+      case "switch_stmt":
+        if (this.exprReferencesName(stmt.discriminant, name)) return true;
+        for (const c of stmt.cases) {
+          const test = c.test;
+          if (test !== undefined && this.exprReferencesName(test, name)) return true;
+          for (const s of c.stmts) if (this.stmtReferencesName(s, name)) return true;
+        }
+        return false;
+      case "try_stmt":
+        for (const s of stmt.tryBlock.stmts) if (this.stmtReferencesName(s, name)) return true;
+        {
+          const catchClause = stmt.catchClause;
+          if (catchClause !== undefined) {
+            for (const s of catchClause.body.stmts) if (this.stmtReferencesName(s, name)) return true;
+          }
+        }
+        {
+          const finallyBlock = stmt.finallyBlock;
+          if (finallyBlock !== undefined) {
+            for (const s of finallyBlock.stmts) if (this.stmtReferencesName(s, name)) return true;
+          }
+        }
+        return false;
+      case "return_stmt":
+        {
+          const value = stmt.value;
+          return value !== undefined && this.exprReferencesName(value, name);
+        }
+      case "throw_stmt":
+        return this.exprReferencesName(stmt.value, name);
+      case "break_stmt":
+      case "continue_stmt":
+      case "empty_stmt":
+        return false;
+    }
+  }
+
+  private exprReferencesName(expr: Expr, name: string): boolean {
+    switch (expr.kind) {
+      case "ident":
+        return expr.name === name;
+      case "num_lit":
+      case "bigint_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "this_expr":
+      case "import_meta_url":
+        return false;
+      case "template_lit":
+        for (const sub of expr.subs) if (this.exprReferencesName(sub.expr, name)) return true;
+        return false;
+      case "array_lit":
+        for (const el of expr.elems) if (this.exprReferencesName(el.expr, name)) return true;
+        return false;
+      case "object_lit":
+        for (const m of expr.props) {
+          if (m.kind === "prop_kv") {
+            if (this.exprReferencesName(m.value, name)) return true;
+          }
+          if (m.kind === "prop_shorthand") {
+            if (m.name === name) return true;
+          }
+          if (m.kind === "prop_spread") {
+            if (this.exprReferencesName(m.expr, name)) return true;
+          }
+        }
+        return false;
+      case "paren_expr":
+        return this.exprReferencesName(expr.inner, name);
+      case "call_expr":
+        if (this.exprReferencesName(expr.callee, name)) return true;
+        for (const a of expr.args) if (this.exprReferencesName(a, name)) return true;
+        return false;
+      case "new_expr":
+        if (this.exprReferencesName(expr.callee, name)) return true;
+        for (const a of expr.args) if (this.exprReferencesName(a, name)) return true;
+        return false;
+      case "prop_access":
+        return this.exprReferencesName(expr.receiver, name);
+      case "elem_access":
+        return this.exprReferencesName(expr.receiver, name) || this.exprReferencesName(expr.index, name);
+      case "prefix_op":
+        return this.exprReferencesName(expr.operand, name);
+      case "postfix_op":
+        return this.exprReferencesName(expr.operand, name);
+      case "typeof_expr":
+        return this.exprReferencesName(expr.operand, name);
+      case "await_expr":
+        return this.exprReferencesName(expr.operand, name);
+      case "non_null":
+        return this.exprReferencesName(expr.operand, name);
+      case "type_assert":
+        return this.exprReferencesName(expr.expr, name);
+      case "spread_expr":
+        return this.exprReferencesName(expr.operand, name);
+      case "bin_op":
+        return this.exprReferencesName(expr.lhs, name) || this.exprReferencesName(expr.rhs, name);
+      case "instanceof_expr":
+        return this.exprReferencesName(expr.lhs, name) || this.exprReferencesName(expr.rhs, name);
+      case "ternary_expr":
+        return (
+          this.exprReferencesName(expr.cond, name) ||
+          this.exprReferencesName(expr.thenBranch, name) ||
+          this.exprReferencesName(expr.elseBranch, name)
+        );
+      case "assign_expr":
+        return this.exprReferencesName(expr.target, name) || this.exprReferencesName(expr.value, name);
+      case "arrow_expr":
+        {
+          const body = expr.body;
+          switch (body.kind) {
+            case "arrow_expr_body":
+              return this.exprReferencesName(body.expr, name);
+            case "arrow_block_body":
+              for (const s of body.stmts) if (this.stmtReferencesName(s, name)) return true;
+              return false;
+          }
+        }
+        return false;
+      case "function_expr":
+        return this.functionExprBodyReferencesName(expr, name);
+    }
   }
 
   private stmtContainsThis(stmt: Stmt): boolean {
