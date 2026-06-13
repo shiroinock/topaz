@@ -4455,7 +4455,6 @@ class Emitter {
     if (body.kind !== "type_literal") return undefined;
     const fieldKey = this.brandAliasTemplateFieldKey(body, payloadTypeParam.name);
     if (fieldKey === undefined) return undefined;
-    if (payloadTypeParam.defaultType !== undefined) return undefined;
     const payloadConstraint = payloadTypeParam.constraint;
     if (payloadConstraint !== undefined && !this.isBrandPayloadTypeParamConstraint(payloadConstraint)) {
       throw this.typeErr(
@@ -4463,7 +4462,19 @@ class Emitter {
         "phantom object brand helper payload constraint must be string, PropertyKey, or string | number | symbol",
       );
     }
-    return { kind: "phantom_object", fieldKey, payloadDefault: undefined };
+    const payloadDefaultNode = payloadTypeParam.defaultType;
+    let payloadDefault: string | undefined = undefined;
+    if (payloadDefaultNode !== undefined) {
+      payloadDefault = this.brandPayloadSpelling(payloadDefaultNode);
+      if (payloadDefault === undefined) {
+        if (!this.isPhantomObjectBrandFieldKey(fieldKey)) return undefined;
+        throw this.typeErr(
+          { pos: payloadDefaultNode.pos },
+          "phantom object brand helper payload default must be a string literal, typeof Identifier, unknown, or never",
+        );
+      }
+    }
+    return { kind: "phantom_object", fieldKey, payloadDefault };
   }
 
   private isBrandPayloadTypeParamConstraint(node: TypeNode): boolean {
@@ -4513,6 +4524,10 @@ class Emitter {
     if (payloadType.kind !== "type_ref") return undefined;
     if (payloadType.name !== payloadParam || payloadType.typeArgs.length !== 0) return undefined;
     return member.nameKind === "computed_identifier" ? `[${member.name}]` : member.name;
+  }
+
+  private isPhantomObjectBrandFieldKey(fieldKey: string): boolean {
+    return fieldKey.startsWith("[") || fieldKey.startsWith("__");
   }
 
   private resolveBrandAliasTemplate(
@@ -4575,16 +4590,26 @@ class Emitter {
     if (template === undefined || template.kind !== "phantom_object") {
       throwInternalCodegenError("resolvePhantomObjectBrandAliasTemplate: missing phantom object template");
     }
-    if (node.typeArgs.length !== 1) {
+    const hasPayloadDefault = template.payloadDefault !== undefined;
+    if (!hasPayloadDefault && node.typeArgs.length !== 1) {
       throw this.typeErr(anchor, `phantom object brand helper alias '${aliasName}' requires 1 type argument`);
     }
-    const payloadNode = node.typeArgs[0];
-    const payload = this.brandPayloadSpelling(payloadNode);
+    if (hasPayloadDefault && node.typeArgs.length > 1) {
+      throw this.typeErr(anchor, `phantom object brand helper alias '${aliasName}' requires 0 or 1 type arguments`);
+    }
+    let payload: string | undefined = template.payloadDefault;
+    if (node.typeArgs.length === 1) {
+      const payloadNode = node.typeArgs[0];
+      payload = this.brandPayloadSpelling(payloadNode);
+      if (payload === undefined) {
+        throw this.typeErr(
+          { pos: payloadNode.pos },
+          `phantom object brand helper alias '${aliasName}' payload type argument must be a string literal, typeof Identifier, unknown, or never`,
+        );
+      }
+    }
     if (payload === undefined) {
-      throw this.typeErr(
-        { pos: payloadNode.pos },
-        `phantom object brand helper alias '${aliasName}' payload type argument must be a string literal, typeof Identifier, unknown, or never`,
-      );
+      throwInternalCodegenError("resolvePhantomObjectBrandAliasTemplate: missing payload default");
     }
     const key = `${aliasName}:${template.fieldKey}:${payload}`;
     return { kind: "brand", base, key };
