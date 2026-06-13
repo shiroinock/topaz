@@ -179,6 +179,54 @@ type AsyncAwaitFrameInfo = {
   steps: Array<AsyncSuspensionStep>;
 };
 
+type OrdinaryCallPlan =
+  | {
+      kind: "top_level";
+      callee: IdentExpr;
+      cName: string;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
+      kind: "generic";
+      callee: IdentExpr;
+      cName: string;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
+      kind: "fn_value";
+      callee: Expr;
+      fnType: FnType;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
+      kind: "class_method";
+      callee: PropAccessExpr;
+      receiver: Expr;
+      receiverType: TopazType;
+      className: string;
+      methodName: string;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
+      kind: "interface_method";
+      callee: PropAccessExpr;
+      receiver: Expr;
+      receiverType: TopazType;
+      interfaceName: string;
+      methodName: string;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    };
+
 type AsyncFrameThisContext = {
   className: string;
 };
@@ -4757,57 +4805,61 @@ class Emitter {
       pos: root.pos,
       end: root.end,
     };
+    const plan = this.resolveOrdinaryCallPlan(signatureCall, awaitExpr, false);
+    if (plan === undefined) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
     const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
     let transformedCallee: Expr = root.callee;
-    let params: Array<ParamInfo> = [];
-    if (calleeMaybe.kind === "ident") {
-      params = this.resolveAwaitCallArgBareParams(signatureCall, awaitExpr);
-    } else if (calleeMaybe.kind === "prop_access") {
-      if (calleeMaybe.optional) {
-        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-      }
-      if (this.collectAwaitExprsInExpr(calleeMaybe.receiver).length > 0) {
-        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-      }
-      const receiverType = this.inferType(calleeMaybe.receiver);
-      if (!isClassType(receiverType) && !isInterfaceType(receiverType)) {
-        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-      }
+    const params = plan.params;
+    if (plan.kind === "class_method") {
       const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
-      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: calleeMaybe.receiver.pos });
+      this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
       preAwaitReceiverTemps.push({
         tempName: receiverTempName,
-        receiver: calleeMaybe.receiver,
-        receiverType,
+        receiver: plan.receiver,
+        receiverType: plan.receiverType,
       });
       const receiverTempExpr: IdentExpr = {
         kind: "ident",
         name: receiverTempName,
-        pos: calleeMaybe.receiver.pos,
-        end: calleeMaybe.receiver.end,
+        pos: plan.receiver.pos,
+        end: plan.receiver.end,
       };
-      const signatureCallee: PropAccessExpr = {
+      transformedCallee = {
         kind: "prop_access",
         receiver: receiverTempExpr,
-        name: calleeMaybe.name,
-        optional: calleeMaybe.optional,
-        pos: calleeMaybe.pos,
-        end: calleeMaybe.end,
+        name: plan.methodName,
+        optional: false,
+        pos: plan.callee.pos,
+        end: plan.callee.end,
       };
-      const methodSignatureCall: CallExpr = {
-        kind: "call_expr",
-        callee: signatureCallee,
-        typeArgs: root.typeArgs,
-        args: signatureArgs,
-        optional: root.optional,
-        pos: root.pos,
-        end: root.end,
+    } else if (plan.kind === "interface_method") {
+      const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
+      this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: plan.receiver,
+        receiverType: plan.receiverType,
+      });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: plan.receiver.pos,
+        end: plan.receiver.end,
       };
-      params = this.resolveAwaitCallArgMethodParams(methodSignatureCall, signatureCallee, receiverType, awaitExpr);
-      transformedCallee = signatureCallee;
-    } else {
+      transformedCallee = {
+        kind: "prop_access",
+        receiver: receiverTempExpr,
+        name: plan.methodName,
+        optional: false,
+        pos: plan.callee.pos,
+        end: plan.callee.end,
+      };
+    } else if (plan.kind === "fn_value" && calleeMaybe.kind !== "ident") {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
+    this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
 
     const preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
     const transformedArgs: Array<Expr> = [];
@@ -4841,62 +4893,6 @@ class Emitter {
       preAwaitReceiverTemps,
       preAwaitArgTemps,
     };
-  }
-
-  private resolveAwaitCallArgBareParams(expr: CallExpr, awaitExpr: AwaitExpr): Array<ParamInfo> {
-    const calleeMaybe = expr.callee;
-    if (calleeMaybe.kind !== "ident") {
-      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-    }
-    const callee: IdentExpr = calleeMaybe;
-    const callAnchor: { pos: number } = { pos: expr.pos };
-    if (this.genericFunctions.has(callee.name)) {
-      const resolved = this.resolveGenericCall(callee, expr)!;
-      this.checkCallArgCount(expr.args.length, resolved.sig.params, `${callee.name}()`, callAnchor);
-      return resolved.sig.params;
-    }
-    const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
-    if (sig !== undefined) {
-      this.checkCallArgCount(expr.args.length, sig.params, `${callee.name}()`, callAnchor);
-      return sig.params;
-    }
-    const binding = this.scope.lookup(callee.name);
-    if (binding !== undefined) {
-      const bindingType = binding.type;
-      if (bindingType.kind === "fn") {
-        this.checkCallArgCount(expr.args.length, bindingType.params, "fn value", callAnchor);
-        return bindingType.params;
-      }
-    }
-    throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-  }
-
-  private resolveAwaitCallArgMethodParams(
-    expr: CallExpr,
-    callee: PropAccessExpr,
-    baseType: TopazType,
-    awaitExpr: AwaitExpr,
-  ): Array<ParamInfo> {
-    const callAnchor: { pos: number } = { pos: expr.pos };
-    if (isClassType(baseType)) {
-      const cls = this.classes.get(classNameOf(baseType)!)!;
-      const method = cls.methods.get(callee.name);
-      if (method === undefined) {
-        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-      }
-      this.checkCallArgCount(expr.args.length, method.params, `${cls.name}.${callee.name}`, callAnchor);
-      return method.params;
-    }
-    if (isInterfaceType(baseType)) {
-      const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-      const sig = iface.methods.get(callee.name);
-      if (sig === undefined) {
-        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-      }
-      this.checkCallArgCount(expr.args.length, sig.params, `${iface.name}.${callee.name}`, callAnchor);
-      return sig.params;
-    }
-    throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
   }
 
   private checkCallArgCount(
@@ -11223,6 +11219,184 @@ class Emitter {
     );
   }
 
+  private resolveOrdinaryCallPlan(
+    expr: CallExpr,
+    awaitExpr: AwaitExpr | undefined,
+    allowComplexFnCallee: boolean,
+  ): OrdinaryCallPlan | undefined {
+    const callee = expr.callee;
+
+    if (callee.kind === "ident") {
+      if (this.genericFunctions.has(callee.name)) {
+        const resolved = this.resolveGenericCall(callee, expr)!;
+        return {
+          kind: "generic",
+          callee,
+          cName: resolved.mangled,
+          params: resolved.sig.params,
+          returnType: resolved.sig.returnType,
+          label: `${callee.name}()`,
+        };
+      }
+      const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
+      if (sig !== undefined) {
+        return {
+          kind: "top_level",
+          callee,
+          cName: sig.cName,
+          params: sig.params,
+          returnType: sig.returnType,
+          label: `${callee.name}()`,
+        };
+      }
+      const calleeType = this.inferType(callee);
+      if (calleeType.kind === "fn") {
+        return {
+          kind: "fn_value",
+          callee,
+          fnType: calleeType,
+          params: calleeType.params,
+          returnType: calleeType.returnType,
+          label: "fn value",
+        };
+      }
+      if (awaitExpr !== undefined) return undefined;
+      throw new CodegenError({ pos: callee.pos }, `unknown function '${callee.name}'`);
+    }
+
+    if (callee.kind === "prop_access") {
+      if (callee.optional) return undefined;
+      const receiver = callee.receiver;
+      if (awaitExpr !== undefined && this.collectAwaitExprsInExpr(receiver).length > 0) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      // Synthetic and specialized namespaces/methods stay outside this seed.
+      // Their emit/type paths keep owning their diagnostics and argument rules.
+      if (receiver.kind === "ident") {
+        const receiverName = receiver.name;
+        if (
+          receiverName === "console" ||
+          receiverName === "Promise" ||
+          receiverName === "process" ||
+          receiverName === "String"
+        ) {
+          return undefined;
+        }
+      }
+      if (receiver.kind === "prop_access") {
+        const receiverProp = receiver;
+        const receiverBase = receiverProp.receiver;
+        if (receiverBase.kind === "ident") {
+          if (
+            receiverBase.name === "process" &&
+            (receiverProp.name === "stdout" || receiverProp.name === "stderr")
+          ) {
+            return undefined;
+          }
+        }
+      }
+
+      const receiverType = this.inferType(receiver);
+      if (isClassType(receiverType)) {
+        const cls = this.classes.get(classNameOf(receiverType)!)!;
+        const method = cls.methods.get(callee.name);
+        if (method === undefined) {
+          if (awaitExpr !== undefined) return undefined;
+          if (cls.fields.has(callee.name)) {
+            throw new CodegenError({ pos: callee.pos }, `'${callee.name}' is a field, not a method, on class '${cls.name}'`);
+          }
+          throw new CodegenError({ pos: callee.pos }, `class '${cls.name}' has no method '${callee.name}'`);
+        }
+        return {
+          kind: "class_method",
+          callee,
+          receiver,
+          receiverType,
+          className: cls.name,
+          methodName: callee.name,
+          params: method.params,
+          returnType: method.returnType,
+          label: `${cls.name}.${callee.name}`,
+        };
+      }
+      if (isInterfaceType(receiverType)) {
+        const iface = this.interfaces.get(interfaceNameOf(receiverType)!)!;
+        const sig = iface.methods.get(callee.name);
+        if (sig === undefined) {
+          if (awaitExpr !== undefined) return undefined;
+          if (iface.fields.has(callee.name)) {
+            throw new CodegenError({ pos: callee.pos }, `'${callee.name}' is a field, not a method, on interface '${iface.name}'`);
+          }
+          throw new CodegenError({ pos: callee.pos }, `interface '${iface.name}' has no method '${callee.name}'`);
+        }
+        return {
+          kind: "interface_method",
+          callee,
+          receiver,
+          receiverType,
+          interfaceName: iface.name,
+          methodName: callee.name,
+          params: sig.params,
+          returnType: sig.returnType,
+          label: `${iface.name}.${callee.name}`,
+        };
+      }
+      return undefined;
+    }
+
+    if (!allowComplexFnCallee) return undefined;
+    const calleeType = this.inferType(callee);
+    if (calleeType.kind === "fn") {
+      return {
+        kind: "fn_value",
+        callee,
+        fnType: calleeType,
+        params: calleeType.params,
+        returnType: calleeType.returnType,
+        label: "fn value",
+      };
+    }
+    return undefined;
+  }
+
+  private emitOrdinaryCallPlan(expr: CallExpr, plan: OrdinaryCallPlan): string {
+    if (plan.kind === "top_level") {
+      const args = this.emitCallArgs(expr.args, plan.params, plan.label, { pos: expr.pos }).join(", ");
+      return `${plan.cName}(${args})`;
+    }
+    if (plan.kind === "generic") {
+      const args = this.emitCallArgs(expr.args, plan.params, plan.label, { pos: expr.pos }).join(", ");
+      return `${plan.cName}(${args})`;
+    }
+    if (plan.kind === "fn_value") {
+      const args = this.emitCallArgs(expr.args, plan.params, plan.label, { pos: expr.pos }).join(", ");
+      const tmp = `__topaz_fc_${this.tmpCounter++}`;
+      const calleeStr = this.emitExpression(plan.callee);
+      const fnTypeName = typeIdent(plan.fnType);
+      const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
+      return `({ ${fnTypeName} ${tmp} = ${calleeStr}; ${tmp}.fn(${callArgs}); })`;
+    }
+    if (plan.kind === "class_method") {
+      const base = this.emitExpression(plan.receiver);
+      const argParts = [
+        base,
+        ...this.emitCallArgs(expr.args, plan.params, plan.label, { pos: expr.pos }),
+      ];
+      return `topaz_class_${plan.className}_method_${plan.methodName}(${argParts.join(", ")})`;
+    }
+    if (plan.kind === "interface_method") {
+      const id = this.tmpCounter++;
+      const tmp = `__topaz_ib_${id}`;
+      const baseStr = this.emitExpression(plan.receiver);
+      const argParts = [
+        `${tmp}.data`,
+        ...this.emitCallArgs(expr.args, plan.params, plan.label, { pos: expr.pos }),
+      ];
+      return `({ ${cTypeName(plan.receiverType)} ${tmp} = ${baseStr}; ${tmp}.vt->${plan.methodName}(${argParts.join(", ")}); })`;
+    }
+    throwInternalCodegenError("emitOrdinaryCallPlan: unknown ordinary call plan");
+  }
+
   private emitCall(expr: CallExpr): string {
     const callee = expr.callee;
 
@@ -11324,11 +11498,9 @@ class Emitter {
       if (baseType.kind === "number") {
         return this.emitNumberMethodCall(expr, prop);
       }
-      if (isClassType(baseType)) {
-        return this.emitClassMethodCall(expr, prop, baseType);
-      }
-      if (isInterfaceType(baseType)) {
-        return this.emitInterfaceMethodCall(expr, prop, baseType);
+      const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+      if (ordinaryPlan !== undefined) {
+        return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
       }
       throw new CodegenError({ pos: prop.pos }, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
     }
@@ -11460,29 +11632,9 @@ class Emitter {
       if (callee.name === "parseFloat") {
         return this.emitParseFloat(expr);
       }
-      if (this.genericFunctions.has(callee.name)) {
-        const resolved = this.resolveGenericCall(callee, expr)!;
-        const callAnchor: { pos: number } = { pos: expr.pos };
-        const args = this.emitCallArgs(
-          expr.args,
-          resolved.sig.params,
-          `${callee.name}()`,
-          callAnchor,
-        ).join(", ");
-        return `${resolved.mangled}(${args})`;
-      }
-      const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
-      if (sig !== undefined) {
-        const callAnchor: { pos: number } = { pos: expr.pos };
-        const args = this.emitCallArgs(expr.args, sig.params, `${callee.name}()`, callAnchor).join(", ");
-        return `${sig.cName}(${args})`;
-      }
-      // Phase 1.5-3.5e: fn-typed local (a binding holding an arrow / fn
-      // value). Resolve the fn type from the scope (or captureContext) and
-      // dispatch through the fat pointer.
-      const calleeType = this.inferType(callee);
-      if (calleeType.kind === "fn") {
-        return this.emitFnValueCall(expr, callee, calleeType);
+      const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+      if (ordinaryPlan !== undefined) {
+        return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
       }
       throw new CodegenError({ pos: callee.pos }, `unknown function '${callee.name}'`);
     }
@@ -11491,9 +11643,9 @@ class Emitter {
     // `obj.callback()` once class fields can hold fn values, or parenthesized
     // arrow IIFE `((n) => n + 1)(42)`). For 1.5-3.5e we only support the
     // identifier path and parenthesized arrow IIFEs.
-    const calleeType = this.inferType(callee);
-    if (calleeType.kind === "fn") {
-      return this.emitFnValueCall(expr, callee, calleeType);
+    const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+    if (ordinaryPlan !== undefined) {
+      return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
     }
 
     unsupported({ kind: callee.kind, pos: callee.pos }, "call target");
@@ -11512,38 +11664,6 @@ class Emitter {
     if (callee.optional) return false;
     if (callee.name !== "push") return false;
     return isArrayType(this.inferType(callee.receiver));
-  }
-
-  // Phase 1.5-3.5e: lower a call `f(args)` where `f` types as a fn fat
-  // pointer. The dispatch is `({ <fn type> __t = f; __t.fn(__t.env, args); })`
-  // so the callee is evaluated once even when it's a complex expression.
-  private emitFnValueCall(
-    expr: CallExpr,
-    callee: Expr,
-    fnType: TopazType,
-  ): string {
-    if (fnType.kind === "fn") {
-      const fnValueType = fnType;
-      if (expr.args.length !== fnValueType.params.length) {
-        throw new CodegenError(
-          { pos: expr.pos },
-          `fn value expects ${fnValueType.params.length} argument(s), got ${expr.args.length}`,
-        );
-      }
-      const argParts: string[] = [];
-      for (let i = 0; i < expr.args.length; i++) {
-        const a = expr.args[i];
-        const p = fnValueType.params[i];
-        argParts.push(this.emitWithExpected(a, p.type));
-      }
-      const args = argParts.join(", ");
-      const tmp = `__topaz_fc_${this.tmpCounter++}`;
-      const calleeStr = this.emitExpression(callee);
-      const fnTypeName = typeIdent(fnValueType);
-      const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
-      return `({ ${fnTypeName} ${tmp} = ${calleeStr}; ${tmp}.fn(${callArgs}); })`;
-    }
-    throwInternalCodegenError("emitFnValueCall: not fn");
   }
 
   // Phase 1.5-6 prep: lower an IIFE `(arrow)(args)` where the arrow has no
@@ -13150,54 +13270,6 @@ class Emitter {
       );
     }
     throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on ${typeIdent(baseType)}`);
-  }
-
-  private emitClassMethodCall(
-    expr: CallExpr,
-    callee: PropAccessExpr,
-    baseType: TopazType,
-  ): string {
-    const cls = this.classes.get(classNameOf(baseType)!)!;
-    const mname = callee.name;
-    const calleeAnchor: { pos: number } = { pos: callee.pos };
-    const method = cls.methods.get(mname);
-    if (method === undefined) {
-      if (cls.fields.has(mname)) {
-        throw new CodegenError(calleeAnchor, `'${mname}' is a field, not a method, on class '${cls.name}'`);
-      }
-      throw new CodegenError(calleeAnchor, `class '${cls.name}' has no method '${mname}'`);
-    }
-    const base = this.emitExpression(callee.receiver);
-    const argParts = [
-      base,
-      ...this.emitCallArgs(expr.args, method.params, `${cls.name}.${mname}`, { pos: expr.pos }),
-    ];
-    return `topaz_class_${cls.name}_method_${mname}(${argParts.join(", ")})`;
-  }
-
-  private emitInterfaceMethodCall(
-    expr: CallExpr,
-    callee: PropAccessExpr,
-    baseType: TopazType,
-  ): string {
-    const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
-    const mname = callee.name;
-    const calleeAnchor: { pos: number } = { pos: callee.pos };
-    const sig = iface.methods.get(mname);
-    if (sig === undefined) {
-      if (iface.fields.has(mname)) {
-        throw new CodegenError(calleeAnchor, `'${mname}' is a field, not a method, on interface '${iface.name}'`);
-      }
-      throw new CodegenError(calleeAnchor, `interface '${iface.name}' has no method '${mname}'`);
-    }
-    const id = this.tmpCounter++;
-    const tmp = `__topaz_ib_${id}`;
-    const baseStr = this.emitExpression(callee.receiver);
-    const argParts = [
-      `${tmp}.data`,
-      ...this.emitCallArgs(expr.args, sig.params, `${iface.name}.${mname}`, { pos: expr.pos }),
-    ];
-    return `({ ${cTypeName(baseType)} ${tmp} = ${baseStr}; ${tmp}.vt->${mname}(${argParts.join(", ")}); })`;
   }
 
   private emitSetMethodCall(
