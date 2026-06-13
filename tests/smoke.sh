@@ -2960,6 +2960,7 @@ run_case async_await_path_url_call_arg $'declared pre\narrow pre\nmethod pre\nex
 run_case async_await_path_variadic_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\ndiscard pre\ndiscard segment pre\nsync tail\ndeclared path\n/tmp/x\narrow path\n/tmp/pkg\nmethod path\na/b\ndiscard segment post\ndiscard after\ndeclared then\n/tmp/x\narrow then\n/tmp/pkg\nmethod then\na/b\nexpr then\na/b/c\ndiscard then'
 run_case async_await_fs_read_metadata_call_arg $'declared pre\ndeclared path\narrow pre\narrow path\nmethod pre\nmethod path\nexpr pre\nexpr path\ndiscard pre\ndiscard path\nsync tail\ndeclared read\nhello\narrow exists\ntrue\ndiscard after\ndeclared then\nhello\narrow then\ntrue\nmethod then\nhello\nexpr then\ntrue\ndiscard then'
 run_case async_await_fs_write_mkdir_call_arg $'declared pre\ndeclared path\narrow pre\narrow content\nmethod pre\nmethod path\nexpr pre\nexpr path\nsync tail\ndeclared wrote\narrow wrote\nmethod mkdir\nexpr wrote\ndeclared then\ndeclared text\narrow then\narrow text\nmethod then\ntrue\nexpr then\nexpr text'
+run_case async_await_child_process_exec_call_arg $'declared pre\ndeclared cmd\narrow pre\narrow args\nmethod pre\nmethod cmd\nexpr pre\nexpr args\nsync tail\ndeclared child\ndeclared after\narrow child\narrow after\nmethod child\nmethod after\nexpr child\nexpr after\ndeclared then\narrow then\nmethod then\nexpr then'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -2971,6 +2972,7 @@ run_fail_case await_call_arg_fs_write_deferred_fail examples/await_call_arg_fs_w
 run_fail_case await_call_arg_string_static_deferred_fail examples/await_call_arg_string_static_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_nested_flat_builtin_deferred_fail examples/await_call_arg_nested_flat_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_path_variadic_deferred_fail examples/await_call_arg_path_variadic_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_call_arg_child_process_deferred_fail examples/await_call_arg_child_process_deferred_fail.ts "execFileSync returns void and cannot be used as a value"
 run_fail_case await_call_arg_method_deferred_fail examples/await_call_arg_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_collection_void_deferred_fail examples/await_call_arg_collection_void_deferred_fail.ts "Map.set returns void in this dialect and cannot be used as a value"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"

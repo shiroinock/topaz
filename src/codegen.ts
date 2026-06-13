@@ -210,6 +210,7 @@ type SyntheticCallKind =
   | "fs_exists_sync"
   | "fs_write_file_sync"
   | "fs_mkdir_sync"
+  | "child_process_exec_file_sync"
   | "url_file_url_to_path";
 
 type OrdinaryCallPlan =
@@ -5073,7 +5074,12 @@ class Emitter {
     } else if (plan.kind === "fn_value" && calleeMaybe.kind !== "ident") {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
-    if (!(plan.kind === "synthetic_call" && plan.syntheticKind === "fs_mkdir_sync")) {
+    if (
+      !(
+        plan.kind === "synthetic_call" &&
+        (plan.syntheticKind === "fs_mkdir_sync" || plan.syntheticKind === "child_process_exec_file_sync")
+      )
+    ) {
       this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
     }
 
@@ -5380,28 +5386,28 @@ class Emitter {
           lines.push("      (void)source;");
         } else {
           const awaitC = cTypeName(step.bindingType);
-          lines.push(`      ctx->${step.stmt.name} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+          lines.push(`      ctx->${step.stmt.name} = *(${awaitC} const *)topaz_promise_fulfilled_payload(source);`);
         }
       } else if (step.kind === "initializer") {
         if (step.awaitedType.kind === "void") {
           lines.push("      (void)source;");
         } else {
           const awaitC = cTypeName(step.awaitedType);
-          lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+          lines.push(`      ctx->${step.tempName} = *(${awaitC} const *)topaz_promise_fulfilled_payload(source);`);
         }
       } else if (step.kind === "return") {
         if (step.awaitedType.kind === "void") {
           lines.push("      (void)source;");
         } else {
           const awaitC = cTypeName(step.awaitedType);
-          lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+          lines.push(`      ctx->${step.tempName} = *(${awaitC} const *)topaz_promise_fulfilled_payload(source);`);
         }
       } else if (step.kind === "statement") {
         if (step.transformedExpr === undefined || step.awaitedType.kind === "void") {
           lines.push("      (void)source;");
         } else {
           const awaitC = cTypeName(step.awaitedType);
-          lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+          lines.push(`      ctx->${step.tempName} = *(${awaitC} const *)topaz_promise_fulfilled_payload(source);`);
         }
       } else {
         throwInternalCodegenError("unknown async suspension step");
@@ -11442,7 +11448,7 @@ class Emitter {
       lines.push("    (void)source;");
     } else {
       const payloadC = cTypeName(payloadType);
-      lines.push(`    ${payloadC} __topaz_promise_value = *(const ${payloadC} *)topaz_promise_fulfilled_payload(source);`);
+      lines.push(`    ${payloadC} __topaz_promise_value = *(${payloadC} const *)topaz_promise_fulfilled_payload(source);`);
       callArgs = `${callArgs}, __topaz_promise_value`;
     }
     if (resultType.kind === "void") {
@@ -11775,6 +11781,17 @@ class Emitter {
         label: "mkdirSync",
       };
     }
+    if (callee.name === "execFileSync") {
+      this.checkNodeChildProcessExecFileSyncArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "child_process_exec_file_sync",
+        params: [this.makeParamInfo("cmd", T_STRING), this.makeParamInfo("args", arrayOf(T_STRING)!)],
+        returnType: T_VOID,
+        label: "execFileSync",
+      };
+    }
     if (callee.name === "fileURLToPath") {
       this.checkNodeUrlFileURLToPathArgs(expr);
       return {
@@ -11793,7 +11810,6 @@ class Emitter {
     return (
       name === "resolve" ||
       name === "join" ||
-      name === "execFileSync" ||
       name === "exit" ||
       name === "writeStdout" ||
       name === "writeStderr" ||
@@ -12155,6 +12171,9 @@ class Emitter {
       }
       if (plan.syntheticKind === "fs_mkdir_sync") {
         return this.emitNodeFsMkdirSync(expr);
+      }
+      if (plan.syntheticKind === "child_process_exec_file_sync") {
+        return this.emitNodeChildProcessExecFileSync(expr);
       }
       if (plan.syntheticKind === "url_file_url_to_path") {
         return this.emitNodeUrlFileURLToPath(expr);

@@ -417,6 +417,8 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 - [x] **5.30 fs write / mkdir call descriptor await** — 5.29 の filesystem descriptor frontier を void-returning write helper の `writeFileSync(path, content)` と recursive mkdir helper の `mkdirSync(path, { recursive: true })` へ広げ、statement/discard position に限って one direct awaited argument を lowering するようにした。block-bodied async declaration / arrow / method / anonymous function expression で、`writeFileSync(await path, content)` / `writeFileSync(path, await content)` / `mkdirSync(await path, { recursive: true })` を受理する。value position、`mkdirSync(path, await opts)`、exec/process/Promise descriptors、nested fs arguments、assignment await、general expression decomposition、scheduler work は引き続き deferred。決定ログは `docs/adr/0497-fs-write-mkdir-call-descriptor-await.md`。
 
+- [x] **5.31 child process exec call descriptor await** — 5.30 の void-returning flat builtin descriptor frontier を compatibility `node:child_process.execFileSync(cmd, args, { stdio: "inherit" })` へ広げ、statement/discard position に限って awaited `cmd` / awaited `args` を lowering するようにした。block-bodied async declaration / arrow / method / anonymous function expression で、`execFileSync(await cmd, args, { stdio: "inherit" })` / `execFileSync(cmd, await args, { stdio: "inherit" })` を受理する。value position、awaited options、process stream helpers / `process.exit`、Promise APIs、nested exec arguments、assignment await、general expression decomposition、scheduler / task queue work は引き続き deferred。決定ログは `docs/adr/0498-child-process-exec-call-descriptor-await.md`。
+
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
