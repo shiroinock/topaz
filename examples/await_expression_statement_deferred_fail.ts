@@ -5,7 +5,7 @@ function foo(n: number): void {
 }
 
 async function answer(): Promise<number> {
-  foo(await Promise.resolve(1));
+  foo(1 + await Promise.resolve(2));
   return 0;
 }
 

@@ -178,9 +178,14 @@ type AwaitStatementInfo = {
   kind: "statement";
   stmt: ExprStmt;
   awaitExpr: AwaitExpr;
+  transformedExpr?: Expr;
+  preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+  preAwaitArgTemps: Array<AwaitCallArgTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
+  awaitedType: TopazType;
+  tempName: string;
 };
 
 type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo | AwaitInitializerInfo | AwaitStatementInfo;
@@ -4681,15 +4686,57 @@ class Emitter {
               `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
             );
           }
+          const awaitedPayload = operandType.value;
           steps.push({
             kind: "statement",
             stmt: s,
             awaitExpr: expr,
+            preAwaitReceiverTemps: [],
+            preAwaitArgTemps: [],
             index: i,
             pc: steps.length,
             operandType,
+            awaitedType: awaitedPayload,
+            tempName: `__topaz_stmt_await_${steps.length}`,
           });
           supportedAwaitExprs.add(expr);
+        } else {
+          const statementAwaits = this.collectAwaitExprsInExpr(s.expr);
+          if (statementAwaits.length > 0) {
+            if (statementAwaits.length > 1) {
+              throw new CodegenError(
+                { pos: statementAwaits[1].pos },
+                this.unsupportedAwaitLoweringMessage(),
+              );
+            }
+            const awaitExpr = statementAwaits[0];
+            const operandType = this.inferType(awaitExpr.operand);
+            if (operandType.kind !== "promise") {
+              throw new CodegenError(
+                { pos: awaitExpr.operand.pos },
+                `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+              );
+            }
+            const awaitedPayload = operandType.value;
+            this.assertNotVoid(awaitedPayload, { pos: awaitExpr.pos }, "await call statement argument");
+            const tempName = `__topaz_stmt_await_${steps.length}`;
+            this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
+            const callAwait = this.tryBuildCallArgAwaitExpression(s.expr, awaitExpr, tempName, steps.length);
+            steps.push({
+              kind: "statement",
+              stmt: s,
+              awaitExpr,
+              transformedExpr: callAwait.transformedExpr,
+              preAwaitReceiverTemps: callAwait.preAwaitReceiverTemps,
+              preAwaitArgTemps: callAwait.preAwaitArgTemps,
+              index: i,
+              pc: steps.length,
+              operandType,
+              awaitedType: awaitedPayload,
+              tempName,
+            });
+            supportedAwaitExprs.add(awaitExpr);
+          }
         }
       } else if (s.kind === "return_stmt" && i === block.stmts.length - 1) {
         const valueMaybe = s.value;
@@ -4818,7 +4865,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, call-expression statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
   }
 
   private tryBuildCallArgAwaitExpression(
@@ -5191,8 +5238,18 @@ class Emitter {
         }
         return;
       }
+      case "statement": {
+        for (const receiverTemp of step.preAwaitReceiverTemps) {
+          const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
+          lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
+        }
+        for (const temp of step.preAwaitArgTemps) {
+          const expr = this.emitWithExpected(temp.arg, temp.argType);
+          lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+        }
+        return;
+      }
       case "binding":
-      case "statement":
         return;
     }
   }
@@ -5236,6 +5293,18 @@ class Emitter {
         }
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
+        }
+      } else if (binding.kind === "statement") {
+        if (binding.transformedExpr !== undefined) {
+          for (const receiverTemp of binding.preAwaitReceiverTemps) {
+            fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
+          }
+          for (const temp of binding.preAwaitArgTemps) {
+            fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
+          }
+          if (binding.awaitedType.kind !== "void") {
+            fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
+          }
         }
       }
     }
@@ -5300,7 +5369,12 @@ class Emitter {
           lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
         }
       } else if (step.kind === "statement") {
-        lines.push("      (void)source;");
+        if (step.transformedExpr === undefined || step.awaitedType.kind === "void") {
+          lines.push("      (void)source;");
+        } else {
+          const awaitC = cTypeName(step.awaitedType);
+          lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+        }
       } else {
         throwInternalCodegenError("unknown async suspension step");
       }
@@ -5445,8 +5519,28 @@ class Emitter {
           lines.push(`        ctx->${current.stmt.name} = ${current.stmt.name};`);
           lines.push(`        (void)${current.stmt.name};`);
         } else if (current.kind === "statement") {
-          // Fulfilled payload is intentionally discarded; the suffix segment
-          // starts after the original expression statement.
+          const transformedExpr = current.transformedExpr;
+          if (transformedExpr !== undefined) {
+            for (const receiverTemp of current.preAwaitReceiverTemps) {
+              this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
+              lines.push(`        ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
+              lines.push(`        (void)${receiverTemp.tempName};`);
+            }
+            for (const temp of current.preAwaitArgTemps) {
+              this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
+              lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
+              lines.push(`        (void)${temp.tempName};`);
+            }
+            if (current.awaitedType.kind !== "void") {
+              this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
+              lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
+              lines.push(`        (void)${current.tempName};`);
+            }
+            lines.push(`        ${this.emitExpression(transformedExpr)};`);
+          }
+          // Plain awaited expression statements intentionally discard the
+          // fulfilled payload; transformed call statements discard the call
+          // result after emitting the resumed expression above.
         } else {
           throwInternalCodegenError("unknown non-return async suspension step");
         }

@@ -1,10 +1,8 @@
-async function answer(): Promise<number> {
-  plusOne(await Promise.resolve(42));
-  return 43;
-}
+let saved = 0;
 
-function plusOne(n: number): number {
-  return n + 1;
+async function answer(): Promise<number> {
+  saved = await Promise.resolve(42);
+  return saved;
 }
 
 answer();

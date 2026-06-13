@@ -1,12 +1,10 @@
 class AsyncBox {
-  async value(): Promise<number> {
-    plusOne(await Promise.resolve(1));
-    return 2;
-  }
-}
+  saved: number = 0;
 
-function plusOne(n: number): number {
-  return n + 1;
+  async value(): Promise<number> {
+    this.saved = await Promise.resolve(1);
+    return this.saved;
+  }
 }
 
 const box = new AsyncBox();
