@@ -567,6 +567,7 @@ export type Decl =
   | ClassDecl
   | InterfaceDecl
   | TypeAliasDecl
+  | AmbientConstDecl
   | ImportDecl;
 
 export type FunctionParam = {
@@ -671,6 +672,15 @@ export type TypeAliasDecl = {
   name: string;
   typeParams: Array<TypeParam>;
   body: TypeNode;
+  pos: number;
+  end: number;
+};
+
+export type AmbientConstDecl = {
+  kind: "ambient_const_decl";
+  isExported: boolean;
+  name: string;
+  type: "unique_symbol";
   pos: number;
   end: number;
 };

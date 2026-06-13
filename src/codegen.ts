@@ -2347,6 +2347,8 @@ class Emitter {
             case "type_alias_decl":
               aliases.push({ decl: d, sf });
               break;
+            case "ambient_const_decl":
+              break;
           }
           continue;
         }

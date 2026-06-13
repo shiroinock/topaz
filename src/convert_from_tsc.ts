@@ -22,6 +22,7 @@ import type {
   SourceModule,
   ModuleItem,
   Decl,
+  AmbientConstDecl,
   FunctionDecl,
   ClassDecl,
   ClassMember,
@@ -204,6 +205,7 @@ class Converter {
   isDeclLike(stmt: ts.Statement): boolean {
     return (
       ts.isImportDeclaration(stmt) ||
+      this.isAmbientVariableStatement(stmt) ||
       ts.isFunctionDeclaration(stmt) ||
       ts.isClassDeclaration(stmt) ||
       ts.isInterfaceDeclaration(stmt) ||
@@ -217,11 +219,20 @@ class Converter {
 
   convertDecl(stmt: ts.Statement): Decl {
     if (ts.isImportDeclaration(stmt)) return this.convertImport(stmt);
+    if (ts.isVariableStatement(stmt)) return this.convertAmbientConstDecl(stmt);
+    if (ts.canHaveModifiers(stmt) && this.hasDeclareModifier(stmt)) {
+      throw this.err(stmt, "arbitrary ambient declarations are unsupported; only `declare const ...: unique symbol` markers are supported");
+    }
     if (ts.isFunctionDeclaration(stmt)) return this.convertFunctionDecl(stmt);
     if (ts.isClassDeclaration(stmt)) return this.convertClassDecl(stmt);
     if (ts.isInterfaceDeclaration(stmt)) return this.convertInterfaceDecl(stmt);
     if (ts.isTypeAliasDeclaration(stmt)) return this.convertTypeAliasDecl(stmt);
     throw this.err(stmt, `unsupported declaration ${ts.SyntaxKind[stmt.kind]}`);
+  }
+
+  isAmbientVariableStatement(stmt: ts.Statement): boolean {
+    if (!ts.isVariableStatement(stmt)) return false;
+    return this.hasDeclareModifier(stmt);
   }
 
   convertImport(stmt: ts.ImportDeclaration): ImportDecl {
@@ -276,6 +287,46 @@ class Converter {
       namespaceNamePos,
       ...this.span(stmt),
     };
+  }
+
+  convertAmbientConstDecl(stmt: ts.VariableStatement): AmbientConstDecl {
+    if (!this.hasDeclareModifier(stmt)) {
+      throw this.err(stmt, "unsupported declaration VariableStatement");
+    }
+    const list = stmt.declarationList;
+    const flags = list.flags;
+    if ((flags & ts.NodeFlags.Const) === 0) {
+      throw this.err(list, "only `declare const ...: unique symbol` ambient markers are supported");
+    }
+    if (list.declarations.length !== 1) {
+      throw this.err(list, "ambient unique-symbol markers do not support multiple declarators");
+    }
+    const d = list.declarations[0]!;
+    if (!ts.isIdentifier(d.name)) {
+      throw this.err(d.name, "only `declare const ...: unique symbol` ambient markers are supported");
+    }
+    if (!d.type) {
+      throw this.err(d, "ambient unique-symbol markers require a `unique symbol` type annotation");
+    }
+    if (!this.isUniqueSymbolTypeNode(d.type)) {
+      throw this.err(d.type, "only `unique symbol` ambient markers are supported");
+    }
+    if (d.initializer) {
+      throw this.err(d.initializer, "ambient unique-symbol markers cannot have initializers");
+    }
+    return {
+      kind: "ambient_const_decl",
+      isExported: this.hasExportModifier(stmt),
+      name: d.name.text,
+      type: "unique_symbol",
+      ...this.span(stmt),
+    };
+  }
+
+  isUniqueSymbolTypeNode(t: ts.TypeNode): boolean {
+    if (!ts.isTypeOperatorNode(t)) return false;
+    if (t.operator !== ts.SyntaxKind.UniqueKeyword) return false;
+    return t.type.kind === ts.SyntaxKind.SymbolKeyword;
   }
 
   convertFunctionDecl(stmt: ts.FunctionDeclaration): FunctionDecl {
@@ -578,6 +629,15 @@ class Converter {
         throw this.err(m, "`export default` is unsupported");
       }
       if (m.kind === ts.SyntaxKind.ExportKeyword) return true;
+    }
+    return false;
+  }
+
+  hasDeclareModifier(stmt: ts.HasModifiers): boolean {
+    const modifiers = ts.getModifiers(stmt);
+    if (!modifiers) return false;
+    for (const m of modifiers) {
+      if (m.kind === ts.SyntaxKind.DeclareKeyword) return true;
     }
     return false;
   }

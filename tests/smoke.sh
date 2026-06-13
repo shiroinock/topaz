@@ -3444,6 +3444,9 @@ run_case brand_generic_computed_template_constrained $'u1\nu1\nt1\ntrue\ntrue\nu
 run_case brand_generic_template_type_query_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_default_payload $'u1\nu1\nu1\ntrue\ntrue\nu1\nt1\nother'
 run_case brand_generic_computed_template_default_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_generic_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_export_ambient_unique_symbol_marker $'u1\ntrue'
 run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_template_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_type_query_cross_assign_fail examples/brand_generic_template_type_query_cross_assign_fail.ts "topaz_brand_Brand_3a__5b_UserIdBrand_5d__3a_typeof_20_UserIdBrand"
 run_fail_case brand_generic_template_default_cross_assign_fail examples/brand_generic_template_default_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
@@ -3454,6 +3457,10 @@ run_fail_case brand_generic_template_base_default_fail examples/brand_generic_te
 run_fail_case brand_generic_template_bad_shape_fail examples/brand_generic_template_bad_shape_fail.ts "generic type alias 'Brand' is unsupported"
 run_fail_case brand_generic_template_bad_constraint_fail examples/brand_generic_template_bad_constraint_fail.ts "brand template payload constraint must be string"
 run_fail_case brand_generic_template_base_constraint_fail examples/brand_generic_template_base_constraint_fail.ts "brand template base type parameter constraint is unsupported"
+run_fail_case brand_ambient_unique_symbol_initializer_fail examples/brand_ambient_unique_symbol_initializer_fail.ts "ambient unique-symbol markers cannot have initializers"
+run_fail_case brand_ambient_unique_symbol_wrong_type_fail examples/brand_ambient_unique_symbol_wrong_type_fail.ts "only \`unique symbol\` ambient markers are supported"
+run_fail_case brand_ambient_unique_symbol_non_const_fail examples/brand_ambient_unique_symbol_non_const_fail.ts "only \`declare const ...: unique symbol\` ambient markers are supported"
+run_fail_case brand_ambient_declare_function_fail examples/brand_ambient_declare_function_fail.ts "arbitrary ambient declarations are unsupported"
 run_fail_case type_param_constraint_generic_fail examples/type_param_constraint_generic_fail.ts "type parameter constraint is unsupported"
 run_fail_case type_param_default_generic_fail examples/type_param_default_generic_fail.ts "default type parameter is unsupported"
 

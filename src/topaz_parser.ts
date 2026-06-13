@@ -19,6 +19,7 @@ import {
   computeLineStarts,
 } from "./lexer.js";
 import {
+  AmbientConstDecl,
   Decl,
   Expr,
   Stmt,
@@ -244,6 +245,10 @@ export class Parser {
       isAsync = true;
       head = this.current();
     }
+    if (this.isKeyword(head, "declare")) {
+      const d: Decl = this.parseAmbientConstDecl(isExported);
+      return { kind: "module_decl", decl: d };
+    }
     if (this.isKeyword(head, "function")) {
       const d: Decl = this.parseFunctionDecl(isExported, isAsync);
       return { kind: "module_decl", decl: d };
@@ -394,6 +399,54 @@ export class Parser {
       pos: start.pos,
       end: path.end,
     };
+  }
+
+  parseAmbientConstDecl(isExported: boolean): Decl {
+    const start: Token = this.expectKeyword("declare");
+    const head: Token = this.current();
+    if (!this.isKeyword(head, "const")) {
+      if (this.isKeyword(head, "let") || this.isKeyword(head, "var")) {
+        throw this.error(head, "only `declare const ...: unique symbol` ambient markers are supported");
+      }
+      throw this.error(head, "arbitrary ambient declarations are unsupported; only `declare const ...: unique symbol` markers are supported");
+    }
+    this.pos += 1;
+    const name: Token = this.expectIdent();
+    if (this.matchPunct(",")) {
+      throw this.error(this.peek(-1), "ambient unique-symbol markers do not support multiple declarators");
+    }
+    if (!this.matchPunct(":")) {
+      throw this.error(this.current(), "ambient unique-symbol markers require a `unique symbol` type annotation");
+    }
+    const uniqueTok: Token = this.current();
+    if (uniqueTok.kind !== "ident" || uniqueTok.text !== "unique") {
+      throw this.error(uniqueTok, "only `unique symbol` ambient markers are supported");
+    }
+    this.pos += 1;
+    const symbolTok: Token = this.current();
+    if (symbolTok.kind !== "ident" || symbolTok.text !== "symbol") {
+      throw this.error(symbolTok, "only `unique symbol` ambient markers are supported");
+    }
+    this.pos += 1;
+    if (this.matchPunct("=")) {
+      throw this.error(this.peek(-1), "ambient unique-symbol markers cannot have initializers");
+    }
+    if (this.matchPunct(",")) {
+      throw this.error(this.peek(-1), "ambient unique-symbol markers do not support multiple declarators");
+    }
+    let end: number = symbolTok.end;
+    if (this.matchPunct(";")) {
+      end = this.peek(-1).end;
+    }
+    const decl: AmbientConstDecl = {
+      kind: "ambient_const_decl",
+      isExported: isExported,
+      name: name.text,
+      type: "unique_symbol",
+      pos: start.pos,
+      end: end,
+    };
+    return decl;
   }
 
   parseFunctionDecl(isExported: boolean, isAsync: boolean): Decl {

@@ -167,6 +167,7 @@ function isKeyword(word: string): boolean {
   if (word === "type") return true;
   if (word === "import") return true;
   if (word === "export") return true;
+  if (word === "declare") return true;
   if (word === "from") return true;
   if (word === "typeof") return true;
   if (word === "readonly") return true;
