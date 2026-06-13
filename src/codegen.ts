@@ -1,5 +1,6 @@
 import {
   TypeNode,
+  TypeRef,
   TypeLiteralNode,
   SourceModule,
   Decl,
@@ -1431,6 +1432,10 @@ type TypeAliasInfo = {
   recursive: boolean;
 };
 
+type BrandAliasTemplateInfo = {
+  fieldKey: string;
+};
+
 type PreAllocatedAnon = {
   key: string;
   node: TypeLiteralNode;
@@ -1688,6 +1693,10 @@ class Emitter {
   // resolving the body, which may live in a different module than the reference
   // site). The original `decl` anchor was never read and is dropped.
   private typeAliases: Map<string, TypeAliasInfo> = new Map<string, TypeAliasInfo>();
+  // Phase 5.56: narrowly accepted generic brand helpers such as
+  // `type Brand<T, K> = T & { readonly __brand: K }`. These remain separate
+  // from ordinary aliases so generic type aliases stay unsupported.
+  private brandAliasTemplates: Map<string, BrandAliasTemplateInfo> = new Map<string, BrandAliasTemplateInfo>();
   private moduleGlobalTypes: Map<string, TopazType> = new Map<string, TopazType>();
   // Phase 1.5-6i prep: pre-allocated recursive-alias anonymous classes keyed by
   // module-local source span. This preserves TypeLiteralNode identity without
@@ -2616,10 +2625,15 @@ class Emitter {
       if (this.interfaces.has(name)) {
         throw new CodegenError(aliasAnchor, `type alias '${name}' collides with an interface of the same name`);
       }
-      if (this.typeAliases.has(name)) {
+      if (this.typeAliases.has(name) || this.brandAliasTemplates.has(name)) {
         throw new CodegenError(aliasAnchor, `redeclaration of type alias '${name}'`);
       }
       if (alias.typeParams.length > 0) {
+        const template = this.tryMakeBrandAliasTemplate(alias);
+        if (template !== undefined) {
+          this.brandAliasTemplates.set(name, template);
+          return;
+        }
         throw new CodegenError(
           aliasAnchor,
           `generic type alias '${name}' is unsupported (Phase 1.5-6 prep)`,
@@ -4339,6 +4353,80 @@ class Emitter {
     return { kind: "brand", base, key };
   }
 
+  private tryMakeBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
+    if (alias.typeParams.length !== 2) return undefined;
+    const baseParam = alias.typeParams[0].name;
+    const payloadParam = alias.typeParams[1].name;
+    const body = alias.body;
+    if (body.kind !== "type_intersection") return undefined;
+    if (body.variants.length !== 2) return undefined;
+
+    let hasBase = false;
+    let hasPhantom = false;
+    let fieldKey = "";
+    for (const part of body.variants) {
+      if (part.kind === "type_ref" && part.name === baseParam && part.typeArgs.length === 0) {
+        if (hasBase) return undefined;
+        hasBase = true;
+      } else if (part.kind === "type_literal") {
+        if (hasPhantom) return undefined;
+        const key = this.brandAliasTemplateFieldKey(part, payloadParam);
+        if (key === undefined) return undefined;
+        hasPhantom = true;
+        fieldKey = key;
+      } else {
+        return undefined;
+      }
+    }
+    if (!hasBase || !hasPhantom) return undefined;
+    return { fieldKey };
+  }
+
+  private brandAliasTemplateFieldKey(
+    node: TypeLiteralNode,
+    payloadParam: string,
+  ): string | undefined {
+    if (node.members.length !== 1) return undefined;
+    const member = node.members[0];
+    if (member.kind !== "type_lit_field") return undefined;
+    if (member.nameKind === "computed_unsupported") return undefined;
+    if (!member.isReadonly || member.isOptional) return undefined;
+    const payloadType = member.type;
+    if (payloadType.kind !== "type_ref") return undefined;
+    if (payloadType.name !== payloadParam || payloadType.typeArgs.length !== 0) return undefined;
+    return member.nameKind === "computed_identifier" ? `[${member.name}]` : member.name;
+  }
+
+  private resolveBrandAliasTemplate(
+    aliasName: string,
+    template: BrandAliasTemplateInfo,
+    node: TypeRef,
+    anchor: { pos: number },
+    sf: SourceModule,
+  ): TopazType {
+    if (node.typeArgs.length !== 2) {
+      throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 2 type arguments`);
+    }
+    const baseNode = node.typeArgs[0];
+    const payloadNode = node.typeArgs[1];
+    const base = this.typeFromAnnotation(baseNode, { pos: baseNode.pos }, sf);
+    const baseKind = brandBase(base).kind;
+    if (baseKind !== "string" && baseKind !== "number" && baseKind !== "boolean" && baseKind !== "bigint") {
+      throw this.typeErr(
+        { pos: baseNode.pos },
+        `unsupported brand template base type ${typeIdent(base)} (expected string / number / boolean / bigint)`,
+      );
+    }
+    if (payloadNode.kind !== "type_str_lit") {
+      throw this.typeErr(
+        { pos: payloadNode.pos },
+        `brand template alias '${aliasName}' payload type argument must be a string literal`,
+      );
+    }
+    const key = `${aliasName}:${template.fieldKey}:${payloadNode.value}`;
+    return { kind: "brand", base, key };
+  }
+
   private typeFromAnnotationCore(
     node: TypeNode | undefined,
     anchor: { pos: number },
@@ -4429,6 +4517,12 @@ class Emitter {
             throw this.typeErr(nodeAnchor, `type parameter '${refName}' cannot have type arguments`);
           }
           return scoped;
+        }
+      }
+      {
+        const brandTemplate = this.brandAliasTemplates.get(refName);
+        if (brandTemplate !== undefined) {
+          return this.resolveBrandAliasTemplate(refName, brandTemplate, node, nodeAnchor, sf);
         }
       }
       // Phase 1.5-6 prep: type alias substitution. Lookup sits between
