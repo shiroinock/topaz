@@ -12696,8 +12696,9 @@ class Emitter {
     return this.inferCallbackFn(cb, [T_UNKNOWN], "Promise.then onRejected");
   }
 
-  private isExplicitUndefinedPromiseHandler(expr: Expr): boolean {
-    return this.unwrapParenExpr(expr).kind === "undefined_lit";
+  private isExplicitPromiseHandlerSentinel(expr: Expr): boolean {
+    const kind = this.unwrapParenExpr(expr).kind;
+    return kind === "undefined_lit" || kind === "null_lit";
   }
 
   private inferPromiseFinallyCallbackFn(cb: Expr): FnType {
@@ -12748,13 +12749,16 @@ class Emitter {
     if (expr.args.length !== 1 && expr.args.length !== 2) {
       throw new CodegenError({ pos: expr.pos }, `Promise.then expects one or two arguments, got ${expr.args.length}`);
     }
+    if (expr.args.length === 1 && this.isExplicitPromiseHandlerSentinel(expr.args[0])) {
+      return baseType;
+    }
     if (expr.args.length === 2) {
-      const fulfilledIsUndefined = this.isExplicitUndefinedPromiseHandler(expr.args[0]);
-      const rejectedIsUndefined = this.isExplicitUndefinedPromiseHandler(expr.args[1]);
-      if (fulfilledIsUndefined && rejectedIsUndefined) {
+      const fulfilledIsSentinel = this.isExplicitPromiseHandlerSentinel(expr.args[0]);
+      const rejectedIsSentinel = this.isExplicitPromiseHandlerSentinel(expr.args[1]);
+      if (fulfilledIsSentinel && rejectedIsSentinel) {
         return baseType;
       }
-      if (fulfilledIsUndefined) {
+      if (fulfilledIsSentinel) {
         const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
         const rejectedResultType = rejectedFnType.returnType;
         this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true);
@@ -12778,7 +12782,7 @@ class Emitter {
         }
         return sourcePromiseType;
       }
-      if (rejectedIsUndefined) {
+      if (rejectedIsSentinel) {
         const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
         const resultType = fnType.returnType;
         this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true);
@@ -12795,7 +12799,7 @@ class Emitter {
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
     this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true);
-    if (expr.args.length === 2 && !this.isExplicitUndefinedPromiseHandler(expr.args[1])) {
+    if (expr.args.length === 2 && !this.isExplicitPromiseHandlerSentinel(expr.args[1])) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedResultType = rejectedFnType.returnType;
       this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true);
@@ -12836,7 +12840,7 @@ class Emitter {
     if (expr.args.length !== 1) {
       throw new CodegenError({ pos: expr.pos }, `Promise.catch expects exactly one argument, got ${expr.args.length}`);
     }
-    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+    if (this.isExplicitPromiseHandlerSentinel(expr.args[0])) {
       return baseType;
     }
     const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
@@ -12874,7 +12878,7 @@ class Emitter {
     if (expr.args.length !== 1) {
       throw new CodegenError({ pos: expr.pos }, `Promise.finally expects exactly one argument, got ${expr.args.length}`);
     }
-    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+    if (this.isExplicitPromiseHandlerSentinel(expr.args[0])) {
       return baseType;
     }
     const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
@@ -13082,17 +13086,20 @@ class Emitter {
     if (promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseThenCall: invalid Promise<T> types");
     }
+    if (expr.args.length === 1 && this.isExplicitPromiseHandlerSentinel(expr.args[0])) {
+      return this.emitPromisePassThroughCall(callee, "then_pass");
+    }
     if (
       expr.args.length === 2 &&
-      this.isExplicitUndefinedPromiseHandler(expr.args[0]) &&
-      this.isExplicitUndefinedPromiseHandler(expr.args[1])
+      this.isExplicitPromiseHandlerSentinel(expr.args[0]) &&
+      this.isExplicitPromiseHandlerSentinel(expr.args[1])
     ) {
       return this.emitPromisePassThroughCall(callee, "then_pass");
     }
     if (
       expr.args.length === 2 &&
-      this.isExplicitUndefinedPromiseHandler(expr.args[0]) &&
-      !this.isExplicitUndefinedPromiseHandler(expr.args[1])
+      this.isExplicitPromiseHandlerSentinel(expr.args[0]) &&
+      !this.isExplicitPromiseHandlerSentinel(expr.args[1])
     ) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const runnerName = this.recordPromiseCatchRunner(baseType.value, rejectedFnType);
@@ -13124,7 +13131,7 @@ class Emitter {
     const ctxVar = `__topaz_then_ctx_${id}`;
     const sourceExpr = this.emitExpression(callee.receiver);
     const cbExpr = this.emitWithExpected(expr.args[0], fnType);
-    if (expr.args.length === 2 && !this.isExplicitUndefinedPromiseHandler(expr.args[1])) {
+    if (expr.args.length === 2 && !this.isExplicitPromiseHandlerSentinel(expr.args[1])) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedRunnerName = this.recordPromiseCatchRunner(promisePayloadType, rejectedFnType);
       const rejectedCtxName = this.promiseCatchContextName(promisePayloadType, rejectedFnType.returnType);
@@ -13161,7 +13168,7 @@ class Emitter {
     if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseCatchCall: invalid Promise<T> types");
     }
-    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+    if (this.isExplicitPromiseHandlerSentinel(expr.args[0])) {
       return this.emitPromisePassThroughCall(callee, "catch_pass");
     }
     const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
@@ -13188,7 +13195,7 @@ class Emitter {
     if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseFinallyCall: invalid Promise<T> types");
     }
-    if (this.isExplicitUndefinedPromiseHandler(expr.args[0])) {
+    if (this.isExplicitPromiseHandlerSentinel(expr.args[0])) {
       return this.emitPromisePassThroughCall(callee, "finally_pass");
     }
     const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
