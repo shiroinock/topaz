@@ -194,6 +194,12 @@ type AsyncAwaitFrameInfo = {
   steps: Array<AsyncSuspensionStep>;
 };
 
+type SyntheticCallKind =
+  | "console_log"
+  | "console_error"
+  | "console_warn"
+  | "string_from_char_code";
+
 type OrdinaryCallPlan =
   | {
       kind: "top_level";
@@ -215,6 +221,14 @@ type OrdinaryCallPlan =
       kind: "fn_value";
       callee: Expr;
       fnType: FnType;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
+      kind: "synthetic_call";
+      callee: PropAccessExpr;
+      syntheticKind: SyntheticCallKind;
       params: Array<ParamInfo>;
       returnType: TopazType;
       label: string;
@@ -11584,6 +11598,44 @@ class Emitter {
     }
   }
 
+  private resolveSyntheticCallPlan(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+  ): OrdinaryCallPlan | undefined {
+    const receiver = callee.receiver;
+    if (receiver.kind !== "ident") return undefined;
+    if (receiver.name === "console") {
+      if (callee.name !== "log" && callee.name !== "error" && callee.name !== "warn") {
+        return undefined;
+      }
+      const arg = this.checkConsoleCallArgs(expr, callee.name);
+      const argType = this.inferType(arg);
+      let syntheticKind: SyntheticCallKind = "console_log";
+      if (callee.name === "error") syntheticKind = "console_error";
+      if (callee.name === "warn") syntheticKind = "console_warn";
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind,
+        params: [this.makeParamInfo("value", argType)],
+        returnType: T_VOID,
+        label: `console.${callee.name}`,
+      };
+    }
+    if (receiver.name === "String") {
+      const returnType = this.inferStringStaticReturn(expr, callee);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "string_from_char_code",
+        params: [this.makeParamInfo("code", T_NUMBER)],
+        returnType,
+        label: "String.fromCharCode",
+      };
+    }
+    return undefined;
+  }
+
   private resolveStringMethodCallPlan(
     expr: CallExpr,
     callee: PropAccessExpr,
@@ -11748,15 +11800,18 @@ class Emitter {
       if (awaitExpr !== undefined && this.collectAwaitExprsInExpr(receiver).length > 0) {
         throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
       }
-      // Synthetic namespaces stay outside the descriptor frontier; specialized
-      // receiver methods join it below with explicit receiver metadata.
+      const syntheticPlan = this.resolveSyntheticCallPlan(expr, callee);
+      if (syntheticPlan !== undefined) return syntheticPlan;
+
+      // Promise/process namespaces stay outside this descriptor frontier;
+      // specialized receiver methods join it below with explicit receiver
+      // metadata.
       if (receiver.kind === "ident") {
         const receiverName = receiver.name;
         if (
           receiverName === "console" ||
           receiverName === "Promise" ||
-          receiverName === "process" ||
-          receiverName === "String"
+          receiverName === "process"
         ) {
           return undefined;
         }
@@ -11879,6 +11934,18 @@ class Emitter {
       const fnTypeName = typeIdent(plan.fnType);
       const callArgs = args.length > 0 ? `${tmp}.env, ${args}` : `${tmp}.env`;
       return `({ ${fnTypeName} ${tmp} = ${calleeStr}; ${tmp}.fn(${callArgs}); })`;
+    }
+    if (plan.kind === "synthetic_call") {
+      if (
+        plan.syntheticKind === "console_log" ||
+        plan.syntheticKind === "console_error" ||
+        plan.syntheticKind === "console_warn"
+      ) {
+        return this.emitConsoleCall(expr, plan.callee.name);
+      }
+      if (plan.syntheticKind === "string_from_char_code") {
+        return this.emitStringStaticCall(expr, plan.callee);
+      }
     }
     if (plan.kind === "class_method") {
       const base = this.emitExpression(plan.receiver);
@@ -12024,14 +12091,6 @@ class Emitter {
       const prop = callee;
       const receiver = prop.receiver;
       if (receiver.kind === "ident") {
-        if (
-          receiver.name === "console" &&
-          // Phase 1.5-6 prep #26: console.error shares console.log's one-argument
-          // scalar lowering, differing only in the runtime stream (stderr).
-          (prop.name === "log" || prop.name === "error" || prop.name === "warn")
-        ) {
-          return this.emitConsoleCall(expr, prop.name);
-        }
         if (receiver.name === "Promise") {
           if (prop.name === "resolve") {
             return this.emitPromiseResolveCall(expr);
@@ -12048,13 +12107,6 @@ class Emitter {
         if (receiver.name === "process" && prop.name === "exit") {
           return this.emitProcessExit(expr);
         }
-
-        // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
-        // syntactically (the `String` identifier is not a real binding — we
-        // don't model a `String` global namespace, only this static method).
-        if (receiver.name === "String") {
-          return this.emitStringStaticCall(expr, prop);
-        }
       }
 
       // Phase 1.5-6 prep #26: process.stdout.write(s) /
@@ -12070,6 +12122,13 @@ class Emitter {
           prop.name === "write"
         ) {
           return this.emitProcessStreamWrite(expr, receiverProp.name);
+        }
+      }
+
+      if (receiver.kind === "ident" && (receiver.name === "console" || receiver.name === "String")) {
+        const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+        if (ordinaryPlan !== undefined) {
+          return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
         }
       }
 
@@ -14419,7 +14478,7 @@ class Emitter {
         if (receiver.kind === "ident") {
           if (
             receiver.name === "console" &&
-            (prop.name === "log" || prop.name === "error")
+            (prop.name === "log" || prop.name === "error" || prop.name === "warn")
           ) {
             throw new CodegenError({ pos: expr.pos }, `console.${prop.name} returns void and cannot be used as a value`);
           }
@@ -14431,11 +14490,12 @@ class Emitter {
               "process.exit returns `never` and cannot be used as a value",
             );
           }
-          // Phase 1.5-6 prep #12: `String.fromCharCode(n)` is recognized
-          // syntactically (mirrors emitCall) — the `String` identifier has no
-          // real binding, so we must short-circuit before `inferType(receiver)`.
+          // Phase 5.25: `String.fromCharCode(n)` is a descriptor-backed
+          // synthetic call; the `String` identifier still has no real binding,
+          // so short-circuit before `inferType(receiver)`.
           if (receiver.name === "String") {
-            return this.inferStringStaticReturn(expr, prop);
+            const syntheticPlan = this.resolveSyntheticCallPlan(expr, prop);
+            if (syntheticPlan !== undefined) return syntheticPlan.returnType;
           }
           if (receiver.name === "Promise") {
             if (prop.name === "resolve") {

@@ -405,6 +405,8 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 - [x] **5.24 call-expression statement await lowering** — 5.23 の value-discarding statement suspension step を descriptor-backed call expression statement に広げ、top-level `foo(await p);` 形の直接引数 `await` だけを受理する。5.20-5.22 の call descriptor / receiver temp / pre-await argument temp を再利用し、再開後に await payload temp を restored scope へ置いて transformed call を statement として emit し、call result は破棄する。Map.set / Set.add は statement では受理するが value position では引き続き void diagnostic、assignment await / general expression decomposition / synthetic namespace / Promise・thenable 互換 / scheduler work は deferred。決定ログは `docs/adr/0491-call-expression-statement-await.md`。
 
+- [x] **5.25 synthetic call descriptor await** — 5.20-5.24 の call descriptor frontier を synthetic namespace call の最初の subset へ広げ、`console.log` / `console.error` / `console.warn` と `String.fromCharCode` を descriptor-backed plan に移した。block-bodied async declaration / arrow / method / anonymous function expression で、console call statement の直接引数 `await` と `String.fromCharCode(await p)` の declaration initializer / terminal return / expression statement discard を受理する。Promise/process/Node flat builtin descriptors、nested synthetic arguments、assignment await、general expression decomposition、scheduler work は引き続き deferred。決定ログは `docs/adr/0492-synthetic-call-descriptor-await.md`。
+
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
