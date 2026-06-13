@@ -1434,6 +1434,7 @@ type TypeAliasInfo = {
 };
 
 type BrandAliasTemplateInfo = {
+  kind: "base_payload" | "phantom_object";
   fieldKey: string;
   payloadDefault: string | undefined;
 };
@@ -4315,7 +4316,7 @@ class Emitter {
     let hasPhantom = false;
     let phantomNode: TypeNode = node;
     for (const part of node.variants) {
-      if (part.kind === "type_literal") {
+      if (part.kind === "type_literal" || this.isPhantomObjectBrandAliasReference(part)) {
         if (hasPhantom) {
           throw this.typeErr({ pos: part.pos }, "unsupported brand intersection shape: multiple phantom object parts");
         }
@@ -4329,7 +4330,7 @@ class Emitter {
         baseNode = part;
       }
     }
-    if (!hasBase || !hasPhantom || phantomNode.kind !== "type_literal") {
+    if (!hasBase || !hasPhantom) {
       throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & readonly phantom object");
     }
     const base = this.typeFromAnnotation(baseNode, { pos: baseNode.pos }, sf);
@@ -4339,6 +4340,12 @@ class Emitter {
         { pos: baseNode.pos },
         `unsupported brand base type ${typeIdent(base)} (expected string / number / boolean / bigint)`,
       );
+    }
+    if (phantomNode.kind === "type_ref") {
+      return this.resolvePhantomObjectBrandAliasTemplate(phantomNode.name, phantomNode, { pos: phantomNode.pos }, base);
+    }
+    if (phantomNode.kind !== "type_literal") {
+      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & readonly phantom object");
     }
     if (phantomNode.members.length !== 1) {
       throw this.typeErr(
@@ -4376,6 +4383,9 @@ class Emitter {
   }
 
   private tryMakeBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
+    if (alias.typeParams.length === 1) {
+      return this.tryMakePhantomObjectBrandAliasTemplate(alias);
+    }
     if (alias.typeParams.length !== 2) return undefined;
     const baseTypeParam = alias.typeParams[0];
     const payloadTypeParam = alias.typeParams[1];
@@ -4435,7 +4445,18 @@ class Emitter {
         );
       }
     }
-    return { fieldKey, payloadDefault };
+    return { kind: "base_payload", fieldKey, payloadDefault };
+  }
+
+  private tryMakePhantomObjectBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
+    if (alias.typeParams.length !== 1) return undefined;
+    const payloadTypeParam = alias.typeParams[0];
+    if (payloadTypeParam.constraint !== undefined || payloadTypeParam.defaultType !== undefined) return undefined;
+    const body = alias.body;
+    if (body.kind !== "type_literal") return undefined;
+    const fieldKey = this.brandAliasTemplateFieldKey(body, payloadTypeParam.name);
+    if (fieldKey === undefined) return undefined;
+    return { kind: "phantom_object", fieldKey, payloadDefault: undefined };
   }
 
   private isBrandPayloadTypeParamConstraint(node: TypeNode): boolean {
@@ -4494,6 +4515,9 @@ class Emitter {
     anchor: { pos: number },
     sf: SourceModule,
   ): TopazType {
+    if (template.kind === "phantom_object") {
+      throw this.typeErr(anchor, `phantom object brand helper alias '${aliasName}' is unsupported outside a brand intersection`);
+    }
     const hasPayloadDefault = template.payloadDefault !== undefined;
     if (!hasPayloadDefault && node.typeArgs.length !== 2) {
       throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 2 type arguments`);
@@ -4523,6 +4547,37 @@ class Emitter {
     }
     if (payload === undefined) {
       throwInternalCodegenError("resolveBrandAliasTemplate: missing payload default");
+    }
+    const key = `${aliasName}:${template.fieldKey}:${payload}`;
+    return { kind: "brand", base, key };
+  }
+
+  private isPhantomObjectBrandAliasReference(node: TypeNode): boolean {
+    if (node.kind !== "type_ref") return false;
+    const template = this.brandAliasTemplates.get(node.name);
+    return template !== undefined && template.kind === "phantom_object";
+  }
+
+  private resolvePhantomObjectBrandAliasTemplate(
+    aliasName: string,
+    node: TypeRef,
+    anchor: { pos: number },
+    base: TopazType,
+  ): TopazType {
+    const template = this.brandAliasTemplates.get(aliasName);
+    if (template === undefined || template.kind !== "phantom_object") {
+      throwInternalCodegenError("resolvePhantomObjectBrandAliasTemplate: missing phantom object template");
+    }
+    if (node.typeArgs.length !== 1) {
+      throw this.typeErr(anchor, `phantom object brand helper alias '${aliasName}' requires 1 type argument`);
+    }
+    const payloadNode = node.typeArgs[0];
+    const payload = this.brandPayloadSpelling(payloadNode);
+    if (payload === undefined) {
+      throw this.typeErr(
+        { pos: payloadNode.pos },
+        `phantom object brand helper alias '${aliasName}' payload type argument must be a string literal, typeof Identifier, unknown, or never`,
+      );
     }
     const key = `${aliasName}:${template.fieldKey}:${payload}`;
     return { kind: "brand", base, key };
