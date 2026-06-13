@@ -3441,6 +3441,8 @@ run_case brand_generic_template $'u1\nu1\no1\ntrue\ntrue\nu1\n42\n42'
 run_case brand_generic_computed_template $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_constrained $'u1\nu1\no1\ntrue\ntrue\nu1'
 run_case brand_generic_computed_template_constrained $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_generic_template_property_key_constraint $'u1\nu1\no1\ntrue\ntrue\nu1'
+run_case brand_generic_computed_template_property_key_constraint $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_type_query_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_default_payload $'u1\nu1\nu1\ntrue\ntrue\nu1\nt1\nother'
 run_case brand_generic_computed_template_default_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
@@ -3460,8 +3462,9 @@ run_fail_case brand_generic_template_unknown_never_cross_assign_fail examples/br
 run_fail_case brand_generic_template_arbitrary_payload_ref_fail examples/brand_generic_template_arbitrary_payload_ref_fail.ts "payload type argument must be a string literal, typeof Identifier, unknown, or never"
 run_fail_case brand_generic_template_base_default_fail examples/brand_generic_template_base_default_fail.ts "base type parameter default is unsupported"
 run_fail_case brand_generic_template_bad_shape_fail examples/brand_generic_template_bad_shape_fail.ts "generic type alias 'Brand' is unsupported"
-run_fail_case brand_generic_template_bad_constraint_fail examples/brand_generic_template_bad_constraint_fail.ts "brand template payload constraint must be string"
+run_fail_case brand_generic_template_bad_constraint_fail examples/brand_generic_template_bad_constraint_fail.ts "brand template payload constraint must be string or PropertyKey"
 run_fail_case brand_generic_template_base_constraint_fail examples/brand_generic_template_base_constraint_fail.ts "brand template base type parameter constraint is unsupported"
+run_fail_case brand_generic_template_base_property_key_constraint_fail examples/brand_generic_template_base_property_key_constraint_fail.ts "brand template base type parameter constraint is unsupported"
 run_fail_case brand_ambient_unique_symbol_initializer_fail examples/brand_ambient_unique_symbol_initializer_fail.ts "ambient unique-symbol markers cannot have initializers"
 run_fail_case brand_ambient_unique_symbol_wrong_type_fail examples/brand_ambient_unique_symbol_wrong_type_fail.ts "only \`unique symbol\` ambient markers are supported"
 run_fail_case brand_ambient_unique_symbol_non_const_fail examples/brand_ambient_unique_symbol_non_const_fail.ts "only \`declare const ...: unique symbol\` ambient markers are supported"

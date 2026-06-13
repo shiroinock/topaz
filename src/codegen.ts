@@ -4417,10 +4417,10 @@ class Emitter {
       );
     }
     const payloadConstraint = payloadTypeParam.constraint;
-    if (payloadConstraint !== undefined && !this.isStringTypeParamConstraint(payloadConstraint)) {
+    if (payloadConstraint !== undefined && !this.isBrandPayloadTypeParamConstraint(payloadConstraint)) {
       throw this.typeErr(
         { pos: payloadConstraint.pos },
-        "brand template payload constraint must be string",
+        "brand template payload constraint must be string or PropertyKey",
       );
     }
     const payloadDefaultNode = payloadTypeParam.defaultType;
@@ -4437,8 +4437,12 @@ class Emitter {
     return { fieldKey, payloadDefault };
   }
 
-  private isStringTypeParamConstraint(node: TypeNode): boolean {
-    return node.kind === "type_ref" && node.name === "string" && node.typeArgs.length === 0;
+  private isBrandPayloadTypeParamConstraint(node: TypeNode): boolean {
+    return (
+      node.kind === "type_ref" &&
+      (node.name === "string" || node.name === "PropertyKey") &&
+      node.typeArgs.length === 0
+    );
   }
 
   private brandPayloadSpelling(node: TypeNode): string | undefined {
