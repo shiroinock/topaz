@@ -4794,9 +4794,10 @@ class Emitter {
             let preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
             this.assertNotVoid(awaitedPayload, { pos: awaitExpr.pos }, "await statement value");
             this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
-            const assignmentAwait = this.tryBuildAssignmentAwaitStatementExpression(s.expr, awaitExpr, tempName);
+            const assignmentAwait = this.tryBuildAssignmentAwaitStatementExpression(s.expr, awaitExpr, tempName, steps.length);
             if (assignmentAwait !== undefined) {
-              transformedExpr = assignmentAwait;
+              transformedExpr = assignmentAwait.transformedExpr;
+              preAwaitReceiverTemps = assignmentAwait.preAwaitReceiverTemps;
             } else {
               const receiverAwait = this.tryBuildCallReceiverAwaitExpression(s.expr, awaitExpr, tempName);
               if (receiverAwait !== undefined) {
@@ -4966,7 +4967,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier or class field compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -4977,14 +4978,39 @@ class Emitter {
     expr: Expr,
     awaitExpr: AwaitExpr,
     awaitedTempName: string,
-  ): Expr | undefined {
+    stepOrdinal: number,
+  ): { transformedExpr: Expr; preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> } | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "assign_expr") return undefined;
     const root = rootMaybe;
+    let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+    let transformedTarget = root.target;
     if (root.op !== "=") {
       if (!this.isAwaitLowerableCompoundAssignmentOp(root.op)) return undefined;
       const target = this.unwrapParenExpr(root.target);
-      if (target.kind !== "ident") return undefined;
+      if (target.kind === "ident") {
+        // Identifier compound assignment does not need a target-reference temp.
+      } else if (target.kind === "prop_access") {
+        const receiverTemp = this.tryBuildClassFieldCompoundAssignmentReceiverTemp(target, stepOrdinal);
+        if (receiverTemp === undefined) return undefined;
+        preAwaitReceiverTemps = [receiverTemp];
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: receiverTemp.tempName,
+          pos: target.receiver.pos,
+          end: target.receiver.end,
+        };
+        transformedTarget = {
+          kind: "prop_access",
+          receiver: receiverTempExpr,
+          name: target.name,
+          optional: false,
+          pos: target.pos,
+          end: target.end,
+        };
+      } else {
+        return undefined;
+      }
     }
     if (this.collectAwaitExprsInExpr(root.target).length > 0) {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
@@ -5001,13 +5027,33 @@ class Emitter {
     const transformedExpr: AssignExpr = {
       kind: "assign_expr",
       op: root.op,
-      target: root.target,
+      target: transformedTarget,
       value: this.replaceAwaitExprInExpr(root.value, awaitExpr, awaitedTempExpr),
       pos: root.pos,
       end: root.end,
     };
     this.inferType(transformedExpr);
-    return transformedExpr;
+    return { transformedExpr, preAwaitReceiverTemps };
+  }
+
+  private tryBuildClassFieldCompoundAssignmentReceiverTemp(
+    target: PropAccessExpr,
+    stepOrdinal: number,
+  ): AwaitCallReceiverTemp | undefined {
+    this.checkAssignTarget(target, { pos: target.pos });
+    const receiverType = this.inferType(target.receiver);
+    if (!isClassType(receiverType)) return undefined;
+    const className = classNameOf(receiverType);
+    if (className === undefined) return undefined;
+    const cls = this.classes.get(className);
+    if (cls === undefined || !cls.fields.has(target.name)) return undefined;
+    const tempName = `__topaz_assign_recv_${stepOrdinal}`;
+    this.scope.declareBinding(tempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+    return {
+      tempName,
+      receiver: target.receiver,
+      receiverType,
+    };
   }
 
   private tryBuildCallReceiverAwaitExpression(
