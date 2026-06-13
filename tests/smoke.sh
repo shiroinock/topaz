@@ -2966,6 +2966,7 @@ run_case promise_then_on_rejected $'sync tail\nfulfilled branch\n2\nrejected bra
 run_case promise_finally $'sync tail\ncleanup fulfilled\ncleanup rejected\ncleanup void\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n1\nrejected preserved\nsource\nvoid then\nfifo final then\n5\noverride catch\n77\nrejected recovery\n2\noverride then\n77'
 run_case promise_then_return_promise $'sync tail\nfulfilled callback\nrejected callback\nouter callback\nfifo marker\nthrow callback\ninner callback\nthrow rejection\n9\nfulfilled result\n2\nreturned rejection\nreturned\nthrow result\n9\nrecovered result\n7\nouter result\n14'
 run_case promise_catch_return_promise $'sync tail\nfulfilled bypass\n40\ncatch recover\nrecover\ncatch reject\ncatch nested\nfifo marker\ncatch throw\ninner nested\nthrow rejection\n12\nrecover result\n7\ncatch returned rejection\nreturned\nthrow result\n12\nreturned recovery\n9\nnested result\n5'
+run_case promise_then_two_handler_return_promise $'sync tail\nfulfilled branch\nrejected branch\nrecover\nfulfilled reject branch\nrejected reject branch\nfifo marker\nthrow branch\nthrow rejection\n9\nfulfilled result\n2\nrejected result\n7\nfulfilled returned rejection\nfulfilled returned\nrejected returned rejection\nrejected returned\nthrow result\n9\nfulfilled recovery\n11\nrejected recovery\n13'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
@@ -3029,8 +3030,9 @@ run_fail_case async_method_deferred_fail examples/async_method_deferred_fail.ts 
 run_fail_case async_generic_deferred_fail examples/async_generic_deferred_fail.ts "async generic functions are unsupported"
 run_fail_case promise_then_on_rejected_param_fail examples/promise_then_on_rejected_param_fail.ts "Promise.then onRejected callback parameter type"
 run_fail_case promise_then_on_rejected_return_mismatch_fail examples/promise_then_on_rejected_return_mismatch_fail.ts "Promise.then onRejected callback return type topaz_string does not match fulfilled callback return type topaz_number"
-run_fail_case promise_then_on_rejected_return_promise_fail examples/promise_then_on_rejected_return_promise_fail.ts "Promise.then onRejected callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
-run_fail_case promise_then_two_handler_return_promise_fail examples/promise_then_two_handler_return_promise_fail.ts "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
+run_fail_case promise_then_on_rejected_return_promise_fail examples/promise_then_on_rejected_return_promise_fail.ts "Promise.then onRejected callback returning Promise<T> requires both Promise.then callbacks to return the same Promise<T>"
+run_fail_case promise_then_two_handler_return_promise_fail examples/promise_then_two_handler_return_promise_fail.ts "Promise.then callback returning Promise<T> requires both Promise.then callbacks to return the same Promise<T>"
+run_fail_case promise_then_two_handler_return_promise_mismatch_fail examples/promise_then_two_handler_return_promise_mismatch_fail.ts "Promise.then onRejected callback return type topaz_promise_string does not match fulfilled callback return type topaz_promise_number"
 run_fail_case promise_then_wrong_arity_fail examples/promise_then_wrong_arity_fail.ts "Promise.then expects one or two arguments, got 3"
 run_fail_case promise_then_non_fn_fail examples/promise_then_non_fn_fail.ts "Promise.then callback must be a function value"
 run_fail_case promise_catch_deferred_fail examples/promise_catch_deferred_fail.ts "Promise.catch callback parameter type"

@@ -11804,12 +11804,31 @@ class Emitter {
     }
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
-    const allowPromiseReturn = expr.args.length === 1;
-    this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", allowPromiseReturn);
+    this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true);
     if (expr.args.length === 2) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedResultType = rejectedFnType.returnType;
-      this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", false);
+      if (resultType.kind === "promise") {
+        if (rejectedResultType.kind !== "promise") {
+          throw new CodegenError(
+            { pos: expr.args[0].pos },
+            "Promise.then callback returning Promise<T> requires both Promise.then callbacks to return the same Promise<T>",
+          );
+        }
+        if (!typeEq(resultType.value, rejectedResultType.value)) {
+          throw new CodegenError(
+            { pos: expr.args[1].pos },
+            `Promise.then onRejected callback return type ${typeIdent(rejectedResultType)} does not match fulfilled callback return type ${typeIdent(resultType)}`,
+          );
+        }
+      } else if (rejectedResultType.kind === "promise") {
+        throw new CodegenError(
+          { pos: expr.args[1].pos },
+          "Promise.then onRejected callback returning Promise<T> requires both Promise.then callbacks to return the same Promise<T>",
+        );
+      } else {
+        this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", false);
+      }
       if (!typeEq(resultType, rejectedResultType)) {
         throw new CodegenError(
           { pos: expr.args[1].pos },
@@ -12037,9 +12056,13 @@ class Emitter {
 
   private emitPromiseThenCall(expr: CallExpr, callee: PropAccessExpr, baseType: TopazType): string {
     const promiseType = this.inferPromiseThenCall(expr, baseType);
-    if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
+    if (baseType.kind !== "promise") {
+      throwInternalCodegenError("emitPromiseThenCall: invalid Promise<T> base type");
+    }
+    if (promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseThenCall: invalid Promise<T> types");
     }
+    const promisePayloadType = promiseType.value;
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
     const runnerName = this.recordPromiseThenRunner(baseType.value, resultType, fnType);
@@ -12053,8 +12076,8 @@ class Emitter {
     const cbExpr = this.emitWithExpected(expr.args[0], fnType);
     if (expr.args.length === 2) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
-      const rejectedRunnerName = this.recordPromiseCatchRunner(resultType, rejectedFnType);
-      const rejectedCtxName = this.promiseCatchContextName(resultType, rejectedFnType.returnType);
+      const rejectedRunnerName = this.recordPromiseCatchRunner(promisePayloadType, rejectedFnType);
+      const rejectedCtxName = this.promiseCatchContextName(promisePayloadType, rejectedFnType.returnType);
       const rejectedFnTypeName = typeIdent(rejectedFnType);
       const targetVar = `__topaz_then_target_${id}`;
       const rejectedCbVar = `__topaz_then_reject_cb_${id}`;
