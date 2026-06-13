@@ -1,7 +1,11 @@
 /// <reference lib="es2015.promise" />
 
+function foo(n: number): void {
+  console.log(n);
+}
+
 async function answer(): Promise<number> {
-  await Promise.resolve(1);
+  foo(await Promise.resolve(1));
   return 0;
 }
 

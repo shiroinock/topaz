@@ -29,6 +29,7 @@ import {
   PostfixOpExpr,
   AssignExpr,
   AwaitExpr,
+  ExprStmt,
   ReturnStmt,
   ForOfStmt,
   VarDeclStmt,
@@ -173,7 +174,16 @@ type AwaitInitializerInfo = {
   tempName: string;
 };
 
-type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo | AwaitInitializerInfo;
+type AwaitStatementInfo = {
+  kind: "statement";
+  stmt: ExprStmt;
+  awaitExpr: AwaitExpr;
+  index: number;
+  pc: number;
+  operandType: TopazType;
+};
+
+type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo | AwaitInitializerInfo | AwaitStatementInfo;
 
 type AsyncAwaitFrameInfo = {
   steps: Array<AsyncSuspensionStep>;
@@ -4661,6 +4671,26 @@ class Emitter {
             }
           }
         }
+      } else if (s.kind === "expr_stmt") {
+        const expr = this.unwrapParenExpr(s.expr);
+        if (expr.kind === "await_expr") {
+          const operandType = this.inferType(expr.operand);
+          if (operandType.kind !== "promise") {
+            throw new CodegenError(
+              { pos: expr.operand.pos },
+              `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+            );
+          }
+          steps.push({
+            kind: "statement",
+            stmt: s,
+            awaitExpr: expr,
+            index: i,
+            pc: steps.length,
+            operandType,
+          });
+          supportedAwaitExprs.add(expr);
+        }
       } else if (s.kind === "return_stmt" && i === block.stmts.length - 1) {
         const valueMaybe = s.value;
         if (valueMaybe !== undefined) {
@@ -4788,7 +4818,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
   }
 
   private tryBuildCallArgAwaitExpression(
@@ -5162,6 +5192,7 @@ class Emitter {
         return;
       }
       case "binding":
+      case "statement":
         return;
     }
   }
@@ -5268,6 +5299,8 @@ class Emitter {
           const awaitC = cTypeName(step.awaitedType);
           lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
         }
+      } else if (step.kind === "statement") {
+        lines.push("      (void)source;");
       } else {
         throwInternalCodegenError("unknown async suspension step");
       }
@@ -5411,6 +5444,9 @@ class Emitter {
           );
           lines.push(`        ctx->${current.stmt.name} = ${current.stmt.name};`);
           lines.push(`        (void)${current.stmt.name};`);
+        } else if (current.kind === "statement") {
+          // Fulfilled payload is intentionally discarded; the suffix segment
+          // starts after the original expression statement.
         } else {
           throwInternalCodegenError("unknown non-return async suspension step");
         }
