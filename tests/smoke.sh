@@ -971,7 +971,7 @@ if [[ "${substrate_out}" != *"promise-value-boundary: 3"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"promise-continuation-boundary: 10"* ]]; then
+if [[ "${substrate_out}" != *"promise-continuation-boundary: 13"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: Promise continuation substrate lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
@@ -1022,6 +1022,7 @@ for fragment in \
   'migration=promise-value-boundary' \
   'topaz_promise_then (helper,' \
   'topaz_promise_then_into (helper,' \
+  'topaz_promise_catch (helper,' \
   'migration=promise-continuation-boundary' \
   'topaz_try_push (helper,' \
   'migration=exception-boundary' \
@@ -1036,14 +1037,14 @@ for fragment in \
   fi
 done
 for fragment in \
-  'runtime substrate inventory ok: 69 symbols classified' \
+  'runtime substrate inventory ok: 72 symbols classified' \
   'bigint-limb-intrinsic-family: 8' \
   'c-abi-type-boundary: 8' \
   'container-monomorph-boundary: 13' \
   'exception-boundary: 4' \
   'host-abi-boundary: 12' \
   'libc-libm-boundary: 3' \
-  'promise-continuation-boundary: 10' \
+  'promise-continuation-boundary: 13' \
   'promise-value-boundary: 3' \
   'raw-memory-boundary: 3' \
   'string-buffer-intrinsic-family: 5' \
@@ -2959,6 +2960,7 @@ run_case promise_type_annotation $'promise annotations\nready'
 run_case promise_resolve_value $'number promise\nstring promise\nnumber promise\nstring promise\nresolve values\n42'
 run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejection\nreject values'
 run_case promise_then_fulfilled $'sync\npromise returned\nthen number\n42\nthen string\nready'
+run_case promise_catch_rejected $'sync tail\nfifo then\nfifo catch\nfifo\ncatch number\nnumber\nfulfilled bypass\n20\ncatch string\ncatch void\nvoid\ncatch throw\nthen number\n10\nthen string\nstring\nthen void\ncatch second\n7\nthen throw recovery\n99'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
@@ -3023,7 +3025,10 @@ run_fail_case async_generic_deferred_fail examples/async_generic_deferred_fail.t
 run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
 run_fail_case promise_then_on_rejected_deferred_fail examples/promise_then_on_rejected_deferred_fail.ts "Promise.then expects exactly one argument, got 2"
 run_fail_case promise_then_non_fn_fail examples/promise_then_non_fn_fail.ts "Promise.then callback must be a function value"
-run_fail_case promise_catch_deferred_fail examples/promise_catch_deferred_fail.ts "Promise method '.catch' is deferred until the Promise runtime/scheduler surface is implemented"
+run_fail_case promise_catch_deferred_fail examples/promise_catch_deferred_fail.ts "Promise.catch callback parameter type"
+run_fail_case promise_catch_return_mismatch_fail examples/promise_catch_return_mismatch_fail.ts "Promise.catch callback return type topaz_string does not match expected topaz_number"
+run_fail_case promise_catch_return_promise_fail examples/promise_catch_return_promise_fail.ts "Promise.catch callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
+run_fail_case promise_catch_wrong_arity_fail examples/promise_catch_wrong_arity_fail.ts "Promise.catch expects exactly one argument, got 0"
 run_fail_case promise_finally_deferred_fail examples/promise_finally_deferred_fail.ts "Promise method '.finally' is deferred until the Promise runtime/scheduler surface is implemented"
 run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"

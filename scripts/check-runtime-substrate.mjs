@@ -303,9 +303,21 @@ const inventory = {
     migration: MIGRATION.PROMISE_CONTINUATION,
     next: NEXT.PROMISE_CONTINUATION,
   },
+  topaz_promise_propagate_fulfilled: {
+    category: CATEGORY.PROMISE,
+    reason: "copy a fulfilled source Promise payload into a chained Promise when a rejection handler is bypassed.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
   topaz_promise_fulfilled_payload: {
     category: CATEGORY.PROMISE,
     reason: "typed continuation trampoline payload read boundary for fulfilled Promises.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_add_continuation: {
+    category: CATEGORY.PROMISE,
+    reason: "register a fulfillment or rejection continuation against the shared Promise continuation queue.",
     migration: MIGRATION.PROMISE_CONTINUATION,
     next: NEXT.PROMISE_CONTINUATION,
   },
@@ -318,6 +330,12 @@ const inventory = {
   topaz_promise_then_into: {
     category: CATEGORY.PROMISE,
     reason: "register a fulfillment continuation into an existing target Promise for async frame resumption.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_catch: {
+    category: CATEGORY.PROMISE,
+    reason: "register a rejection continuation and return the chained pending Promise.",
     migration: MIGRATION.PROMISE_CONTINUATION,
     next: NEXT.PROMISE_CONTINUATION,
   },

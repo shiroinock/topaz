@@ -11761,6 +11761,10 @@ class Emitter {
     return this.inferCallbackFn(cb, params, "Promise.then");
   }
 
+  private inferPromiseCatchCallbackFn(cb: Expr): FnType {
+    return this.inferCallbackFn(cb, [T_UNKNOWN], "Promise.catch");
+  }
+
   private inferPromiseThenCall(expr: CallExpr, baseType: TopazType): TopazType {
     if (baseType.kind !== "promise") {
       throwInternalCodegenError("inferPromiseThenCall: base is not Promise<T>");
@@ -11782,6 +11786,38 @@ class Emitter {
       throw new CodegenError(
         { pos: expr.args[0].pos },
         `Promise.then callback return type ${typeIdent(resultType)} is unsupported (must be value-representable or void)`,
+      );
+    }
+    return promiseType;
+  }
+
+  private inferPromiseCatchCall(expr: CallExpr, baseType: TopazType): TopazType {
+    if (baseType.kind !== "promise") {
+      throwInternalCodegenError("inferPromiseCatchCall: base is not Promise<T>");
+    }
+    this.checkPromiseMethodTypeArgs(expr, "catch");
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `Promise.catch expects exactly one argument, got ${expr.args.length}`);
+    }
+    const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
+    const resultType = fnType.returnType;
+    if (resultType.kind === "promise") {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        "Promise.catch callback returning Promise<T> is deferred until explicit thenable assimilation is implemented",
+      );
+    }
+    if (!typeEq(resultType, baseType.value)) {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        `Promise.catch callback return type ${typeIdent(resultType)} does not match expected ${typeIdent(baseType.value)}`,
+      );
+    }
+    const promiseType = promiseOf(baseType.value);
+    if (promiseType === undefined) {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        `Promise.catch callback return type ${typeIdent(resultType)} is unsupported (must be value-representable or void)`,
       );
     }
     return promiseType;
@@ -11838,6 +11874,50 @@ class Emitter {
     return runnerName;
   }
 
+  private promiseCatchRunnerName(payloadType: TopazType): string {
+    return `__topaz_promise_catch_${cIdentFragment(typeKey(payloadType))}`;
+  }
+
+  private promiseCatchContextName(payloadType: TopazType): string {
+    return `${this.promiseCatchRunnerName(payloadType)}_ctx`;
+  }
+
+  private recordPromiseCatchRunner(payloadType: TopazType, fnType: FnType): string {
+    const runnerName = this.promiseCatchRunnerName(payloadType);
+    if (this.promiseThenRunners.has(runnerName)) return runnerName;
+    this.promiseThenRunners.add(runnerName);
+    this.recordFnMonomorph(fnType);
+
+    const ctxName = this.promiseCatchContextName(payloadType);
+    const fnTypeName = typeIdent(fnType);
+    this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n  ${fnTypeName} cb;\n} ${ctxName};`);
+    this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
+
+    const lines: string[] = [];
+    lines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target) {`);
+    lines.push(`  ${ctxName} *ctx = (${ctxName} *)__topaz_ctx;`);
+    lines.push("  topaz_try_frame __topaz_promise_frame;");
+    lines.push("  topaz_try_push(&__topaz_promise_frame);");
+    lines.push("  if (setjmp(__topaz_promise_frame.env) == 0) {");
+    lines.push("    void *__topaz_promise_error = source->rejected_error;");
+    if (payloadType.kind === "void") {
+      lines.push("    ctx->cb.fn(ctx->cb.env, __topaz_promise_error);");
+      lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_fulfill_void(target);");
+    } else {
+      const resultC = cTypeName(payloadType);
+      lines.push(`    ${resultC} __topaz_promise_result = ctx->cb.fn(ctx->cb.env, __topaz_promise_error);`);
+      lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_fulfill_copy(target, &__topaz_promise_result, sizeof(__topaz_promise_result));");
+    }
+    lines.push("  } else {");
+    lines.push("    topaz_promise_reject_with(target, topaz_throw_value);");
+    lines.push("  }");
+    lines.push("}");
+    this.promiseThenDefLines.push(lines.join("\n"));
+    return runnerName;
+  }
+
   private emitPromiseThenCall(expr: CallExpr, callee: PropAccessExpr, baseType: TopazType): string {
     const promiseType = this.inferPromiseThenCall(expr, baseType);
     if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
@@ -11860,6 +11940,30 @@ class Emitter {
       `${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_alloc(sizeof(${ctxName})); ` +
       `*${ctxVar} = (${ctxName}){ .cb = ${cbVar} }; ` +
       `topaz_promise_then(${sourceVar}, ${runnerName}, ${ctxVar}); })`
+    );
+  }
+
+  private emitPromiseCatchCall(expr: CallExpr, callee: PropAccessExpr, baseType: TopazType): string {
+    const promiseType = this.inferPromiseCatchCall(expr, baseType);
+    if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
+      throwInternalCodegenError("emitPromiseCatchCall: invalid Promise<T> types");
+    }
+    const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
+    const runnerName = this.recordPromiseCatchRunner(baseType.value, fnType);
+    const ctxName = this.promiseCatchContextName(baseType.value);
+    const fnTypeName = typeIdent(fnType);
+    const id = this.tmpCounter++;
+    const sourceVar = `__topaz_catch_src_${id}`;
+    const cbVar = `__topaz_catch_cb_${id}`;
+    const ctxVar = `__topaz_catch_ctx_${id}`;
+    const sourceExpr = this.emitExpression(callee.receiver);
+    const cbExpr = this.emitWithExpected(expr.args[0], fnType);
+    return (
+      `({ void *${sourceVar} = ${sourceExpr}; ` +
+      `${fnTypeName} ${cbVar} = ${cbExpr}; ` +
+      `${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_alloc(sizeof(${ctxName})); ` +
+      `*${ctxVar} = (${ctxName}){ .cb = ${cbVar} }; ` +
+      `topaz_promise_catch(${sourceVar}, ${runnerName}, ${ctxVar}); })`
     );
   }
 
@@ -12981,6 +13085,9 @@ class Emitter {
       if (isPromiseType(baseType)) {
         if (prop.name === "then") {
           return this.emitPromiseThenCall(expr, prop, baseType);
+        }
+        if (prop.name === "catch") {
+          return this.emitPromiseCatchCall(expr, prop, baseType);
         }
         throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
       }
@@ -15406,6 +15513,9 @@ class Emitter {
         if (isPromiseType(baseType)) {
           if (prop.name === "then") {
             return this.inferPromiseThenCall(expr, baseType);
+          }
+          if (prop.name === "catch") {
+            return this.inferPromiseCatchCall(expr, baseType);
           }
           throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
         }
