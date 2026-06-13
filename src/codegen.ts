@@ -121,24 +121,32 @@ type CheckedParseIntArgs = {
 };
 
 type AwaitBindingInfo = {
+  kind: "binding";
   stmt: VarDeclStmt;
   awaitExpr: AwaitExpr;
   index: number;
+  pc: number;
   operandType: TopazType;
   bindingType: TopazType;
 };
 
-type AwaitTerminalReturnInfo = {
+type AwaitReturnInfo = {
+  kind: "return";
   stmt: ReturnStmt;
   awaitExpr: AwaitExpr;
+  returnExpr: Expr | undefined;
   index: number;
+  pc: number;
   operandType: TopazType;
-  payloadType: TopazType;
+  awaitedType: TopazType;
+  returnType: TopazType;
+  tempName: string;
 };
 
+type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo;
+
 type AsyncAwaitFrameInfo = {
-  bindings: Array<AwaitBindingInfo>;
-  terminalReturn?: AwaitTerminalReturnInfo;
+  steps: Array<AsyncSuspensionStep>;
 };
 
 type AsyncFrameThisContext = {
@@ -4411,8 +4419,7 @@ class Emitter {
         throw new CodegenError(awaitAnchor, "await inside try/catch/finally is deferred");
       }
     }
-    const bindings: Array<AwaitBindingInfo> = [];
-    let terminalReturn: AwaitTerminalReturnInfo | undefined = undefined;
+    const steps: Array<AsyncSuspensionStep> = [];
     const supportedAwaitExprs = new Set<AwaitExpr>();
     this.scope.push();
     for (let i = 0; i < block.stmts.length; i++) {
@@ -4445,7 +4452,15 @@ class Emitter {
               }
               bindingType = annotated;
             }
-            bindings.push({ stmt: s, awaitExpr: init, index: i, operandType, bindingType });
+            steps.push({
+              kind: "binding",
+              stmt: s,
+              awaitExpr: init,
+              index: i,
+              pc: steps.length,
+              operandType,
+              bindingType,
+            });
             supportedAwaitExprs.add(init);
             this.scope.declareBinding(s.name, bindingType, s.declKind === "const", { pos: s.pos });
           }
@@ -4454,32 +4469,68 @@ class Emitter {
         const valueMaybe = s.value;
         if (valueMaybe !== undefined) {
           const value = this.unwrapParenExpr(valueMaybe);
-          if (value.kind === "await_expr") {
-            const operandType = this.inferType(value.operand);
+          const returnAwaits = this.collectAwaitExprsInExpr(valueMaybe);
+          if (returnAwaits.length > 0) {
+            if (returnAwaits.length > 1) {
+              throw new CodegenError(
+                { pos: returnAwaits[1].pos },
+                this.unsupportedAwaitLoweringMessage(),
+              );
+            }
+            const awaitExpr = returnAwaits[0];
+            if (!this.terminalReturnAwaitPlacementSupported(valueMaybe, awaitExpr)) {
+              throw new CodegenError(
+                { pos: awaitExpr.pos },
+                this.unsupportedAwaitLoweringMessage(),
+              );
+            }
+            const operandType = this.inferType(awaitExpr.operand);
             if (operandType.kind !== "promise") {
               throw new CodegenError(
-                { pos: value.operand.pos },
+                { pos: awaitExpr.operand.pos },
                 `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
               );
             }
             const awaitedPayload = operandType.value;
-            if (!typeEq(awaitedPayload, payloadType) && !this.isAssignableTo(awaitedPayload, payloadType)) {
+            const isDirectReturnAwait = value.kind === "await_expr";
+            let returnExpr: Expr | undefined = undefined;
+            let returnType = awaitedPayload;
+            const tempName = `__topaz_return_await_${steps.length}`;
+            if (!isDirectReturnAwait) {
+              this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
+              const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
+              const transformedReturnExpr = this.replaceAwaitExprInExpr(valueMaybe, awaitExpr, tempExpr);
+              returnExpr = transformedReturnExpr;
+              returnType = this.inferType(transformedReturnExpr);
+            }
+            if (!typeEq(returnType, payloadType) && !this.isAssignableTo(returnType, payloadType)) {
               throw new CodegenError(
                 { pos: s.pos },
-                `type mismatch: expected ${typeIdent(payloadType)}, got ${typeIdent(awaitedPayload)}`,
+                `type mismatch: expected ${typeIdent(payloadType)}, got ${typeIdent(returnType)}`,
               );
             }
-            terminalReturn = { stmt: s, awaitExpr: value, index: i, operandType, payloadType: awaitedPayload };
-            supportedAwaitExprs.add(value);
+            steps.push({
+              kind: "return",
+              stmt: s,
+              awaitExpr,
+              returnExpr,
+              index: i,
+              pc: steps.length,
+              operandType,
+              awaitedType: awaitedPayload,
+              returnType,
+              tempName,
+            });
+            supportedAwaitExprs.add(awaitExpr);
           }
         }
       }
     }
     this.scope.pop();
-    if (bindings.length === 0 && terminalReturn === undefined) {
+    if (steps.length === 0) {
       throw new CodegenError(
         awaitAnchor,
-        "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
+        this.unsupportedAwaitLoweringMessage(),
       );
     }
     for (const s of block.stmts) {
@@ -4487,14 +4538,13 @@ class Emitter {
         if (!supportedAwaitExprs.has(found)) {
           throw new CodegenError(
             { pos: found.pos },
-            "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
+            this.unsupportedAwaitLoweringMessage(),
           );
         }
       }
     }
-    const firstAwaitIndex = bindings.length === 0 ? terminalReturn!.index : bindings[0].index;
-    const lastBindingIndex = bindings.length === 0 ? firstAwaitIndex : bindings[bindings.length - 1].index;
-    const lastAwaitIndex = terminalReturn === undefined ? lastBindingIndex : terminalReturn.index;
+    const firstAwaitIndex = steps[0].index;
+    const lastAwaitIndex = steps[steps.length - 1].index;
     for (let i = 0; i < firstAwaitIndex; i++) {
       const s = block.stmts[i];
       if (s.kind === "var_decl" || s.kind === "var_destr_decl") {
@@ -4526,10 +4576,63 @@ class Emitter {
       // Keep payloadType threaded here so type-checking work above mirrors the
       // no-await path; void async functions are otherwise handled by return lowering.
     }
-    if (terminalReturn === undefined) {
-      return { bindings };
+    return { steps };
+  }
+
+  private collectAwaitExprsInExpr(expr: Expr): Array<AwaitExpr> {
+    const out: Array<AwaitExpr> = [];
+    this.collectAwaitExprsInExprInto(expr, out);
+    return out;
+  }
+
+  private unsupportedAwaitLoweringMessage(): string {
+    return "await expression lowering is deferred; only top-level await bindings and one terminal return expression await are supported";
+  }
+
+  private terminalReturnAwaitPlacementSupported(expr: Expr, target: AwaitExpr): boolean {
+    if (expr.kind === "await_expr") return expr.pos === target.pos && expr.end === target.end;
+    switch (expr.kind) {
+      case "paren_expr":
+        return this.terminalReturnAwaitPlacementSupported(expr.inner, target);
+      case "non_null":
+        return this.terminalReturnAwaitPlacementSupported(expr.operand, target);
+      case "prefix_op":
+        return this.terminalReturnAwaitPlacementSupported(expr.operand, target);
+      case "typeof_expr":
+        return this.terminalReturnAwaitPlacementSupported(expr.operand, target);
+      case "bin_op":
+        return (
+          this.terminalReturnAwaitPlacementSupported(expr.lhs, target) ||
+          this.terminalReturnAwaitPlacementSupported(expr.rhs, target)
+        );
+      default:
+        return false;
     }
-    return { bindings, terminalReturn };
+  }
+
+  private replaceAwaitExprInExpr(expr: Expr, target: AwaitExpr, replacement: Expr): Expr {
+    if (expr.kind === "await_expr" && expr.pos === target.pos && expr.end === target.end) return replacement;
+    switch (expr.kind) {
+      case "paren_expr":
+        return { kind: "paren_expr", inner: this.replaceAwaitExprInExpr(expr.inner, target, replacement), pos: expr.pos, end: expr.end };
+      case "prefix_op":
+        return { kind: "prefix_op", op: expr.op, operand: this.replaceAwaitExprInExpr(expr.operand, target, replacement), pos: expr.pos, end: expr.end };
+      case "typeof_expr":
+        return { kind: "typeof_expr", operand: this.replaceAwaitExprInExpr(expr.operand, target, replacement), pos: expr.pos, end: expr.end };
+      case "non_null":
+        return { kind: "non_null", operand: this.replaceAwaitExprInExpr(expr.operand, target, replacement), pos: expr.pos, end: expr.end };
+      case "bin_op":
+        return {
+          kind: "bin_op",
+          op: expr.op,
+          lhs: this.replaceAwaitExprInExpr(expr.lhs, target, replacement),
+          rhs: this.replaceAwaitExprInExpr(expr.rhs, target, replacement),
+          pos: expr.pos,
+          end: expr.end,
+        };
+      default:
+        return expr;
+    }
   }
 
   private emitAsyncFunctionBodyWithAwaitFrame(
@@ -4540,18 +4643,9 @@ class Emitter {
     runnerCaptureContext?: CaptureContext,
     runnerThisContext?: AsyncFrameThisContext,
   ): string {
-    const terminalReturn = frame.terminalReturn;
-    let firstAwaitIndex = 0;
-    let firstPc = 0;
-    if (frame.bindings.length === 0) {
-      if (terminalReturn === undefined) {
-        throwInternalCodegenError("async await frame has no await step");
-      }
-      firstAwaitIndex = terminalReturn.index;
-      firstPc = frame.bindings.length;
-    } else {
-      firstAwaitIndex = frame.bindings[0].index;
-    }
+    const firstStep = frame.steps[0];
+    const firstAwaitIndex = firstStep.index;
+    const firstPc = firstStep.pc;
     const id = this.asyncAwaitCounter++;
     const ctxName = `__topaz_async_await_${id}_frame`;
     const runnerName = `__topaz_async_await_${id}_runner`;
@@ -4581,16 +4675,7 @@ class Emitter {
       lines.push(this.emitStatement(s, 2));
       this.applyCarryNarrowing(s);
     }
-    let operandExpr = "";
-    if (frame.bindings.length === 0) {
-      if (terminalReturn === undefined) {
-        throwInternalCodegenError("async await frame has no await step");
-      }
-      operandExpr = this.emitWithExpected(terminalReturn.awaitExpr.operand, terminalReturn.operandType);
-    } else {
-      const firstBinding = frame.bindings[0];
-      operandExpr = this.emitWithExpected(firstBinding.awaitExpr.operand, firstBinding.operandType);
-    }
+    const operandExpr = this.emitWithExpected(firstStep.awaitExpr.operand, firstStep.operandType);
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
     for (const p of params) {
       lines.push(`    ${frameVar}->${p.name} = ${p.name};`);
@@ -4623,8 +4708,15 @@ class Emitter {
     runnerCaptureContext?: CaptureContext,
     runnerThisContext?: AsyncFrameThisContext,
   ): void {
-    const terminalReturn = frame.terminalReturn;
-    const terminalPc = frame.bindings.length;
+    const bindingSteps: Array<AwaitBindingInfo> = [];
+    let returnStep: AwaitReturnInfo | undefined = undefined;
+    for (const step of frame.steps) {
+      if (step.kind === "binding") {
+        bindingSteps.push(step);
+      } else {
+        returnStep = step;
+      }
+    }
     const fields: string[] = [];
     fields.push("  int __topaz_pc;");
     fields.push("  topaz_promise *output;");
@@ -4635,8 +4727,11 @@ class Emitter {
       fields.push("  void *__topaz_env;");
     }
     for (const p of params) fields.push(`  ${cTypeName(p.type)} ${p.name};`);
-    for (const binding of frame.bindings) {
+    for (const binding of bindingSteps) {
       if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+    }
+    if (returnStep !== undefined && returnStep.awaitedType.kind !== "void") {
+      fields.push(`  ${cTypeName(returnStep.awaitedType)} ${returnStep.tempName};`);
     }
     this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n${fields.join("\n")}\n} ${ctxName};`);
     this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
@@ -4664,37 +4759,24 @@ class Emitter {
       lines.push("  (void)__topaz_env;");
     }
     lines.push("  switch (ctx->__topaz_pc) {");
-    for (let i = 0; i < frame.bindings.length; i++) {
-      const binding = frame.bindings[i];
-      lines.push(`    case ${i}: {`);
-      if (binding.bindingType.kind === "void") {
-        lines.push("      (void)source;");
+    for (const step of frame.steps) {
+      lines.push(`    case ${step.pc}: {`);
+      if (step.kind === "binding") {
+        if (step.bindingType.kind === "void") {
+          lines.push("      (void)source;");
+        } else {
+          const awaitC = cTypeName(step.bindingType);
+          lines.push(`      ctx->${step.stmt.name} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+        }
       } else {
-        const awaitC = cTypeName(binding.bindingType);
-        lines.push(`      ctx->${binding.stmt.name} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+        if (step.awaitedType.kind === "void") {
+          lines.push("      (void)source;");
+        } else {
+          const awaitC = cTypeName(step.awaitedType);
+          lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+        }
       }
       lines.push("      break;");
-      lines.push("    }");
-    }
-    if (terminalReturn !== undefined) {
-      lines.push(`    case ${terminalPc}: {`);
-      if (payloadType.kind === "void") {
-        lines.push("      (void)source;");
-        lines.push("      topaz_promise_fulfill_void(target);");
-      } else {
-        const sourceC = cTypeName(terminalReturn.payloadType);
-        const targetC = cTypeName(payloadType);
-        lines.push(`      ${sourceC} __topaz_return_await_value = *(const ${sourceC} *)topaz_promise_fulfilled_payload(source);`);
-        const coerced = this.applyCoercion(
-          "__topaz_return_await_value",
-          terminalReturn.payloadType,
-          payloadType,
-          { pos: terminalReturn.stmt.pos },
-        );
-        lines.push(`      ${targetC} __topaz_return_await_result = ${coerced};`);
-        lines.push("      topaz_promise_fulfill_copy(target, &__topaz_return_await_result, sizeof(__topaz_return_await_result));");
-      }
-      lines.push("      return;");
       lines.push("    }");
     }
     lines.push("    default:");
@@ -4705,25 +4787,25 @@ class Emitter {
     lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
     this.liveTryFrames++;
     lines.push("    switch (ctx->__topaz_pc) {");
-    for (let i = 0; i < frame.bindings.length; i++) {
-      const current = frame.bindings[i];
-      const hasNextBinding = i + 1 < frame.bindings.length;
+    for (let i = 0; i < frame.steps.length; i++) {
+      const current = frame.steps[i];
+      const hasNextStep = i + 1 < frame.steps.length;
       const segmentStart = current.index + 1;
       let segmentEnd = stmts.length;
-      if (hasNextBinding) {
-        segmentEnd = frame.bindings[i + 1].index;
-      } else if (terminalReturn !== undefined) {
-        segmentEnd = terminalReturn.index;
+      if (hasNextStep) {
+        const nextForSegment = frame.steps[i + 1];
+        segmentEnd = nextForSegment.index;
       }
-      lines.push(`      case ${i}: {`);
+      lines.push(`      case ${current.pc}: {`);
       this.scope.push();
+      const currentStmt = stmts[current.index];
       for (const p of params) {
-        this.scope.declareBinding(p.name, p.type, /* isConst */ false, { pos: current.stmt.pos });
+        this.scope.declareBinding(p.name, p.type, /* isConst */ false, { pos: currentStmt.pos });
         lines.push(`        ${cTypeName(p.type)} ${p.name} = ctx->${p.name};`);
         lines.push(`        (void)${p.name};`);
       }
-      for (let j = 0; j <= i; j++) {
-        const prior = frame.bindings[j];
+      for (const prior of bindingSteps) {
+        if (prior.pc > current.pc) continue;
         this.scope.declareBinding(
           prior.stmt.name,
           prior.bindingType,
@@ -4735,27 +4817,59 @@ class Emitter {
           lines.push(`        (void)${prior.stmt.name};`);
         }
       }
-      for (const s of stmts.slice(segmentStart, segmentEnd)) {
-        lines.push(this.emitStatement(s, 4));
-        this.applyCarryNarrowing(s);
-      }
-      if (hasNextBinding) {
-        const next = frame.bindings[i + 1];
-        const nextSourceVar = `__topaz_await_next_${i}`;
-        const operandExpr = this.emitWithExpected(next.awaitExpr.operand, next.operandType);
-        lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
-        lines.push(`        ctx->__topaz_pc = ${i + 1};`);
-        lines.push(`        topaz_try_pop();`);
-        lines.push(`        topaz_promise_then_into(${nextSourceVar}, ${runnerName}, ctx, target);`);
-        lines.push("        return;");
-      } else if (terminalReturn !== undefined) {
-        const nextSourceVar = `__topaz_await_return_${i}`;
-        const operandExpr = this.emitWithExpected(terminalReturn.awaitExpr.operand, terminalReturn.operandType);
-        lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
-        lines.push(`        ctx->__topaz_pc = ${terminalPc};`);
-        lines.push(`        topaz_try_pop();`);
-        lines.push(`        topaz_promise_then_into(${nextSourceVar}, ${runnerName}, ctx, target);`);
-        lines.push("        return;");
+      if (current.kind === "return") {
+        const returnExpr = current.returnExpr;
+        if (returnExpr === undefined) {
+          if (payloadType.kind === "void") {
+            lines.push("        topaz_try_pop();");
+            lines.push("        topaz_promise_fulfill_void(target);");
+            lines.push("        return;");
+          } else {
+            const sourceC = cTypeName(current.awaitedType);
+            const targetC = cTypeName(payloadType);
+            const directTmp = `__topaz_return_await_direct_${i}`;
+            lines.push(`        ${sourceC} ${directTmp} = ctx->${current.tempName};`);
+            const coerced = this.applyCoercion(
+              directTmp,
+              current.awaitedType,
+              payloadType,
+              { pos: current.stmt.pos },
+            );
+            const resultTmp = `__topaz_return_await_result_${i}`;
+            lines.push(`        ${targetC} ${resultTmp} = ${coerced};`);
+            lines.push("        topaz_try_pop();");
+            lines.push(`        topaz_promise_fulfill_copy(target, &${resultTmp}, sizeof(${resultTmp}));`);
+            lines.push("        return;");
+          }
+        } else {
+          if (current.awaitedType.kind !== "void") {
+            this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
+            lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
+            lines.push(`        (void)${current.tempName};`);
+          }
+          const resultTmp = `__topaz_return_expr_result_${i}`;
+          const resultC = cTypeName(payloadType);
+          const resultExpr = this.emitWithExpected(returnExpr, payloadType);
+          lines.push(`        ${resultC} ${resultTmp} = ${resultExpr};`);
+          lines.push("        topaz_try_pop();");
+          lines.push(`        topaz_promise_fulfill_copy(target, &${resultTmp}, sizeof(${resultTmp}));`);
+          lines.push("        return;");
+        }
+      } else {
+        for (const s of stmts.slice(segmentStart, segmentEnd)) {
+          lines.push(this.emitStatement(s, 4));
+          this.applyCarryNarrowing(s);
+        }
+        if (hasNextStep) {
+          const next = frame.steps[i + 1];
+          const nextSourceVar = `__topaz_await_next_${i}`;
+          const operandExpr = this.emitWithExpected(next.awaitExpr.operand, next.operandType);
+          lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
+          lines.push(`        ctx->__topaz_pc = ${next.pc};`);
+          lines.push("        topaz_try_pop();");
+          lines.push(`        topaz_promise_then_into(${nextSourceVar}, ${runnerName}, ctx, target);`);
+          lines.push("        return;");
+        }
       }
       this.scope.pop();
       lines.push("        break;");

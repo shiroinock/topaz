@@ -2944,6 +2944,7 @@ run_case async_arrow_await $'before arrow await\nsync tail\nbetween arrow awaits
 run_case async_method_no_await $'method body\nsync tail\nthen method\n42'
 run_case async_method_await $'method before await\nsync tail\nmethod between awaits\nmethod after await\nthen method await\n42'
 run_case async_return_await_terminal $'sync tail\ndeclared\n10\nmethod\n8\nexpr\n5\narrow\n22'
+run_case async_return_await_expression $'sync tail\ndeclared\n42\nmethod\n9\nexpr\n10\narrow\n23'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -3079,7 +3080,7 @@ run_case function_expression $'4\n15\n5'
 run_case async_function_expression_no_await $'function body\nsync tail\nthen inline\n7\nthen block\n42'
 run_case async_function_expression_await $'before function await\nsync tail\nbetween function awaits\nafter function await\nthen function await\n42'
 run_fail_case function_expression_named_deferred_fail examples/function_expression_named_deferred_fail.ts "named function expressions are deferred"
-run_fail_case function_expression_async_deferred_fail examples/function_expression_async_deferred_fail.ts 'await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported'
+run_fail_case function_expression_async_deferred_fail examples/function_expression_async_deferred_fail.ts 'await expression lowering is deferred'
 run_case array_of_fn $'6\n50\n2\n-95\n13\n16\n60\n3\n101\n102\n103\n19\n49\n0\nn=7\nn*2=14'
 run_fail_case map_of_fn_fail examples/map_of_fn_fail.ts "no Map monomorph for key=topaz_string, value=topaz_fn_"
 run_fail_case set_of_fn_fail examples/set_of_fn_fail.ts "no Set monomorph for element type topaz_fn_"
