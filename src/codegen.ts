@@ -204,6 +204,8 @@ type SyntheticCallKind =
   | "path_dirname"
   | "path_basename"
   | "path_extname"
+  | "path_resolve"
+  | "path_join"
   | "url_file_url_to_path";
 
 type OrdinaryCallPlan =
@@ -11701,6 +11703,28 @@ class Emitter {
         label: "extname",
       };
     }
+    if (callee.name === "resolve") {
+      const args = this.checkNodePathResolveArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "path_resolve",
+        params: args.map((_, index) => this.makeParamInfo(`segment${index}`, T_STRING)),
+        returnType: T_STRING,
+        label: "resolve",
+      };
+    }
+    if (callee.name === "join") {
+      const args = this.checkNodePathJoinArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "path_join",
+        params: args.map((_, index) => this.makeParamInfo(`segment${index}`, T_STRING)),
+        returnType: T_STRING,
+        label: "join",
+      };
+    }
     if (callee.name === "fileURLToPath") {
       this.checkNodeUrlFileURLToPathArgs(expr);
       return {
@@ -12067,6 +12091,12 @@ class Emitter {
       }
       if (plan.syntheticKind === "path_extname") {
         return this.emitNodePathExtname(expr);
+      }
+      if (plan.syntheticKind === "path_resolve") {
+        return this.emitNodePathResolve(expr);
+      }
+      if (plan.syntheticKind === "path_join") {
+        return this.emitNodePathJoin(expr);
       }
       if (plan.syntheticKind === "url_file_url_to_path") {
         return this.emitNodeUrlFileURLToPath(expr);
