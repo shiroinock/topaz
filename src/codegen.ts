@@ -208,6 +208,8 @@ type SyntheticCallKind =
   | "path_join"
   | "fs_read_file_sync"
   | "fs_exists_sync"
+  | "fs_write_file_sync"
+  | "fs_mkdir_sync"
   | "url_file_url_to_path";
 
 type OrdinaryCallPlan =
@@ -5071,7 +5073,9 @@ class Emitter {
     } else if (plan.kind === "fn_value" && calleeMaybe.kind !== "ident") {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
-    this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
+    if (!(plan.kind === "synthetic_call" && plan.syntheticKind === "fs_mkdir_sync")) {
+      this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
+    }
 
     const preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
     const transformedArgs: Array<Expr> = [];
@@ -11749,6 +11753,28 @@ class Emitter {
         label: "existsSync",
       };
     }
+    if (callee.name === "writeFileSync") {
+      this.checkNodeFsWriteFileSyncArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "fs_write_file_sync",
+        params: [this.makeParamInfo("path", T_STRING), this.makeParamInfo("content", T_STRING)],
+        returnType: T_VOID,
+        label: "writeFileSync",
+      };
+    }
+    if (callee.name === "mkdirSync") {
+      this.checkNodeFsMkdirSyncArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "fs_mkdir_sync",
+        params: [this.makeParamInfo("path", T_STRING)],
+        returnType: T_VOID,
+        label: "mkdirSync",
+      };
+    }
     if (callee.name === "fileURLToPath") {
       this.checkNodeUrlFileURLToPathArgs(expr);
       return {
@@ -11767,8 +11793,6 @@ class Emitter {
     return (
       name === "resolve" ||
       name === "join" ||
-      name === "writeFileSync" ||
-      name === "mkdirSync" ||
       name === "execFileSync" ||
       name === "exit" ||
       name === "writeStdout" ||
@@ -12125,6 +12149,12 @@ class Emitter {
       }
       if (plan.syntheticKind === "fs_exists_sync") {
         return this.emitNodeFsExistsSync(expr);
+      }
+      if (plan.syntheticKind === "fs_write_file_sync") {
+        return this.emitNodeFsWriteFileSync(expr);
+      }
+      if (plan.syntheticKind === "fs_mkdir_sync") {
+        return this.emitNodeFsMkdirSync(expr);
       }
       if (plan.syntheticKind === "url_file_url_to_path") {
         return this.emitNodeUrlFileURLToPath(expr);

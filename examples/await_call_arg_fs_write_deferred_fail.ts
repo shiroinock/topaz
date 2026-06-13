@@ -3,7 +3,8 @@
 import { writeFileSync } from "node:fs";
 
 async function bad(): Promise<void> {
-  writeFileSync(await Promise.resolve("/tmp/topaz.txt"), "x");
+  const r = writeFileSync(await Promise.resolve("/tmp/topaz.txt"), "x");
+  console.log(r);
   return;
 }
 
