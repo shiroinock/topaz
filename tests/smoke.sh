@@ -2859,7 +2859,7 @@ run_case switch_check $'1699\n22'
 run_case switch_case_block_exit $'10\n30\n99'
 run_fail_case switch_case_block_fallthrough_fail examples/switch_case_block_fallthrough_fail.ts "case body must end with"
 run_case number_format $'3.14\n0.30000000000000004\n1.5\n-1.5\n1e+21\n1e-7\n0.000001\n100000000000000000'
-run_case number_to_string $'123\n0\n-12\n1e+21\n3.14\n0.30000000000000004\n42\nn=42\n4\n3'
+run_case number_to_string $'123\n0\n-12\n1e+21\n3.14\n0.30000000000000004\n42\nn=42\n4\n3\nnumber descriptor recv\n8'
 run_fail_case number_to_string_arity_fail examples/number_to_string_arity_fail.ts "Number.toString expects no arguments"
 run_fail_case number_unsupported_method_fail examples/number_unsupported_method_fail.ts "unsupported method '.toFixed' on topaz_number"
 run_case string_basic $'hello, topaz!\n13\nabcdef\ntrue\ntrue\nwoof'
@@ -2951,6 +2951,7 @@ run_case async_await_method_call_arg_initializer $'declared recv\ndeclared pre\n
 run_case async_return_call_arg_await $'declared pre\narrow pre\nmethod recv\nmethod pre\nexpr recv\nexpr pre\nsync tail\ndeclared post\ndeclared call\narrow post\narrow call\nmethod post\nmethod call\nexpr post\nexpr call\ndeclared then\n123\narrow then\n456\nmethod then\n3789\nexpr then\n4234'
 run_case call_lowering_descriptor_baseline $'bare call\n3\ngeneric call\n4\nfn value call\n8\nclass method call\nclass method body\n12\ninterface method call\ninterface method body\n23\nasync pre\nsync tail\nasync read\n12\nasync then\n12'
 run_case async_await_map_set_call_arg $'declared get recv\narrow has recv\nmethod has recv\nexpr return recv\ndelete return recv\nsync tail\ndeclared after\n10\narrow after\ntrue\nmethod after\ntrue\ndeclared then\n10\narrow then\ntrue\nmethod then\ntrue\nexpr then\ntrue\ndelete then\ntrue'
+run_case async_await_string_call_arg $'declared char recv\narrow slice recv\nmethod slice recv\nmethod pre\nexpr repeat recv\nstarts recv\nreturn slice recv\nsync tail\ndeclared after\n98\narrow after\ncdef\nmethod after\nbcd\nexpr after\nxyxyxy\nstarts after\ntrue\ndeclared then\n98\narrow then\ncdef\nmethod then\nbcd\nexpr then\nxyxyxy\nstarts then\ntrue\nreturn then\ndef'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -2958,6 +2959,7 @@ run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_multiple_deferred_fail examples/await_call_arg_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_builtin_deferred_fail examples/await_call_arg_builtin_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_call_arg_string_static_deferred_fail examples/await_call_arg_string_static_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_method_deferred_fail examples/await_call_arg_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_collection_void_deferred_fail examples/await_call_arg_collection_void_deferred_fail.ts "Map.set returns void in this dialect and cannot be used as a value"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"

@@ -1,5 +1,10 @@
 const n: number = 41;
 
+function pickNumber(label: string, value: number): number {
+  console.log(label);
+  return value;
+}
+
 console.log((123).toString());
 console.log((0).toString());
 console.log((-12).toString());
@@ -14,3 +19,4 @@ console.log(label.length);
 
 const fixedTmps: Array<string> = ["a", "b", "c"];
 console.log(fixedTmps.length.toString());
+console.log(pickNumber("number descriptor recv", 8).toString());

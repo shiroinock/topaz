@@ -250,6 +250,26 @@ type OrdinaryCallPlan =
       params: Array<ParamInfo>;
       returnType: TopazType;
       label: string;
+    }
+  | {
+      kind: "string_method";
+      callee: PropAccessExpr;
+      receiver: Expr;
+      receiverType: TopazType;
+      methodName: string;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
+    }
+  | {
+      kind: "number_method";
+      callee: PropAccessExpr;
+      receiver: Expr;
+      receiverType: TopazType;
+      methodName: string;
+      params: Array<ParamInfo>;
+      returnType: TopazType;
+      label: string;
     };
 
 type AsyncFrameThisContext = {
@@ -4904,6 +4924,28 @@ class Emitter {
         end: plan.callee.end,
       };
     } else if (plan.kind === "set_method") {
+      const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
+      this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: plan.receiver,
+        receiverType: plan.receiverType,
+      });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: plan.receiver.pos,
+        end: plan.receiver.end,
+      };
+      transformedCallee = {
+        kind: "prop_access",
+        receiver: receiverTempExpr,
+        name: plan.methodName,
+        optional: false,
+        pos: plan.callee.pos,
+        end: plan.callee.end,
+      };
+    } else if (plan.kind === "string_method") {
       const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
       this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
       preAwaitReceiverTemps.push({
@@ -11292,6 +11334,10 @@ class Emitter {
     return { name, type: paramType, isOptional: false };
   }
 
+  private makeOptionalParamInfo(name: string, paramType: TopazType): ParamInfo {
+    return { name, type: paramType, isOptional: true };
+  }
+
   private noParamInfos(): Array<ParamInfo> {
     return [];
   }
@@ -11408,6 +11454,119 @@ class Emitter {
     }
   }
 
+  private resolveStringMethodCallPlan(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+    baseType: TopazType,
+  ): OrdinaryCallPlan {
+    const methodName = callee.name;
+    let params: Array<ParamInfo> = [];
+    let returnType: TopazType = T_VOID;
+    if (methodName === "charCodeAt") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, "String.charCodeAt expects exactly one argument");
+      }
+      const indexArg = expr.args[0];
+      const argType = this.inferType(indexArg);
+      if (argType.kind !== "number") {
+        throw new CodegenError(
+          { pos: indexArg.pos },
+          `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
+        );
+      }
+      params = [this.makeParamInfo("index", T_NUMBER)];
+      returnType = T_NUMBER;
+    } else if (methodName === "slice") {
+      if (expr.args.length > 2) {
+        throw new CodegenError({ pos: expr.pos }, "String.slice expects at most two arguments");
+      }
+      for (const arg of expr.args) {
+        const at = this.inferType(arg);
+        if (at.kind !== "number") {
+          throw new CodegenError(
+            { pos: arg.pos },
+            `String.slice argument must be number, got ${typeIdent(at)}`,
+          );
+        }
+      }
+      params = [
+        this.makeOptionalParamInfo("start", T_NUMBER),
+        this.makeOptionalParamInfo("end", T_NUMBER),
+      ];
+      returnType = T_STRING;
+    } else if (methodName === "repeat") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, "String.repeat expects exactly one argument");
+      }
+      const countArg = expr.args[0];
+      const countType = this.inferType(countArg);
+      if (countType.kind !== "number") {
+        throw new CodegenError(
+          { pos: countArg.pos },
+          `String.repeat argument must be number, got ${typeIdent(countType)}`,
+        );
+      }
+      params = [this.makeParamInfo("count", T_NUMBER)];
+      returnType = T_STRING;
+    } else if (methodName === "trimStart") {
+      if (expr.args.length !== 0) {
+        throw new CodegenError({ pos: expr.pos }, "String.trimStart expects no arguments");
+      }
+      params = this.noParamInfos();
+      returnType = T_STRING;
+    } else if (methodName === "startsWith" || methodName === "endsWith") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, `String.${methodName} expects exactly one argument`);
+      }
+      const searchArg = expr.args[0];
+      const argType = this.inferType(searchArg);
+      if (argType.kind !== "string") {
+        throw new CodegenError(
+          { pos: searchArg.pos },
+          `String.${methodName} argument must be string, got ${typeIdent(argType)}`,
+        );
+      }
+      params = [this.makeParamInfo("search", T_STRING)];
+      returnType = T_BOOLEAN;
+    } else {
+      throw new CodegenError({ pos: callee.pos }, `unsupported method '.${methodName}' on topaz_string`);
+    }
+    return {
+      kind: "string_method",
+      callee,
+      receiver: callee.receiver,
+      receiverType: baseType,
+      methodName,
+      params,
+      returnType,
+      label: `String.${methodName}`,
+    };
+  }
+
+  private resolveNumberMethodCallPlan(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+    baseType: TopazType,
+  ): OrdinaryCallPlan {
+    const methodName = callee.name;
+    if (methodName === "toString") {
+      if (expr.args.length !== 0) {
+        throw new CodegenError({ pos: expr.pos }, "Number.toString expects no arguments");
+      }
+      return {
+        kind: "number_method",
+        callee,
+        receiver: callee.receiver,
+        receiverType: baseType,
+        methodName,
+        params: this.noParamInfos(),
+        returnType: T_STRING,
+        label: "Number.toString",
+      };
+    }
+    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${methodName}' on topaz_number`);
+  }
+
   private resolveOrdinaryCallPlan(
     expr: CallExpr,
     awaitExpr: AwaitExpr | undefined,
@@ -11459,8 +11618,8 @@ class Emitter {
       if (awaitExpr !== undefined && this.collectAwaitExprsInExpr(receiver).length > 0) {
         throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
       }
-      // Synthetic namespaces stay outside the descriptor frontier; collection
-      // methods join it below with explicit key/value metadata.
+      // Synthetic namespaces stay outside the descriptor frontier; specialized
+      // receiver methods join it below with explicit receiver metadata.
       if (receiver.kind === "ident") {
         const receiverName = receiver.name;
         if (
@@ -11491,6 +11650,26 @@ class Emitter {
       }
       if (isSetType(receiverType)) {
         return this.resolveSetMethodCallPlan(callee, receiverType);
+      }
+      if (receiverType.kind === "string") {
+        if (
+          awaitExpr !== undefined &&
+          callee.name !== "charCodeAt" &&
+          callee.name !== "slice" &&
+          callee.name !== "repeat" &&
+          callee.name !== "trimStart" &&
+          callee.name !== "startsWith" &&
+          callee.name !== "endsWith"
+        ) {
+          return undefined;
+        }
+        return this.resolveStringMethodCallPlan(expr, callee, receiverType);
+      }
+      if (receiverType.kind === "number") {
+        if (awaitExpr !== undefined && callee.name !== "toString") {
+          return undefined;
+        }
+        return this.resolveNumberMethodCallPlan(expr, callee, receiverType);
       }
       if (isClassType(receiverType)) {
         const cls = this.classes.get(classNameOf(receiverType)!)!;
@@ -11633,6 +11812,53 @@ class Emitter {
       }
       if (plan.methodName === "values" || plan.methodName === "keys") {
         return this.emitIterConstruction(plan.receiver, plan.receiverType, "set_values", plan.elemType, "key");
+      }
+    }
+    if (plan.kind === "string_method") {
+      const base = this.emitExpression(plan.receiver);
+      if (plan.methodName === "charCodeAt") {
+        const idx = this.emitWithExpected(expr.args[0], T_NUMBER);
+        const helper = this.requireInternalPreludeFunctionCName("__topaz_string_char_code_at", { pos: expr.pos });
+        return `${helper}(${base}, ${idx})`;
+      }
+      if (plan.methodName === "slice") {
+        let startExpr = "(double)NAN";
+        if (expr.args.length >= 1) {
+          startExpr = `(double)(${this.emitWithExpected(expr.args[0], T_NUMBER)})`;
+        }
+        let endExpr = "(double)NAN";
+        if (expr.args.length >= 2) {
+          endExpr = `(double)(${this.emitWithExpected(expr.args[1], T_NUMBER)})`;
+        }
+        const helper = this.requireInternalPreludeFunctionCName("__topaz_string_slice", {
+          pos: expr.pos,
+        });
+        return `${helper}(${base}, ${startExpr}, ${endExpr})`;
+      }
+      if (plan.methodName === "repeat") {
+        const count = this.emitWithExpected(expr.args[0], T_NUMBER);
+        const helper = this.requireInternalPreludeFunctionCName("__topaz_string_repeat", {
+          pos: expr.pos,
+        });
+        return `${helper}(${base}, ${count})`;
+      }
+      if (plan.methodName === "trimStart") {
+        const helper = this.requireInternalPreludeFunctionCName("__topaz_string_trim_start", {
+          pos: expr.pos,
+        });
+        return `${helper}(${base})`;
+      }
+      if (plan.methodName === "startsWith" || plan.methodName === "endsWith") {
+        const search = this.emitWithExpected(expr.args[0], T_STRING);
+        const helperName =
+          plan.methodName === "startsWith" ? "__topaz_string_starts_with" : "__topaz_string_ends_with";
+        const helper = this.requireInternalPreludeFunctionCName(helperName, { pos: expr.pos });
+        return `${helper}(${base}, ${search})`;
+      }
+    }
+    if (plan.kind === "number_method") {
+      if (plan.methodName === "toString") {
+        return `topaz_number_to_string(${this.emitExpression(plan.receiver)})`;
       }
     }
     throwInternalCodegenError("emitOrdinaryCallPlan: unknown ordinary call plan");
@@ -12293,14 +12519,7 @@ class Emitter {
     expr: CallExpr,
     callee: PropAccessExpr,
   ): string {
-    const method = callee.name;
-    if (method === "toString") {
-      if (expr.args.length !== 0) {
-        throw new CodegenError({ pos: expr.pos }, "Number.toString expects no arguments");
-      }
-      return `topaz_number_to_string(${this.emitExpression(callee.receiver)})`;
-    }
-    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_number`);
+    return this.emitOrdinaryCallPlan(expr, this.resolveNumberMethodCallPlan(expr, callee, T_NUMBER));
   }
 
   // Phase 1.5-6 prep #10/#6f/#6i plus phase 3.31-3.59 prelude migration:
@@ -12312,98 +12531,7 @@ class Emitter {
     expr: CallExpr,
     callee: PropAccessExpr,
   ): string {
-    const method = callee.name;
-    const base = this.emitExpression(callee.receiver);
-    if (method === "charCodeAt") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "String.charCodeAt expects exactly one argument");
-      }
-      const indexArg = expr.args[0];
-      const argType = this.inferType(indexArg);
-      if (argType.kind !== "number") {
-        throw new CodegenError(
-          { pos: indexArg.pos },
-          `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
-        );
-      }
-      const idx = this.emitWithExpected(indexArg, T_NUMBER);
-      const helper = this.requireInternalPreludeFunctionCName("__topaz_string_char_code_at", { pos: expr.pos });
-      return `${helper}(${base}, ${idx})`;
-    }
-    if (method === "slice") {
-      if (expr.args.length > 2) {
-        throw new CodegenError({ pos: expr.pos }, "String.slice expects at most two arguments");
-      }
-      for (const arg of expr.args) {
-        const at = this.inferType(arg);
-        if (at.kind !== "number") {
-          throw new CodegenError(
-            { pos: arg.pos },
-            `String.slice argument must be number, got ${typeIdent(at)}`,
-          );
-        }
-      }
-      let startExpr = "(double)NAN";
-      if (expr.args.length >= 1) {
-        const startArg = expr.args[0];
-        startExpr = `(double)(${this.emitWithExpected(startArg, T_NUMBER)})`;
-      }
-      let endExpr = "(double)NAN";
-      if (expr.args.length >= 2) {
-        const endArg = expr.args[1];
-        endExpr = `(double)(${this.emitWithExpected(endArg, T_NUMBER)})`;
-      }
-      const helper = this.requireInternalPreludeFunctionCName("__topaz_string_slice", {
-        pos: expr.pos,
-      });
-      return `${helper}(${base}, ${startExpr}, ${endExpr})`;
-    }
-    if (method === "repeat") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "String.repeat expects exactly one argument");
-      }
-      const countArg = expr.args[0];
-      const countType = this.inferType(countArg);
-      if (countType.kind !== "number") {
-        throw new CodegenError(
-          { pos: countArg.pos },
-          `String.repeat argument must be number, got ${typeIdent(countType)}`,
-        );
-      }
-      const count = this.emitWithExpected(countArg, T_NUMBER);
-      const helper = this.requireInternalPreludeFunctionCName("__topaz_string_repeat", {
-        pos: expr.pos,
-      });
-      return `${helper}(${base}, ${count})`;
-    }
-    if (method === "trimStart") {
-      if (expr.args.length !== 0) {
-        throw new CodegenError({ pos: expr.pos }, "String.trimStart expects no arguments");
-      }
-      const helper = this.requireInternalPreludeFunctionCName("__topaz_string_trim_start", {
-        pos: expr.pos,
-      });
-      return `${helper}(${base})`;
-    }
-    if (method === "startsWith" || method === "endsWith") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, `String.${method} expects exactly one argument`);
-      }
-      const searchArg = expr.args[0];
-      const argType = this.inferType(searchArg);
-      if (argType.kind !== "string") {
-        throw new CodegenError(
-          { pos: searchArg.pos },
-          `String.${method} argument must be string, got ${typeIdent(argType)}`,
-        );
-      }
-      const search = this.emitWithExpected(searchArg, T_STRING);
-      const helperName =
-        method === "startsWith" ? "__topaz_string_starts_with" : "__topaz_string_ends_with";
-      const helper = this.requireInternalPreludeFunctionCName(helperName, { pos: expr.pos });
-      return `${helper}(${base}, ${search})`;
-    }
-    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_string`);
+    return this.emitOrdinaryCallPlan(expr, this.resolveStringMethodCallPlan(expr, callee, T_STRING));
   }
 
   // Phase 1.5-6 prep #12: only `String.fromCharCode(n)` is supported; we
@@ -13362,85 +13490,14 @@ class Emitter {
     expr: CallExpr,
     callee: PropAccessExpr,
   ): TopazType {
-    const method = callee.name;
-    if (method === "charCodeAt") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "String.charCodeAt expects exactly one argument");
-      }
-      const indexArg = expr.args[0];
-      const argType = this.inferType(indexArg);
-      if (argType.kind !== "number") {
-        throw new CodegenError(
-          { pos: indexArg.pos },
-          `String.charCodeAt argument must be number, got ${typeIdent(argType)}`,
-        );
-      }
-      return T_NUMBER;
-    }
-    if (method === "slice") {
-      if (expr.args.length > 2) {
-        throw new CodegenError({ pos: expr.pos }, "String.slice expects at most two arguments");
-      }
-      for (const arg of expr.args) {
-        const at = this.inferType(arg);
-        if (at.kind !== "number") {
-          throw new CodegenError(
-            { pos: arg.pos },
-            `String.slice argument must be number, got ${typeIdent(at)}`,
-          );
-        }
-      }
-      return T_STRING;
-    }
-    if (method === "repeat") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, "String.repeat expects exactly one argument");
-      }
-      const countArg = expr.args[0];
-      const countType = this.inferType(countArg);
-      if (countType.kind !== "number") {
-        throw new CodegenError(
-          { pos: countArg.pos },
-          `String.repeat argument must be number, got ${typeIdent(countType)}`,
-        );
-      }
-      return T_STRING;
-    }
-    if (method === "trimStart") {
-      if (expr.args.length !== 0) {
-        throw new CodegenError({ pos: expr.pos }, "String.trimStart expects no arguments");
-      }
-      return T_STRING;
-    }
-    if (method === "startsWith" || method === "endsWith") {
-      if (expr.args.length !== 1) {
-        throw new CodegenError({ pos: expr.pos }, `String.${method} expects exactly one argument`);
-      }
-      const searchArg = expr.args[0];
-      const argType = this.inferType(searchArg);
-      if (argType.kind !== "string") {
-        throw new CodegenError(
-          { pos: searchArg.pos },
-          `String.${method} argument must be string, got ${typeIdent(argType)}`,
-        );
-      }
-      return T_BOOLEAN;
-    }
-    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_string`);
+    return this.resolveStringMethodCallPlan(expr, callee, T_STRING).returnType;
   }
 
   private inferNumberMethodReturn(
     expr: CallExpr,
     callee: PropAccessExpr,
   ): TopazType {
-    const method = callee.name;
-    if (method === "toString") {
-      if (expr.args.length !== 0) {
-        throw new CodegenError({ pos: expr.pos }, "Number.toString expects no arguments");
-      }
-      return T_STRING;
-    }
-    throw new CodegenError({ pos: callee.pos }, `unsupported method '.${method}' on topaz_number`);
+    return this.resolveNumberMethodCallPlan(expr, callee, T_NUMBER).returnType;
   }
 
   private emitMapMethodCall(
