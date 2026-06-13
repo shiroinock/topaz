@@ -11765,21 +11765,46 @@ class Emitter {
     return this.inferCallbackFn(cb, [T_UNKNOWN], "Promise.catch");
   }
 
+  private inferPromiseThenRejectedCallbackFn(cb: Expr): FnType {
+    return this.inferCallbackFn(cb, [T_UNKNOWN], "Promise.then onRejected");
+  }
+
+  private checkPromiseThenResultType(cb: Expr, resultType: TopazType, label: string): void {
+    if (resultType.kind === "promise") {
+      throw new CodegenError(
+        { pos: cb.pos },
+        `${label} callback returning Promise<T> is deferred until explicit thenable assimilation is implemented`,
+      );
+    }
+    if (promiseOf(resultType) === undefined) {
+      throw new CodegenError(
+        { pos: cb.pos },
+        `${label} callback return type ${typeIdent(resultType)} is unsupported (must be value-representable or void)`,
+      );
+    }
+  }
+
   private inferPromiseThenCall(expr: CallExpr, baseType: TopazType): TopazType {
     if (baseType.kind !== "promise") {
       throwInternalCodegenError("inferPromiseThenCall: base is not Promise<T>");
     }
     this.checkPromiseMethodTypeArgs(expr, "then");
-    if (expr.args.length !== 1) {
-      throw new CodegenError({ pos: expr.pos }, `Promise.then expects exactly one argument, got ${expr.args.length}`);
+    if (expr.args.length !== 1 && expr.args.length !== 2) {
+      throw new CodegenError({ pos: expr.pos }, `Promise.then expects one or two arguments, got ${expr.args.length}`);
     }
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
-    if (resultType.kind === "promise") {
-      throw new CodegenError(
-        { pos: expr.args[0].pos },
-        "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented",
-      );
+    this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then");
+    if (expr.args.length === 2) {
+      const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
+      const rejectedResultType = rejectedFnType.returnType;
+      this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected");
+      if (!typeEq(resultType, rejectedResultType)) {
+        throw new CodegenError(
+          { pos: expr.args[1].pos },
+          `Promise.then onRejected callback return type ${typeIdent(rejectedResultType)} does not match fulfilled callback return type ${typeIdent(resultType)}`,
+        );
+      }
     }
     const promiseType = promiseOf(resultType);
     if (promiseType === undefined) {
@@ -11934,6 +11959,29 @@ class Emitter {
     const ctxVar = `__topaz_then_ctx_${id}`;
     const sourceExpr = this.emitExpression(callee.receiver);
     const cbExpr = this.emitWithExpected(expr.args[0], fnType);
+    if (expr.args.length === 2) {
+      const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
+      const rejectedRunnerName = this.recordPromiseCatchRunner(resultType, rejectedFnType);
+      const rejectedCtxName = this.promiseCatchContextName(resultType);
+      const rejectedFnTypeName = typeIdent(rejectedFnType);
+      const targetVar = `__topaz_then_target_${id}`;
+      const rejectedCbVar = `__topaz_then_reject_cb_${id}`;
+      const rejectedCtxVar = `__topaz_then_reject_ctx_${id}`;
+      const rejectedCbExpr = this.emitWithExpected(expr.args[1], rejectedFnType);
+      return (
+        `({ void *${sourceVar} = ${sourceExpr}; ` +
+        `${fnTypeName} ${cbVar} = ${cbExpr}; ` +
+        `${rejectedFnTypeName} ${rejectedCbVar} = ${rejectedCbExpr}; ` +
+        `${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_alloc(sizeof(${ctxName})); ` +
+        `*${ctxVar} = (${ctxName}){ .cb = ${cbVar} }; ` +
+        `${rejectedCtxName} *${rejectedCtxVar} = (${rejectedCtxName} *)topaz_arena_alloc(sizeof(${rejectedCtxName})); ` +
+        `*${rejectedCtxVar} = (${rejectedCtxName}){ .cb = ${rejectedCbVar} }; ` +
+        `void *${targetVar} = topaz_promise_new_pending(); ` +
+        `topaz_promise_add_continuation(${sourceVar}, TOPAZ_PROMISE_CONTINUATION_FULFILLED, ${runnerName}, ${ctxVar}, ${targetVar}, false); ` +
+        `topaz_promise_add_continuation(${sourceVar}, TOPAZ_PROMISE_CONTINUATION_REJECTED, ${rejectedRunnerName}, ${rejectedCtxVar}, ${targetVar}, false); ` +
+        `${targetVar}; })`
+      );
+    }
     return (
       `({ void *${sourceVar} = ${sourceExpr}; ` +
       `${fnTypeName} ${cbVar} = ${cbExpr}; ` +

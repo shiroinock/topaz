@@ -2961,6 +2961,7 @@ run_case promise_resolve_value $'number promise\nstring promise\nnumber promise\
 run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejection\nreject values'
 run_case promise_then_fulfilled $'sync\npromise returned\nthen number\n42\nthen string\nready'
 run_case promise_catch_rejected $'sync tail\nfifo then\nfifo catch\nfifo\ncatch number\nnumber\nfulfilled bypass\n20\ncatch string\ncatch void\nvoid\ncatch throw\nthen number\n10\nthen string\nstring\nthen void\ncatch second\n7\nthen throw recovery\n99'
+run_case promise_then_on_rejected $'sync tail\nfulfilled branch\n2\nrejected branch\nrecover\nvoid fulfilled\nthrowing fulfilled\nfulfilled then\n2\nrejected then\n7\nvoid then\nthrow recovery\n9\nthrow then\n9'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
@@ -3023,7 +3024,10 @@ run_fail_case async_arrow_deferred_fail examples/async_arrow_deferred_fail.ts "a
 run_fail_case async_method_deferred_fail examples/async_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case async_generic_deferred_fail examples/async_generic_deferred_fail.ts "async generic functions are unsupported"
 run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
-run_fail_case promise_then_on_rejected_deferred_fail examples/promise_then_on_rejected_deferred_fail.ts "Promise.then expects exactly one argument, got 2"
+run_fail_case promise_then_on_rejected_param_fail examples/promise_then_on_rejected_param_fail.ts "Promise.then onRejected callback parameter type"
+run_fail_case promise_then_on_rejected_return_mismatch_fail examples/promise_then_on_rejected_return_mismatch_fail.ts "Promise.then onRejected callback return type topaz_string does not match fulfilled callback return type topaz_number"
+run_fail_case promise_then_on_rejected_return_promise_fail examples/promise_then_on_rejected_return_promise_fail.ts "Promise.then onRejected callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
+run_fail_case promise_then_wrong_arity_fail examples/promise_then_wrong_arity_fail.ts "Promise.then expects one or two arguments, got 3"
 run_fail_case promise_then_non_fn_fail examples/promise_then_non_fn_fail.ts "Promise.then callback must be a function value"
 run_fail_case promise_catch_deferred_fail examples/promise_catch_deferred_fail.ts "Promise.catch callback parameter type"
 run_fail_case promise_catch_return_mismatch_fail examples/promise_catch_return_mismatch_fail.ts "Promise.catch callback return type topaz_string does not match expected topaz_number"
