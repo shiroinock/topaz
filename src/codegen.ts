@@ -5063,12 +5063,6 @@ class Emitter {
     if (this.functionExprBodyContainsThis(fn)) {
       throw new CodegenError({ pos: fn.pos }, "function expression `this` is deferred");
     }
-    if (fn.isAsync && this.functionExprBodyContainsAwait(fn)) {
-      throw new CodegenError(
-        { pos: fn.pos },
-        "async function expression with await is deferred until async function expression frame lowering",
-      );
-    }
   }
 
   private inferFunctionExprType(fn: FunctionExpr, expectedType: TopazType | undefined): TopazType {
@@ -5084,13 +5078,6 @@ class Emitter {
   private functionExprBodyContainsThis(fn: FunctionExpr): boolean {
     for (const s of fn.body) {
       if (this.stmtContainsThis(s)) return true;
-    }
-    return false;
-  }
-
-  private functionExprBodyContainsAwait(fn: FunctionExpr): boolean {
-    for (const s of fn.body) {
-      if (this.collectAwaitExprsInStmt(s).length > 0) return true;
     }
     return false;
   }
