@@ -2212,6 +2212,7 @@ class Emitter {
       const cls = this.classes.get(entry.anonName)!;
       for (const m of literalNode.members) {
         if (m.kind !== "type_lit_field") continue;
+        if (m.nameKind !== "identifier") continue;
         const memberType = m.type;
         if (memberType.kind === "type_str_lit") {
           const v = memberType.value;
@@ -2245,6 +2246,9 @@ class Emitter {
         const memberAnchor: { pos: number } = { pos: m.pos };
         if (m.kind !== "type_lit_field") {
           throw this.typeErr(memberAnchor, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
+        }
+        if (m.nameKind !== "identifier") {
+          throw this.typeErr(memberAnchor, "computed type literal fields are unsupported outside phantom brand aliases");
         }
         const fname = m.name;
         if (fields.has(fname)) {
@@ -4311,6 +4315,12 @@ class Emitter {
     if (member.kind !== "type_lit_field") {
       throw this.typeErr({ pos: member.pos }, "unsupported brand intersection shape: phantom member must be a field");
     }
+    if (member.nameKind === "computed_unsupported") {
+      throw this.typeErr(
+        { pos: member.pos },
+        "unsupported computed phantom field name: expected computed identifier [Name]",
+      );
+    }
     if (!member.isReadonly || member.isOptional) {
       throw this.typeErr(
         { pos: member.pos },
@@ -4324,7 +4334,8 @@ class Emitter {
         "unsupported brand intersection shape: phantom field type must be a string literal",
       );
     }
-    const key = `${aliasName}:${member.name}:${payloadType.value}`;
+    const fieldKey = member.nameKind === "computed_identifier" ? `[${member.name}]` : member.name;
+    const key = `${aliasName}:${fieldKey}:${payloadType.value}`;
     return { kind: "brand", base, key };
   }
 
@@ -4600,6 +4611,9 @@ class Emitter {
         const memberAnchor: { pos: number } = { pos: m.pos };
         if (m.kind !== "type_lit_field") {
           throw this.typeErr(memberAnchor, "object literal type only supports plain property signatures (Phase 1.5-6 prep)");
+        }
+        if (m.nameKind !== "identifier") {
+          throw this.typeErr(memberAnchor, "computed type literal fields are unsupported outside phantom brand aliases");
         }
         const fname = m.name;
         if (fields.has(fname)) {

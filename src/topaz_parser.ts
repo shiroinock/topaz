@@ -40,6 +40,7 @@ import {
   ObjectMember,
   SourceModule,
   TypeLiteralMember,
+  TypeLiteralFieldNameKind,
   SwitchCase,
   TemplateSub,
   TypeParam,
@@ -175,6 +176,33 @@ export class Parser {
       return { text: t.word, pos: t.pos, end: t.end };
     }
     throw this.error(t, "expected member name");
+  }
+
+  expectTypeLiteralFieldName(): { text: string; nameKind: TypeLiteralFieldNameKind; pos: number; end: number } {
+    this.skipNewlines();
+    const t: Token = this.current();
+    if (t.kind === "punct" && t.op === "[") {
+      const start: Token = t;
+      this.pos += 1;
+      this.skipNewlines();
+      const name: Token = this.current();
+      if (name.kind === "ident") {
+        this.pos += 1;
+        this.skipNewlines();
+        const end: Token = this.expectPunct("]");
+        return { text: name.text, nameKind: "computed_identifier", pos: start.pos, end: end.end };
+      }
+      while (this.current().kind !== "eof") {
+        const cur: Token = this.current();
+        this.pos += 1;
+        if (cur.kind === "punct" && cur.op === "]") {
+          return { text: "<computed>", nameKind: "computed_unsupported", pos: start.pos, end: cur.end };
+        }
+      }
+      throw this.error(start, "unterminated computed type literal field name");
+    }
+    const plain: { text: string; pos: number; end: number } = this.expectMemberName();
+    return { text: plain.text, nameKind: "identifier", pos: plain.pos, end: plain.end };
   }
 
   // ============================================================
@@ -2028,11 +2056,15 @@ export class Parser {
       this.skipNewlines();
       let isReadonly: boolean = false;
       if (this.matchKeyword("readonly")) isReadonly = true;
-      const nameTok: { text: string; pos: number; end: number } = this.expectMemberName();
+      const nameTok: { text: string; nameKind: TypeLiteralFieldNameKind; pos: number; end: number } =
+        this.expectTypeLiteralFieldName();
       let isOptional: boolean = false;
       if (this.matchPunct("?")) isOptional = true;
       const after: Token = this.current();
       if (after.kind === "punct" && after.op === "(") {
+        if (nameTok.nameKind !== "identifier") {
+          throw this.error(after, "computed type literal methods are unsupported");
+        }
         this.pos += 1;
         const params: Array<TypeFnParam> = [];
         while (!this.matchPunct(")")) {
@@ -2063,6 +2095,7 @@ export class Parser {
         members.push({
           kind: "type_lit_field",
           name: nameTok.text,
+          nameKind: nameTok.nameKind,
           type: ty,
           isReadonly: isReadonly,
           isOptional: isOptional,

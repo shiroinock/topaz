@@ -3427,6 +3427,12 @@ run_fail_case brand_string_phantom_cross_assign_fail examples/brand_string_phant
 run_fail_case brand_string_phantom_non_brand_as_fail examples/brand_string_phantom_non_brand_as_fail.ts "only brand assertions are supported"
 run_fail_case brand_string_phantom_bad_shape_fail examples/brand_string_phantom_bad_shape_fail.ts "unsupported brand intersection shape"
 
+run_case brand_unique_symbol_phantom $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_fail_case brand_unique_symbol_cross_assign_fail examples/brand_unique_symbol_cross_assign_fail.ts "topaz_brand_TeamId"
+run_fail_case brand_unique_symbol_implicit_fail examples/brand_unique_symbol_implicit_fail.ts "type mismatch"
+run_fail_case brand_unique_symbol_bad_computed_fail examples/brand_unique_symbol_bad_computed_fail.ts "unsupported computed phantom field name"
+run_fail_case brand_unique_symbol_structural_computed_fail examples/brand_unique_symbol_structural_computed_fail.ts "computed type literal fields are unsupported"
+
 run_case cond_equality $'if-eq\nif-ne\nand\nor\nmixed\ndiffer\n3\n6\n2'
 run_cc_warnfree_case cond_equality
 run_cc_warnfree_case dunion_optional

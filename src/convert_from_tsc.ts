@@ -1517,7 +1517,19 @@ class Converter {
 
   convertTypeLiteralMember(m: ts.TypeElement): TypeLiteralMember {
     if (ts.isPropertySignature(m)) {
-      if (!ts.isIdentifier(m.name)) {
+      let name = "";
+      let nameKind: "identifier" | "computed_identifier" | "computed_unsupported" = "identifier";
+      if (ts.isIdentifier(m.name)) {
+        name = m.name.text;
+      } else if (ts.isComputedPropertyName(m.name)) {
+        if (ts.isIdentifier(m.name.expression)) {
+          name = m.name.expression.text;
+          nameKind = "computed_identifier";
+        } else {
+          name = "<computed>";
+          nameKind = "computed_unsupported";
+        }
+      } else {
         throw this.err(m, "type literal field name must be an identifier");
       }
       if (!m.type) throw this.err(m, "type literal field must have a type annotation");
@@ -1531,7 +1543,8 @@ class Converter {
       }
       const f: TypeLiteralField = {
         kind: "type_lit_field",
-        name: m.name.text,
+        name,
+        nameKind,
         type: this.convertType(m.type),
         isReadonly,
         isOptional: !!m.questionToken,

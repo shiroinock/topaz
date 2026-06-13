@@ -62,9 +62,12 @@ export type TypeLiteralNode = {
 
 export type TypeLiteralMember = TypeLiteralField | TypeLiteralMethod;
 
+export type TypeLiteralFieldNameKind = "identifier" | "computed_identifier" | "computed_unsupported";
+
 export type TypeLiteralField = {
   kind: "type_lit_field";
   name: string;
+  nameKind: TypeLiteralFieldNameKind;
   type: TypeNode;
   isReadonly: boolean;
   isOptional: boolean;
