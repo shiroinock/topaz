@@ -2943,6 +2943,7 @@ run_case async_await_two_bindings $'before a\nsync tail\nbetween\nafter b\nthen 
 run_case async_arrow_await $'before arrow await\nsync tail\nbetween arrow awaits\nafter arrow await\nthen arrow await\n42'
 run_case async_method_no_await $'method body\nsync tail\nthen method\n42'
 run_case async_method_await $'method before await\nsync tail\nmethod between awaits\nmethod after await\nthen method await\n42'
+run_case async_return_await_terminal $'sync tail\ndeclared\n10\nmethod\n8\nexpr\n5\narrow\n22'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"

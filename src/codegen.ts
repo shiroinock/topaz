@@ -29,6 +29,7 @@ import {
   PostfixOpExpr,
   AssignExpr,
   AwaitExpr,
+  ReturnStmt,
   ForOfStmt,
   VarDeclStmt,
   VarDestrDeclStmt,
@@ -127,8 +128,17 @@ type AwaitBindingInfo = {
   bindingType: TopazType;
 };
 
+type AwaitTerminalReturnInfo = {
+  stmt: ReturnStmt;
+  awaitExpr: AwaitExpr;
+  index: number;
+  operandType: TopazType;
+  payloadType: TopazType;
+};
+
 type AsyncAwaitFrameInfo = {
   bindings: Array<AwaitBindingInfo>;
+  terminalReturn?: AwaitTerminalReturnInfo;
 };
 
 type AsyncFrameThisContext = {
@@ -4402,7 +4412,9 @@ class Emitter {
       }
     }
     const bindings: Array<AwaitBindingInfo> = [];
+    let terminalReturn: AwaitTerminalReturnInfo | undefined = undefined;
     const supportedAwaitExprs = new Set<AwaitExpr>();
+    this.scope.push();
     for (let i = 0; i < block.stmts.length; i++) {
       const s = block.stmts[i];
       if (s.kind === "var_decl") {
@@ -4435,11 +4447,36 @@ class Emitter {
             }
             bindings.push({ stmt: s, awaitExpr: init, index: i, operandType, bindingType });
             supportedAwaitExprs.add(init);
+            this.scope.declareBinding(s.name, bindingType, s.declKind === "const", { pos: s.pos });
+          }
+        }
+      } else if (s.kind === "return_stmt" && i === block.stmts.length - 1) {
+        const valueMaybe = s.value;
+        if (valueMaybe !== undefined) {
+          const value = this.unwrapParenExpr(valueMaybe);
+          if (value.kind === "await_expr") {
+            const operandType = this.inferType(value.operand);
+            if (operandType.kind !== "promise") {
+              throw new CodegenError(
+                { pos: value.operand.pos },
+                `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+              );
+            }
+            const awaitedPayload = operandType.value;
+            if (!typeEq(awaitedPayload, payloadType) && !this.isAssignableTo(awaitedPayload, payloadType)) {
+              throw new CodegenError(
+                { pos: s.pos },
+                `type mismatch: expected ${typeIdent(payloadType)}, got ${typeIdent(awaitedPayload)}`,
+              );
+            }
+            terminalReturn = { stmt: s, awaitExpr: value, index: i, operandType, payloadType: awaitedPayload };
+            supportedAwaitExprs.add(value);
           }
         }
       }
     }
-    if (bindings.length === 0) {
+    this.scope.pop();
+    if (bindings.length === 0 && terminalReturn === undefined) {
       throw new CodegenError(
         awaitAnchor,
         "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
@@ -4455,8 +4492,9 @@ class Emitter {
         }
       }
     }
-    const firstAwaitIndex = bindings[0].index;
-    const lastAwaitIndex = bindings[bindings.length - 1].index;
+    const firstAwaitIndex = bindings.length === 0 ? terminalReturn!.index : bindings[0].index;
+    const lastBindingIndex = bindings.length === 0 ? firstAwaitIndex : bindings[bindings.length - 1].index;
+    const lastAwaitIndex = terminalReturn === undefined ? lastBindingIndex : terminalReturn.index;
     for (let i = 0; i < firstAwaitIndex; i++) {
       const s = block.stmts[i];
       if (s.kind === "var_decl" || s.kind === "var_destr_decl") {
@@ -4488,7 +4526,10 @@ class Emitter {
       // Keep payloadType threaded here so type-checking work above mirrors the
       // no-await path; void async functions are otherwise handled by return lowering.
     }
-    return { bindings };
+    if (terminalReturn === undefined) {
+      return { bindings };
+    }
+    return { bindings, terminalReturn };
   }
 
   private emitAsyncFunctionBodyWithAwaitFrame(
@@ -4499,7 +4540,18 @@ class Emitter {
     runnerCaptureContext?: CaptureContext,
     runnerThisContext?: AsyncFrameThisContext,
   ): string {
-    const firstAwait = frame.bindings[0];
+    const terminalReturn = frame.terminalReturn;
+    let firstAwaitIndex = 0;
+    let firstPc = 0;
+    if (frame.bindings.length === 0) {
+      if (terminalReturn === undefined) {
+        throwInternalCodegenError("async await frame has no await step");
+      }
+      firstAwaitIndex = terminalReturn.index;
+      firstPc = frame.bindings.length;
+    } else {
+      firstAwaitIndex = frame.bindings[0].index;
+    }
     const id = this.asyncAwaitCounter++;
     const ctxName = `__topaz_async_await_${id}_frame`;
     const runnerName = `__topaz_async_await_${id}_runner`;
@@ -4524,12 +4576,21 @@ class Emitter {
     lines.push("  topaz_try_push(&__topaz_async_frame);");
     lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
     this.liveTryFrames++;
-    const prefix = block.stmts.slice(0, firstAwait.index);
+    const prefix = block.stmts.slice(0, firstAwaitIndex);
     for (const s of prefix) {
       lines.push(this.emitStatement(s, 2));
       this.applyCarryNarrowing(s);
     }
-    const operandExpr = this.emitWithExpected(firstAwait.awaitExpr.operand, firstAwait.operandType);
+    let operandExpr = "";
+    if (frame.bindings.length === 0) {
+      if (terminalReturn === undefined) {
+        throwInternalCodegenError("async await frame has no await step");
+      }
+      operandExpr = this.emitWithExpected(terminalReturn.awaitExpr.operand, terminalReturn.operandType);
+    } else {
+      const firstBinding = frame.bindings[0];
+      operandExpr = this.emitWithExpected(firstBinding.awaitExpr.operand, firstBinding.operandType);
+    }
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
     for (const p of params) {
       lines.push(`    ${frameVar}->${p.name} = ${p.name};`);
@@ -4540,7 +4601,7 @@ class Emitter {
     if (runnerCaptureContext !== undefined && runnerCaptureContext.captures.size > 0) {
       lines.push(`    ${frameVar}->__topaz_env = __topaz_env;`);
     }
-    lines.push(`    ${frameVar}->__topaz_pc = 0;`);
+    lines.push(`    ${frameVar}->__topaz_pc = ${firstPc};`);
     this.liveTryFrames--;
     lines.push(`    topaz_try_pop();`);
     lines.push(`    return topaz_promise_then_into(${sourceVar}, ${runnerName}, ${frameVar}, ${frameVar}->output);`);
@@ -4562,6 +4623,8 @@ class Emitter {
     runnerCaptureContext?: CaptureContext,
     runnerThisContext?: AsyncFrameThisContext,
   ): void {
+    const terminalReturn = frame.terminalReturn;
+    const terminalPc = frame.bindings.length;
     const fields: string[] = [];
     fields.push("  int __topaz_pc;");
     fields.push("  topaz_promise *output;");
@@ -4613,6 +4676,27 @@ class Emitter {
       lines.push("      break;");
       lines.push("    }");
     }
+    if (terminalReturn !== undefined) {
+      lines.push(`    case ${terminalPc}: {`);
+      if (payloadType.kind === "void") {
+        lines.push("      (void)source;");
+        lines.push("      topaz_promise_fulfill_void(target);");
+      } else {
+        const sourceC = cTypeName(terminalReturn.payloadType);
+        const targetC = cTypeName(payloadType);
+        lines.push(`      ${sourceC} __topaz_return_await_value = *(const ${sourceC} *)topaz_promise_fulfilled_payload(source);`);
+        const coerced = this.applyCoercion(
+          "__topaz_return_await_value",
+          terminalReturn.payloadType,
+          payloadType,
+          { pos: terminalReturn.stmt.pos },
+        );
+        lines.push(`      ${targetC} __topaz_return_await_result = ${coerced};`);
+        lines.push("      topaz_promise_fulfill_copy(target, &__topaz_return_await_result, sizeof(__topaz_return_await_result));");
+      }
+      lines.push("      return;");
+      lines.push("    }");
+    }
     lines.push("    default:");
     lines.push("      topaz_panic((topaz_string){ \"topaz: invalid async frame state\", 32 });");
     lines.push("  }");
@@ -4623,9 +4707,14 @@ class Emitter {
     lines.push("    switch (ctx->__topaz_pc) {");
     for (let i = 0; i < frame.bindings.length; i++) {
       const current = frame.bindings[i];
-      const hasNext = i + 1 < frame.bindings.length;
+      const hasNextBinding = i + 1 < frame.bindings.length;
       const segmentStart = current.index + 1;
-      const segmentEnd = hasNext ? frame.bindings[i + 1].index : stmts.length;
+      let segmentEnd = stmts.length;
+      if (hasNextBinding) {
+        segmentEnd = frame.bindings[i + 1].index;
+      } else if (terminalReturn !== undefined) {
+        segmentEnd = terminalReturn.index;
+      }
       lines.push(`      case ${i}: {`);
       this.scope.push();
       for (const p of params) {
@@ -4650,12 +4739,20 @@ class Emitter {
         lines.push(this.emitStatement(s, 4));
         this.applyCarryNarrowing(s);
       }
-      if (hasNext) {
+      if (hasNextBinding) {
         const next = frame.bindings[i + 1];
         const nextSourceVar = `__topaz_await_next_${i}`;
         const operandExpr = this.emitWithExpected(next.awaitExpr.operand, next.operandType);
         lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
         lines.push(`        ctx->__topaz_pc = ${i + 1};`);
+        lines.push(`        topaz_try_pop();`);
+        lines.push(`        topaz_promise_then_into(${nextSourceVar}, ${runnerName}, ctx, target);`);
+        lines.push("        return;");
+      } else if (terminalReturn !== undefined) {
+        const nextSourceVar = `__topaz_await_return_${i}`;
+        const operandExpr = this.emitWithExpected(terminalReturn.awaitExpr.operand, terminalReturn.operandType);
+        lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
+        lines.push(`        ctx->__topaz_pc = ${terminalPc};`);
         lines.push(`        topaz_try_pop();`);
         lines.push(`        topaz_promise_then_into(${nextSourceVar}, ${runnerName}, ctx, target);`);
         lines.push("        return;");
