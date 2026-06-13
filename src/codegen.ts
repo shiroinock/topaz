@@ -2544,11 +2544,14 @@ class Emitter {
       if (cls.typeParams.length > 0) {
         // Validate the type-param declaration eagerly so errors fire even
         // when the class is never instantiated (mirrors generic functions).
-        // Constraint / default rejection already happened in convert; only the
-        // duplicate-name check remains.
+        // Defaults are rejected in convert; constraints stay represented for
+        // brand aliases but remain unsupported for generic classes.
         const typeParams: string[] = [];
         for (const tp of cls.typeParams) {
           const tpAnchor: { pos: number } = { pos: tp.pos };
+          if (tp.constraint !== undefined) {
+            throw new CodegenError(tpAnchor, "type parameter constraint is unsupported");
+          }
           if (typeParams.includes(tp.name)) {
             throw new CodegenError(tpAnchor, `duplicate type parameter '${tp.name}'`);
           }
@@ -2698,14 +2701,17 @@ class Emitter {
           throw new CodegenError(fnAnchor, "async generic functions are unsupported");
         }
         // Generic function: defer signature resolution until call sites
-        // supply concrete type arguments. Constraint / default rejection
-        // already happened in convert; only the duplicate-name check remains.
+        // supply concrete type arguments. Defaults are rejected in convert;
+        // constraints remain unsupported outside brand aliases.
         if (this.genericFunctions.has(fname)) {
           throw new CodegenError(fnAnchor, `redeclaration of function '${fname}'`);
         }
         const typeParams: string[] = [];
         for (const tp of fn.typeParams) {
           const tpAnchor: { pos: number } = { pos: tp.pos };
+          if (tp.constraint !== undefined) {
+            throw new CodegenError(tpAnchor, "type parameter constraint is unsupported");
+          }
           if (typeParams.includes(tp.name)) {
             throw new CodegenError(tpAnchor, `duplicate type parameter '${tp.name}'`);
           }
@@ -4355,8 +4361,10 @@ class Emitter {
 
   private tryMakeBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
     if (alias.typeParams.length !== 2) return undefined;
-    const baseParam = alias.typeParams[0].name;
-    const payloadParam = alias.typeParams[1].name;
+    const baseTypeParam = alias.typeParams[0];
+    const payloadTypeParam = alias.typeParams[1];
+    const baseParam = baseTypeParam.name;
+    const payloadParam = payloadTypeParam.name;
     const body = alias.body;
     if (body.kind !== "type_intersection") return undefined;
     if (body.variants.length !== 2) return undefined;
@@ -4379,7 +4387,25 @@ class Emitter {
       }
     }
     if (!hasBase || !hasPhantom) return undefined;
+    const baseConstraint = baseTypeParam.constraint;
+    if (baseConstraint !== undefined) {
+      throw this.typeErr(
+        { pos: baseConstraint.pos },
+        "brand template base type parameter constraint is unsupported",
+      );
+    }
+    const payloadConstraint = payloadTypeParam.constraint;
+    if (payloadConstraint !== undefined && !this.isStringTypeParamConstraint(payloadConstraint)) {
+      throw this.typeErr(
+        { pos: payloadConstraint.pos },
+        "brand template payload constraint must be string",
+      );
+    }
     return { fieldKey };
+  }
+
+  private isStringTypeParamConstraint(node: TypeNode): boolean {
+    return node.kind === "type_ref" && node.name === "string" && node.typeArgs.length === 0;
   }
 
   private brandAliasTemplateFieldKey(

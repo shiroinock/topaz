@@ -427,7 +427,17 @@ export class Parser {
     while (!this.matchPunct(">")) {
       this.skipNewlines();
       const id: Token = this.expectIdent();
-      out.push({ name: id.text, pos: id.pos, end: id.end });
+      let constraint: TypeNode | undefined = undefined;
+      let end: number = id.end;
+      if (this.matchKeyword("extends")) {
+        const parsedConstraint: TypeNode = this.parseType();
+        constraint = parsedConstraint;
+        end = parsedConstraint.end;
+      }
+      if (this.isPunct(this.current(), "=")) {
+        throw this.error(this.current(), "default type parameter is unsupported");
+      }
+      out.push({ name: id.text, constraint: constraint, pos: id.pos, end: end });
       if (!this.matchPunct(",")) {
         this.expectPunct(">");
         break;

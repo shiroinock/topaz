@@ -534,9 +534,9 @@ class Converter {
     if (!tps || tps.length === 0) return [];
     const out: TypeParam[] = [];
     for (const tp of tps) {
-      if (tp.constraint) throw this.err(tp, "type parameter constraint is unsupported");
       if (tp.default) throw this.err(tp, "default type parameter is unsupported");
-      out.push({ name: tp.name.text, ...this.span(tp) });
+      const constraint = tp.constraint !== undefined ? this.convertType(tp.constraint) : undefined;
+      out.push({ name: tp.name.text, constraint, ...this.span(tp) });
     }
     return out;
   }

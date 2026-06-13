@@ -571,6 +571,7 @@ export type FunctionParam = {
 
 export type TypeParam = {
   name: string;
+  constraint: TypeNode | undefined;
   pos: number;
   end: number;
 };

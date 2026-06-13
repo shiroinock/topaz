@@ -3435,10 +3435,15 @@ run_fail_case brand_unique_symbol_structural_computed_fail examples/brand_unique
 
 run_case brand_generic_template $'u1\nu1\no1\ntrue\ntrue\nu1\n42\n42'
 run_case brand_generic_computed_template $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_generic_template_constrained $'u1\nu1\no1\ntrue\ntrue\nu1'
+run_case brand_generic_computed_template_constrained $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_template_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_implicit_fail examples/brand_generic_template_implicit_fail.ts "type mismatch"
 run_fail_case brand_generic_template_bad_payload_fail examples/brand_generic_template_bad_payload_fail.ts "payload type argument must be a string literal"
 run_fail_case brand_generic_template_bad_shape_fail examples/brand_generic_template_bad_shape_fail.ts "generic type alias 'Brand' is unsupported"
+run_fail_case brand_generic_template_bad_constraint_fail examples/brand_generic_template_bad_constraint_fail.ts "brand template payload constraint must be string"
+run_fail_case brand_generic_template_base_constraint_fail examples/brand_generic_template_base_constraint_fail.ts "brand template base type parameter constraint is unsupported"
+run_fail_case type_param_constraint_generic_fail examples/type_param_constraint_generic_fail.ts "type parameter constraint is unsupported"
 
 run_case cond_equality $'if-eq\nif-ne\nand\nor\nmixed\ndiffer\n3\n6\n2'
 run_cc_warnfree_case cond_equality
