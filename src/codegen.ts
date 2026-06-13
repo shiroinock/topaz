@@ -211,6 +211,11 @@ type SyntheticCallKind =
   | "fs_write_file_sync"
   | "fs_mkdir_sync"
   | "child_process_exec_file_sync"
+  | "process_stdout_write"
+  | "process_stderr_write"
+  | "std_process_write_stdout"
+  | "std_process_write_stderr"
+  | "std_process_write_error"
   | "url_file_url_to_path";
 
 type OrdinaryCallPlan =
@@ -11623,6 +11628,25 @@ class Emitter {
     callee: PropAccessExpr,
   ): OrdinaryCallPlan | undefined {
     const receiver = callee.receiver;
+    if (callee.name === "write" && receiver.kind === "prop_access") {
+      const receiverProp = receiver;
+      const receiverBase = receiverProp.receiver;
+      if (
+        receiverBase.kind === "ident" &&
+        receiverBase.name === "process" &&
+        (receiverProp.name === "stdout" || receiverProp.name === "stderr")
+      ) {
+        this.checkProcessStreamWriteArgs(expr, receiverProp.name);
+        return {
+          kind: "synthetic_call",
+          callee,
+          syntheticKind: receiverProp.name === "stdout" ? "process_stdout_write" : "process_stderr_write",
+          params: [this.makeParamInfo("s", T_STRING)],
+          returnType: T_VOID,
+          label: `process.${receiverProp.name}.write`,
+        };
+      }
+    }
     if (receiver.kind !== "ident") return undefined;
     if (receiver.name === "console") {
       if (callee.name !== "log" && callee.name !== "error" && callee.name !== "warn") {
@@ -11792,6 +11816,39 @@ class Emitter {
         label: "execFileSync",
       };
     }
+    if (callee.name === "writeStdout") {
+      this.checkProcessStreamWriteArgs(expr, "stdout");
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "std_process_write_stdout",
+        params: [this.makeParamInfo("s", T_STRING)],
+        returnType: T_VOID,
+        label: "writeStdout",
+      };
+    }
+    if (callee.name === "writeStderr") {
+      this.checkProcessStreamWriteArgs(expr, "stderr");
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "std_process_write_stderr",
+        params: [this.makeParamInfo("s", T_STRING)],
+        returnType: T_VOID,
+        label: "writeStderr",
+      };
+    }
+    if (callee.name === "writeError") {
+      this.checkStdProcessWriteErrorArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "std_process_write_error",
+        params: [this.makeParamInfo("s", T_STRING)],
+        returnType: T_VOID,
+        label: "writeError",
+      };
+    }
     if (callee.name === "fileURLToPath") {
       this.checkNodeUrlFileURLToPathArgs(expr);
       return {
@@ -11810,10 +11867,7 @@ class Emitter {
     return (
       name === "resolve" ||
       name === "join" ||
-      name === "exit" ||
-      name === "writeStdout" ||
-      name === "writeStderr" ||
-      name === "writeError"
+      name === "exit"
     );
   }
 
@@ -12174,6 +12228,21 @@ class Emitter {
       }
       if (plan.syntheticKind === "child_process_exec_file_sync") {
         return this.emitNodeChildProcessExecFileSync(expr);
+      }
+      if (plan.syntheticKind === "process_stdout_write") {
+        return this.emitProcessStreamWrite(expr, "stdout");
+      }
+      if (plan.syntheticKind === "process_stderr_write") {
+        return this.emitProcessStreamWrite(expr, "stderr");
+      }
+      if (plan.syntheticKind === "std_process_write_stdout") {
+        return this.emitProcessStreamWrite(expr, "stdout");
+      }
+      if (plan.syntheticKind === "std_process_write_stderr") {
+        return this.emitProcessStreamWrite(expr, "stderr");
+      }
+      if (plan.syntheticKind === "std_process_write_error") {
+        return this.emitStdProcessWriteError(expr);
       }
       if (plan.syntheticKind === "url_file_url_to_path") {
         return this.emitNodeUrlFileURLToPath(expr);
