@@ -98,6 +98,7 @@ typedef void (*topaz_promise_continuation_fn)(void *ctx, topaz_promise *source, 
 typedef enum {
   TOPAZ_PROMISE_CONTINUATION_FULFILLED,
   TOPAZ_PROMISE_CONTINUATION_REJECTED,
+  TOPAZ_PROMISE_CONTINUATION_SETTLED,
 } topaz_promise_continuation_kind;
 
 typedef struct topaz_promise_continuation {
@@ -169,13 +170,19 @@ static inline void topaz_promise_settle_continuations(topaz_promise *promise) {
     topaz_promise_continuation *next = cont->next;
     cont->next = NULL;
     if (promise->state == TOPAZ_PROMISE_FULFILLED) {
-      if (cont->kind == TOPAZ_PROMISE_CONTINUATION_FULFILLED) {
+      if (
+        cont->kind == TOPAZ_PROMISE_CONTINUATION_FULFILLED ||
+        cont->kind == TOPAZ_PROMISE_CONTINUATION_SETTLED
+      ) {
         topaz_microtask_enqueue(cont->fn, cont->ctx, promise, cont->target);
       } else if (cont->propagate_on_bypass) {
         topaz_promise_propagate_fulfilled(cont->target, promise);
       }
     } else if (promise->state == TOPAZ_PROMISE_REJECTED) {
-      if (cont->kind == TOPAZ_PROMISE_CONTINUATION_REJECTED) {
+      if (
+        cont->kind == TOPAZ_PROMISE_CONTINUATION_REJECTED ||
+        cont->kind == TOPAZ_PROMISE_CONTINUATION_SETTLED
+      ) {
         topaz_microtask_enqueue(cont->fn, cont->ctx, promise, cont->target);
       } else if (cont->propagate_on_bypass) {
         topaz_promise_reject_with(cont->target, promise->rejected_error);
@@ -254,13 +261,19 @@ static inline void *topaz_promise_add_continuation(
     }
     source->continuations_tail = cont;
   } else if (source->state == TOPAZ_PROMISE_FULFILLED) {
-    if (kind == TOPAZ_PROMISE_CONTINUATION_FULFILLED) {
+    if (
+      kind == TOPAZ_PROMISE_CONTINUATION_FULFILLED ||
+      kind == TOPAZ_PROMISE_CONTINUATION_SETTLED
+    ) {
       topaz_microtask_enqueue(fn, ctx, source, target);
     } else if (propagate_on_bypass) {
       topaz_promise_propagate_fulfilled(target, source);
     }
   } else {
-    if (kind == TOPAZ_PROMISE_CONTINUATION_REJECTED) {
+    if (
+      kind == TOPAZ_PROMISE_CONTINUATION_REJECTED ||
+      kind == TOPAZ_PROMISE_CONTINUATION_SETTLED
+    ) {
       topaz_microtask_enqueue(fn, ctx, source, target);
     } else if (propagate_on_bypass) {
       topaz_promise_reject_with(target, source->rejected_error);

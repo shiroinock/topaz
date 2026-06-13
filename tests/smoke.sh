@@ -2962,6 +2962,7 @@ run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejecti
 run_case promise_then_fulfilled $'sync\npromise returned\nthen number\n42\nthen string\nready'
 run_case promise_catch_rejected $'sync tail\nfifo then\nfifo catch\nfifo\ncatch number\nnumber\nfulfilled bypass\n20\ncatch string\ncatch void\nvoid\ncatch throw\nthen number\n10\nthen string\nstring\nthen void\ncatch second\n7\nthen throw recovery\n99'
 run_case promise_then_on_rejected $'sync tail\nfulfilled branch\n2\nrejected branch\nrecover\nvoid fulfilled\nthrowing fulfilled\nfulfilled then\n2\nrejected then\n7\nvoid then\nthrow recovery\n9\nthrow then\n9'
+run_case promise_finally $'sync tail\ncleanup fulfilled\ncleanup rejected\ncleanup void\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n1\nrejected preserved\nsource\nvoid then\nfifo final then\n5\noverride catch\n77\nrejected recovery\n2\noverride then\n77'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
@@ -3033,7 +3034,11 @@ run_fail_case promise_catch_deferred_fail examples/promise_catch_deferred_fail.t
 run_fail_case promise_catch_return_mismatch_fail examples/promise_catch_return_mismatch_fail.ts "Promise.catch callback return type topaz_string does not match expected topaz_number"
 run_fail_case promise_catch_return_promise_fail examples/promise_catch_return_promise_fail.ts "Promise.catch callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
 run_fail_case promise_catch_wrong_arity_fail examples/promise_catch_wrong_arity_fail.ts "Promise.catch expects exactly one argument, got 0"
-run_fail_case promise_finally_deferred_fail examples/promise_finally_deferred_fail.ts "Promise method '.finally' is deferred until the Promise runtime/scheduler surface is implemented"
+run_fail_case promise_finally_wrong_arity_fail examples/promise_finally_wrong_arity_fail.ts "Promise.finally expects exactly one argument, got 0"
+run_fail_case promise_finally_parameter_fail examples/promise_finally_parameter_fail.ts "Promise.finally callback arity 1 does not match expected 0"
+run_fail_case promise_finally_non_void_return_fail examples/promise_finally_non_void_return_fail.ts "Promise.finally callback must return void, got topaz_number"
+run_fail_case promise_finally_return_promise_fail examples/promise_finally_return_promise_fail.ts "Promise.finally callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
+run_fail_case promise_finally_non_fn_fail examples/promise_finally_non_fn_fail.ts "Promise.finally callback must be a function value"
 run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"
 run_fail_case promise_reject_no_context_fail examples/promise_reject_no_context_fail.ts "Promise.reject requires a contextual Promise<T> target"

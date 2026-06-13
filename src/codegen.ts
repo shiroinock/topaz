@@ -11769,6 +11769,10 @@ class Emitter {
     return this.inferCallbackFn(cb, [T_UNKNOWN], "Promise.then onRejected");
   }
 
+  private inferPromiseFinallyCallbackFn(cb: Expr): FnType {
+    return this.inferCallbackFn(cb, [], "Promise.finally");
+  }
+
   private checkPromiseThenResultType(cb: Expr, resultType: TopazType, label: string): void {
     if (resultType.kind === "promise") {
       throw new CodegenError(
@@ -11846,6 +11850,31 @@ class Emitter {
       );
     }
     return promiseType;
+  }
+
+  private inferPromiseFinallyCall(expr: CallExpr, baseType: TopazType): TopazType {
+    if (baseType.kind !== "promise") {
+      throwInternalCodegenError("inferPromiseFinallyCall: base is not Promise<T>");
+    }
+    this.checkPromiseMethodTypeArgs(expr, "finally");
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `Promise.finally expects exactly one argument, got ${expr.args.length}`);
+    }
+    const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
+    const resultType = fnType.returnType;
+    if (resultType.kind === "promise") {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        "Promise.finally callback returning Promise<T> is deferred until explicit thenable assimilation is implemented",
+      );
+    }
+    if (resultType.kind !== "void") {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        `Promise.finally callback must return void, got ${typeIdent(resultType)}`,
+      );
+    }
+    return baseType;
   }
 
   private promiseThenRunnerName(payloadType: TopazType, resultType: TopazType): string {
@@ -11943,6 +11972,50 @@ class Emitter {
     return runnerName;
   }
 
+  private promiseFinallyRunnerName(payloadType: TopazType): string {
+    return `__topaz_promise_finally_${cIdentFragment(typeKey(payloadType))}`;
+  }
+
+  private promiseFinallyContextName(payloadType: TopazType): string {
+    return `${this.promiseFinallyRunnerName(payloadType)}_ctx`;
+  }
+
+  private recordPromiseFinallyRunner(payloadType: TopazType, fnType: FnType): string {
+    const runnerName = this.promiseFinallyRunnerName(payloadType);
+    if (this.promiseThenRunners.has(runnerName)) return runnerName;
+    this.promiseThenRunners.add(runnerName);
+    this.recordFnMonomorph(fnType);
+
+    const ctxName = this.promiseFinallyContextName(payloadType);
+    const fnTypeName = typeIdent(fnType);
+    this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n  ${fnTypeName} cb;\n} ${ctxName};`);
+    this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
+
+    const lines: string[] = [];
+    lines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target) {`);
+    lines.push(`  ${ctxName} *ctx = (${ctxName} *)__topaz_ctx;`);
+    lines.push("  topaz_try_frame __topaz_promise_frame;");
+    lines.push("  topaz_try_push(&__topaz_promise_frame);");
+    lines.push("  if (setjmp(__topaz_promise_frame.env) == 0) {");
+    lines.push("    ctx->cb.fn(ctx->cb.env);");
+    lines.push("    topaz_try_pop();");
+    lines.push("    if (source->state == TOPAZ_PROMISE_FULFILLED) {");
+    if (payloadType.kind === "void") {
+      lines.push("      topaz_promise_fulfill_void(target);");
+    } else {
+      lines.push("      topaz_promise_propagate_fulfilled(target, source);");
+    }
+    lines.push("    } else {");
+    lines.push("      topaz_promise_reject_with(target, source->rejected_error);");
+    lines.push("    }");
+    lines.push("  } else {");
+    lines.push("    topaz_promise_reject_with(target, topaz_throw_value);");
+    lines.push("  }");
+    lines.push("}");
+    this.promiseThenDefLines.push(lines.join("\n"));
+    return runnerName;
+  }
+
   private emitPromiseThenCall(expr: CallExpr, callee: PropAccessExpr, baseType: TopazType): string {
     const promiseType = this.inferPromiseThenCall(expr, baseType);
     if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
@@ -12012,6 +12085,33 @@ class Emitter {
       `${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_alloc(sizeof(${ctxName})); ` +
       `*${ctxVar} = (${ctxName}){ .cb = ${cbVar} }; ` +
       `topaz_promise_catch(${sourceVar}, ${runnerName}, ${ctxVar}); })`
+    );
+  }
+
+  private emitPromiseFinallyCall(expr: CallExpr, callee: PropAccessExpr, baseType: TopazType): string {
+    const promiseType = this.inferPromiseFinallyCall(expr, baseType);
+    if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
+      throwInternalCodegenError("emitPromiseFinallyCall: invalid Promise<T> types");
+    }
+    const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
+    const runnerName = this.recordPromiseFinallyRunner(baseType.value, fnType);
+    const ctxName = this.promiseFinallyContextName(baseType.value);
+    const fnTypeName = typeIdent(fnType);
+    const id = this.tmpCounter++;
+    const sourceVar = `__topaz_finally_src_${id}`;
+    const cbVar = `__topaz_finally_cb_${id}`;
+    const ctxVar = `__topaz_finally_ctx_${id}`;
+    const targetVar = `__topaz_finally_target_${id}`;
+    const sourceExpr = this.emitExpression(callee.receiver);
+    const cbExpr = this.emitWithExpected(expr.args[0], fnType);
+    return (
+      `({ void *${sourceVar} = ${sourceExpr}; ` +
+      `${fnTypeName} ${cbVar} = ${cbExpr}; ` +
+      `${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_alloc(sizeof(${ctxName})); ` +
+      `*${ctxVar} = (${ctxName}){ .cb = ${cbVar} }; ` +
+      `void *${targetVar} = topaz_promise_new_pending(); ` +
+      `topaz_promise_add_continuation(${sourceVar}, TOPAZ_PROMISE_CONTINUATION_SETTLED, ${runnerName}, ${ctxVar}, ${targetVar}, false); ` +
+      `${targetVar}; })`
     );
   }
 
@@ -13136,6 +13236,9 @@ class Emitter {
         }
         if (prop.name === "catch") {
           return this.emitPromiseCatchCall(expr, prop, baseType);
+        }
+        if (prop.name === "finally") {
+          return this.emitPromiseFinallyCall(expr, prop, baseType);
         }
         throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
       }
@@ -15564,6 +15667,9 @@ class Emitter {
           }
           if (prop.name === "catch") {
             return this.inferPromiseCatchCall(expr, baseType);
+          }
+          if (prop.name === "finally") {
+            return this.inferPromiseFinallyCall(expr, baseType);
           }
           throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
         }
