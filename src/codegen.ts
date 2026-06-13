@@ -4366,7 +4366,7 @@ class Emitter {
     if (payload === undefined) {
       throw this.typeErr(
         { pos: payloadType.pos },
-        "unsupported brand intersection shape: phantom field type must be a string literal or typeof Identifier",
+        "unsupported brand intersection shape: phantom field type must be a string literal, typeof Identifier, unknown, or never",
       );
     }
     const fieldKey = member.nameKind === "computed_identifier" ? `[${member.name}]` : member.name;
@@ -4430,7 +4430,7 @@ class Emitter {
       if (payloadDefault === undefined) {
         throw this.typeErr(
           { pos: payloadDefaultNode.pos },
-          "brand template payload default must be a string literal or typeof Identifier",
+          "brand template payload default must be a string literal, typeof Identifier, unknown, or never",
         );
       }
     }
@@ -4444,6 +4444,8 @@ class Emitter {
   private brandPayloadSpelling(node: TypeNode): string | undefined {
     if (node.kind === "type_str_lit") return node.value;
     if (node.kind === "type_query") return `typeof ${node.name}`;
+    if (node.kind === "type_unknown") return "unknown";
+    if (node.kind === "type_ref" && node.name === "never" && node.typeArgs.length === 0) return "never";
     return undefined;
   }
 
@@ -4492,7 +4494,7 @@ class Emitter {
       if (payload === undefined) {
         throw this.typeErr(
           { pos: payloadNode.pos },
-          `brand template alias '${aliasName}' payload type argument must be a string literal or typeof Identifier`,
+          `brand template alias '${aliasName}' payload type argument must be a string literal, typeof Identifier, unknown, or never`,
         );
       }
     }

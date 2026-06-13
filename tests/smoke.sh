@@ -3444,6 +3444,9 @@ run_case brand_generic_computed_template_constrained $'u1\nu1\nt1\ntrue\ntrue\nu
 run_case brand_generic_template_type_query_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_default_payload $'u1\nu1\nu1\ntrue\ntrue\nu1\nt1\nother'
 run_case brand_generic_computed_template_default_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_unknown_never_payload $'u1\nu1\nn1\ntrue\ntrue\nu1\nn1'
+run_case brand_generic_template_unknown_default_payload $'u1\nu1\nu1\ntrue\ntrue\nu1\nt1'
+run_case brand_generic_template_never_default_payload $'o1\no1\no1\ntrue\ntrue\no1\ni1'
 run_case brand_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_export_ambient_unique_symbol_marker $'u1\ntrue'
@@ -3451,8 +3454,10 @@ run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_te
 run_fail_case brand_generic_template_type_query_cross_assign_fail examples/brand_generic_template_type_query_cross_assign_fail.ts "topaz_brand_Brand_3a__5b_UserIdBrand_5d__3a_typeof_20_UserIdBrand"
 run_fail_case brand_generic_template_default_cross_assign_fail examples/brand_generic_template_default_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_implicit_fail examples/brand_generic_template_implicit_fail.ts "type mismatch"
-run_fail_case brand_generic_template_bad_payload_fail examples/brand_generic_template_bad_payload_fail.ts "payload type argument must be a string literal"
-run_fail_case brand_generic_template_bad_default_fail examples/brand_generic_template_bad_default_fail.ts "payload default must be a string literal or typeof Identifier"
+run_fail_case brand_generic_template_bad_payload_fail examples/brand_generic_template_bad_payload_fail.ts "payload type argument must be a string literal, typeof Identifier, unknown, or never"
+run_fail_case brand_generic_template_bad_default_fail examples/brand_generic_template_bad_default_fail.ts "payload default must be a string literal, typeof Identifier, unknown, or never"
+run_fail_case brand_generic_template_unknown_never_cross_assign_fail examples/brand_generic_template_unknown_never_cross_assign_fail.ts "topaz_brand_Opaque_3a___opaque_3a_never"
+run_fail_case brand_generic_template_arbitrary_payload_ref_fail examples/brand_generic_template_arbitrary_payload_ref_fail.ts "payload type argument must be a string literal, typeof Identifier, unknown, or never"
 run_fail_case brand_generic_template_base_default_fail examples/brand_generic_template_base_default_fail.ts "base type parameter default is unsupported"
 run_fail_case brand_generic_template_bad_shape_fail examples/brand_generic_template_bad_shape_fail.ts "generic type alias 'Brand' is unsupported"
 run_fail_case brand_generic_template_bad_constraint_fail examples/brand_generic_template_bad_constraint_fail.ts "brand template payload constraint must be string"
