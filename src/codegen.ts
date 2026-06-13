@@ -12616,6 +12616,10 @@ class Emitter {
     return this.inferCallbackFn(cb, [T_UNKNOWN], "Promise.then onRejected");
   }
 
+  private isExplicitUndefinedPromiseHandler(expr: Expr): boolean {
+    return this.unwrapParenExpr(expr).kind === "undefined_lit";
+  }
+
   private inferPromiseFinallyCallbackFn(cb: Expr): FnType {
     return this.inferCallbackFn(cb, [], "Promise.finally");
   }
@@ -12664,10 +12668,57 @@ class Emitter {
     if (expr.args.length !== 1 && expr.args.length !== 2) {
       throw new CodegenError({ pos: expr.pos }, `Promise.then expects one or two arguments, got ${expr.args.length}`);
     }
+    if (expr.args.length === 2) {
+      const fulfilledIsUndefined = this.isExplicitUndefinedPromiseHandler(expr.args[0]);
+      const rejectedIsUndefined = this.isExplicitUndefinedPromiseHandler(expr.args[1]);
+      if (fulfilledIsUndefined && rejectedIsUndefined) {
+        throw new CodegenError(
+          { pos: expr.args[0].pos },
+          "Promise.then requires at least one function handler; both handlers being undefined is unsupported",
+        );
+      }
+      if (fulfilledIsUndefined) {
+        const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
+        const rejectedResultType = rejectedFnType.returnType;
+        this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true);
+        const rejectedPayload = this.normalizePromiseThenResultPayload(
+          expr.args[1],
+          rejectedResultType,
+          "Promise.then onRejected",
+        );
+        if (!typeEq(rejectedPayload, baseType.value)) {
+          throw new CodegenError(
+            { pos: expr.args[1].pos },
+            `Promise.then onRejected callback normalized return payload ${typeIdent(rejectedPayload)} does not match source payload ${typeIdent(baseType.value)}`,
+          );
+        }
+        const sourcePromiseType = promiseOf(baseType.value);
+        if (sourcePromiseType === undefined) {
+          throw new CodegenError(
+            { pos: expr.args[1].pos },
+            `Promise.then onRejected callback return type ${typeIdent(rejectedResultType)} is unsupported for source payload ${typeIdent(baseType.value)}`,
+          );
+        }
+        return sourcePromiseType;
+      }
+      if (rejectedIsUndefined) {
+        const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
+        const resultType = fnType.returnType;
+        this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true);
+        const promiseType = resultType.kind === "promise" ? resultType : promiseOf(resultType);
+        if (promiseType === undefined) {
+          throw new CodegenError(
+            { pos: expr.args[0].pos },
+            `Promise.then callback return type ${typeIdent(resultType)} is unsupported (must be value-representable or void)`,
+          );
+        }
+        return promiseType;
+      }
+    }
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
     this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true);
-    if (expr.args.length === 2) {
+    if (expr.args.length === 2 && !this.isExplicitUndefinedPromiseHandler(expr.args[1])) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedResultType = rejectedFnType.returnType;
       this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true);
@@ -12935,6 +12986,29 @@ class Emitter {
     if (promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseThenCall: invalid Promise<T> types");
     }
+    if (
+      expr.args.length === 2 &&
+      this.isExplicitUndefinedPromiseHandler(expr.args[0]) &&
+      !this.isExplicitUndefinedPromiseHandler(expr.args[1])
+    ) {
+      const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
+      const runnerName = this.recordPromiseCatchRunner(baseType.value, rejectedFnType);
+      const ctxName = this.promiseCatchContextName(baseType.value, rejectedFnType.returnType);
+      const fnTypeName = typeIdent(rejectedFnType);
+      const id = this.tmpCounter++;
+      const sourceVar = `__topaz_then_catch_src_${id}`;
+      const cbVar = `__topaz_then_catch_cb_${id}`;
+      const ctxVar = `__topaz_then_catch_ctx_${id}`;
+      const sourceExpr = this.emitExpression(callee.receiver);
+      const cbExpr = this.emitWithExpected(expr.args[1], rejectedFnType);
+      return (
+        `({ void *${sourceVar} = ${sourceExpr}; ` +
+        `${fnTypeName} ${cbVar} = ${cbExpr}; ` +
+        `${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_alloc(sizeof(${ctxName})); ` +
+        `*${ctxVar} = (${ctxName}){ .cb = ${cbVar} }; ` +
+        `topaz_promise_catch(${sourceVar}, ${runnerName}, ${ctxVar}); })`
+      );
+    }
     const promisePayloadType = promiseType.value;
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
@@ -12947,7 +13021,7 @@ class Emitter {
     const ctxVar = `__topaz_then_ctx_${id}`;
     const sourceExpr = this.emitExpression(callee.receiver);
     const cbExpr = this.emitWithExpected(expr.args[0], fnType);
-    if (expr.args.length === 2) {
+    if (expr.args.length === 2 && !this.isExplicitUndefinedPromiseHandler(expr.args[1])) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedRunnerName = this.recordPromiseCatchRunner(promisePayloadType, rejectedFnType);
       const rejectedCtxName = this.promiseCatchContextName(promisePayloadType, rejectedFnType.returnType);
