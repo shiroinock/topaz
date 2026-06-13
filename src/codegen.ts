@@ -216,7 +216,8 @@ type SyntheticCallKind =
   | "std_process_write_stdout"
   | "std_process_write_stderr"
   | "std_process_write_error"
-  | "url_file_url_to_path";
+  | "url_file_url_to_path"
+  | "promise_resolve";
 
 type OrdinaryCallPlan =
   | {
@@ -11813,6 +11814,23 @@ class Emitter {
         label: "String.fromCharCode",
       };
     }
+    if (receiver.name === "Promise" && callee.name === "resolve") {
+      const returnType = this.inferPromiseResolveCall(expr);
+      if (returnType.kind !== "promise") {
+        throwInternalCodegenError("resolveSyntheticCallPlan: Promise.resolve did not infer Promise<T>");
+      }
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "promise_resolve",
+        params:
+          expr.args.length === 0
+            ? this.noParamInfos()
+            : [this.makeParamInfo("value", returnType.value)],
+        returnType,
+        label: "Promise.resolve",
+      };
+    }
     return undefined;
   }
 
@@ -12397,6 +12415,9 @@ class Emitter {
       }
       if (plan.syntheticKind === "url_file_url_to_path") {
         return this.emitNodeUrlFileURLToPath(expr);
+      }
+      if (plan.syntheticKind === "promise_resolve") {
+        return this.emitPromiseResolveCall(expr);
       }
     }
     if (plan.kind === "class_method") {

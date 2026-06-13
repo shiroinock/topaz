@@ -1,8 +1,16 @@
 /// <reference lib="es2015.promise" />
 
-async function answer(): Promise<Promise<number>> {
-  const p = Promise.resolve(await Promise.resolve(1));
-  return p;
+class AsyncErr {
+  message: string;
+
+  constructor(message: string) {
+    this.message = message;
+  }
 }
 
-answer();
+async function bad(): Promise<Promise<void>> {
+  const p: Promise<void> = Promise.reject(await Promise.resolve(new AsyncErr("boom")));
+  return Promise.resolve(p);
+}
+
+bad();

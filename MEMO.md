@@ -425,6 +425,8 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 - [x] **5.34 Array.push call descriptor await** — 5.33 の Array receiver descriptor frontier を statement-only の fixed-argument `Array<T>.push(...)` へ広げ、receiver と await より左の fixed 引数を suspension 前に frame temp へ保存し、再開後は既存の `emitArrayPushCall` に戻して mutation order を保つようにした。`Array.push` は Topaz では引き続き `void` で、value position の `xs.push(await value)` は既存 diagnostic のまま reject。ordinary `Array.push(...items)` spread は維持するが await-lowered push とは組み合わせず、callback Array methods、`process.exit`、Promise APIs、thenable assimilation、scheduler / task queue work は引き続き deferred。決定ログは `docs/adr/0501-array-push-call-descriptor-await.md`。
 
+- [x] **5.35 Promise.resolve call descriptor await** — 5.25 以降の synthetic call descriptor frontier を Topaz-owned `Promise.resolve(value)` に限って広げ、declaration initializer / terminal return / expression-statement discard の direct awaited payload を既存の Promise value allocation に戻すようにした。`Promise.resolve()` / arity / `undefined` / explicit type argument diagnostics は維持し、`Promise.reject`、rejection handlers、Promise-returning callback flattening、PromiseLike / thenable assimilation、scheduler / task queue work は引き続き deferred。決定ログは `docs/adr/0502-promise-resolve-call-descriptor-await.md`。
+
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
