@@ -2991,6 +2991,7 @@ run_case async_await_promise_resolve_call_arg $'declared pre\narrow pre\nmethod 
 run_case async_await_assignment_statement $'declared pre\narrow pre\nmethod pre\nexpr pre\narray pre\nsync tail\ndeclared post\narrow post\nmethod post\nexpr post\narray post\ndeclared then\n11\narrow then\n22\nmethod then\n35\nexpr then\n44\narray then\n66'
 run_case async_await_string_index_of_return $'return search\nsync tail\nthen\n1'
 run_case async_await_method_receiver $'return before\nreturn receiver\ndecl receiver\niface receiver\ndiscard receiver\nsync tail\nreturn arg\ndecl arg\ndecl method\ndecl value\n15\niface arg\niface method\ndiscard arg\ndiscard method\ndiscard after\nreturn then\n1\ndecl then\n15\niface then\n23\ndiscard then'
+run_case async_await_assignment_rhs_expression $'local pre\nexpr pre\nmethod pre\nstring pre\nsync tail\nlocal post\nexpr post\nmethod post\nstring post\nlocal then\n3\nexpr then\n15\nmethod then\n27\nstring then\nab'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"

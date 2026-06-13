@@ -4966,7 +4966,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await, call-expression statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, call-expression statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
   }
 
   private tryBuildAssignmentAwaitStatementExpression(
@@ -4981,8 +4981,7 @@ class Emitter {
     if (this.collectAwaitExprsInExpr(root.target).length > 0) {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
-    const valueMaybe = this.unwrapParenExpr(root.value);
-    if (valueMaybe.kind !== "await_expr" || valueMaybe.pos !== awaitExpr.pos || valueMaybe.end !== awaitExpr.end) {
+    if (!this.simpleAwaitReplacementSupported(root.value, awaitExpr)) {
       return undefined;
     }
     const awaitedTempExpr: IdentExpr = {
@@ -4995,7 +4994,7 @@ class Emitter {
       kind: "assign_expr",
       op: root.op,
       target: root.target,
-      value: awaitedTempExpr,
+      value: this.replaceAwaitExprInExpr(root.value, awaitExpr, awaitedTempExpr),
       pos: root.pos,
       end: root.end,
     };
