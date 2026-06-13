@@ -130,6 +130,10 @@ type AsyncAwaitFrameInfo = {
   bindings: Array<AwaitBindingInfo>;
 };
 
+type AsyncFrameThisContext = {
+  className: string;
+};
+
 type CaptureContext = {
   envType: string;
   envIsEmpty: boolean;
@@ -3776,7 +3780,7 @@ class Emitter {
     if (methodSf === undefined) {
       throwInternalCodegenError(`missing source module for method '${info.name}.${method.decl.name}'`);
     } else if (asyncPayload !== undefined) {
-      body = this.emitAsyncMethodBody(method.decl.body, methodSf, asyncPayload);
+      body = this.emitAsyncMethodBody(method.decl.body, methodSf, asyncPayload, method.params, info.name);
     } else {
       body = this.emitBlockBoundary(method.decl.body, methodSf);
     }
@@ -3791,17 +3795,24 @@ class Emitter {
     return rendered;
   }
 
-  private emitAsyncMethodBody(block: BlockStmt, sf: SourceModule, payloadType: TopazType): string {
+  private emitAsyncMethodBody(
+    block: BlockStmt,
+    sf: SourceModule,
+    payloadType: TopazType,
+    params: Array<ParamInfo>,
+    className: string,
+  ): string {
     return this.withSfString(sf, () => {
-      for (const s of block.stmts) {
-        const found = this.collectAwaitExprsInStmt(s);
-        if (found.length > 0) {
-          const first = found[0];
-          throw new CodegenError(
-            { pos: first.pos },
-            "async method with await is deferred until async method frame lowering",
-          );
-        }
+      const awaitFrame = this.findAsyncAwaitFrame(block, payloadType);
+      if (awaitFrame !== undefined) {
+        return this.emitAsyncFunctionBodyWithAwaitFrame(
+          block,
+          payloadType,
+          params,
+          awaitFrame,
+          undefined,
+          { className },
+        );
       }
       const lines: string[] = [];
       lines.push("{");
@@ -4485,6 +4496,7 @@ class Emitter {
     params: Array<ParamInfo>,
     frame: AsyncAwaitFrameInfo,
     runnerCaptureContext?: CaptureContext,
+    runnerThisContext?: AsyncFrameThisContext,
   ): string {
     const firstAwait = frame.bindings[0];
     const id = this.asyncAwaitCounter++;
@@ -4492,7 +4504,16 @@ class Emitter {
     const runnerName = `__topaz_async_await_${id}_runner`;
     const sourceVar = `__topaz_await_source_${id}`;
     const frameVar = `__topaz_await_frame_${id}`;
-    this.recordAsyncAwaitRunner(ctxName, runnerName, payloadType, params, frame, block.stmts, runnerCaptureContext);
+    this.recordAsyncAwaitRunner(
+      ctxName,
+      runnerName,
+      payloadType,
+      params,
+      frame,
+      block.stmts,
+      runnerCaptureContext,
+      runnerThisContext,
+    );
 
     const lines: string[] = [];
     lines.push("{");
@@ -4511,6 +4532,9 @@ class Emitter {
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
     for (const p of params) {
       lines.push(`    ${frameVar}->${p.name} = ${p.name};`);
+    }
+    if (runnerThisContext !== undefined) {
+      lines.push(`    ${frameVar}->${TOPAZ_THIS} = ${TOPAZ_THIS};`);
     }
     if (runnerCaptureContext !== undefined && runnerCaptureContext.captures.size > 0) {
       lines.push(`    ${frameVar}->__topaz_env = __topaz_env;`);
@@ -4535,10 +4559,14 @@ class Emitter {
     frame: AsyncAwaitFrameInfo,
     stmts: Array<Stmt>,
     runnerCaptureContext?: CaptureContext,
+    runnerThisContext?: AsyncFrameThisContext,
   ): void {
     const fields: string[] = [];
     fields.push("  int __topaz_pc;");
     fields.push("  topaz_promise *output;");
+    if (runnerThisContext !== undefined) {
+      fields.push(`  topaz_class_${runnerThisContext.className} *${TOPAZ_THIS};`);
+    }
     if (runnerCaptureContext !== undefined && runnerCaptureContext.captures.size > 0) {
       fields.push("  void *__topaz_env;");
     }
@@ -4552,13 +4580,21 @@ class Emitter {
     const prevContinuationTarget = this.currentAsyncContinuationTarget;
     const prevLive = this.liveTryFrames;
     const prevFinallyReturn = this.finallyReturnContext;
+    const prevClass = this.currentClass;
     this.currentAsyncContinuationTarget = "target";
     this.liveTryFrames = 0;
     this.finallyReturnContext = undefined;
+    if (runnerThisContext !== undefined) {
+      this.currentClass = runnerThisContext.className;
+    }
 
     const lines: string[] = [];
     lines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target) {`);
     lines.push(`  ${ctxName} *ctx = (${ctxName} *)__topaz_ctx;`);
+    if (runnerThisContext !== undefined) {
+      lines.push(`  topaz_class_${runnerThisContext.className} *${TOPAZ_THIS} = ctx->${TOPAZ_THIS};`);
+      lines.push(`  (void)${TOPAZ_THIS};`);
+    }
     if (runnerCaptureContext !== undefined && runnerCaptureContext.captures.size > 0) {
       lines.push("  void *__topaz_env = ctx->__topaz_env;");
       lines.push("  (void)__topaz_env;");
@@ -4645,6 +4681,7 @@ class Emitter {
     this.currentAsyncContinuationTarget = prevContinuationTarget;
     this.liveTryFrames = prevLive;
     this.finallyReturnContext = prevFinallyReturn;
+    this.currentClass = prevClass;
     this.promiseThenDefLines.push(lines.join("\n"));
   }
 

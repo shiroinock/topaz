@@ -2942,6 +2942,7 @@ run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n
 run_case async_await_two_bindings $'before a\nsync tail\nbetween\nafter b\nthen sum\n42'
 run_case async_arrow_await $'before arrow await\nsync tail\nbetween arrow awaits\nafter arrow await\nthen arrow await\n42'
 run_case async_method_no_await $'method body\nsync tail\nthen method\n42'
+run_case async_method_await $'method before await\nsync tail\nmethod between awaits\nmethod after await\nthen method await\n42'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -2951,7 +2952,7 @@ run_fail_case await_try_deferred_fail examples/await_try_deferred_fail.ts "await
 run_fail_case async_function_wrong_return_fail examples/async_function_wrong_return_fail.ts "async function return annotation must be Promise<T>"
 run_fail_case async_function_return_promise_fail examples/async_function_return_promise_fail.ts "type mismatch: expected topaz_number, got topaz_promise_number"
 run_fail_case async_arrow_deferred_fail examples/async_arrow_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case async_method_deferred_fail examples/async_method_deferred_fail.ts "async method with await is deferred until async method frame lowering"
+run_fail_case async_method_deferred_fail examples/async_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case async_generic_deferred_fail examples/async_generic_deferred_fail.ts "async generic functions are unsupported"
 run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
 run_fail_case promise_then_on_rejected_deferred_fail examples/promise_then_on_rejected_deferred_fail.ts "Promise.then expects exactly one argument, got 2"
