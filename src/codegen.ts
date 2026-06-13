@@ -190,8 +190,16 @@ type AwaitStatementInfo = {
 
 type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo | AwaitInitializerInfo | AwaitStatementInfo;
 
+type AsyncLocalCapture = {
+  stmt: VarDeclStmt;
+  type: TopazType;
+  isConst: boolean;
+  index: number;
+};
+
 type AsyncAwaitFrameInfo = {
   steps: Array<AsyncSuspensionStep>;
+  localCaptures: Array<AsyncLocalCapture>;
 };
 
 type SyntheticCallKind =
@@ -4603,6 +4611,7 @@ class Emitter {
       }
     }
     const steps: Array<AsyncSuspensionStep> = [];
+    const localCaptures: Array<AsyncLocalCapture> = [];
     const supportedAwaitExprs = new Set<AwaitExpr>();
     this.scope.push();
     for (let i = 0; i < block.stmts.length; i++) {
@@ -4718,8 +4727,19 @@ class Emitter {
               });
               supportedAwaitExprs.add(awaitExpr);
               this.scope.declareBinding(s.name, bindingType, s.declKind === "const", { pos: s.pos });
+            } else {
+              const localType = this.inferVarDeclTypeForAsyncFrame(s);
+              localCaptures.push({
+                stmt: s,
+                type: localType,
+                isConst: s.declKind === "const",
+                index: i,
+              });
+              this.scope.declareBinding(s.name, localType, s.declKind === "const", { pos: s.pos });
             }
           }
+        } else {
+          throw new CodegenError({ pos: s.pos }, "variable declaration must have an initializer");
         }
       } else if (s.kind === "expr_stmt") {
         const expr = this.unwrapParenExpr(s.expr);
@@ -4763,17 +4783,28 @@ class Emitter {
               );
             }
             const awaitedPayload = operandType.value;
-            this.assertNotVoid(awaitedPayload, { pos: awaitExpr.pos }, "await call statement argument");
             const tempName = `__topaz_stmt_await_${steps.length}`;
+            let transformedExpr: Expr = s.expr;
+            let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+            let preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
+            this.assertNotVoid(awaitedPayload, { pos: awaitExpr.pos }, "await statement value");
             this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
-            const callAwait = this.tryBuildCallArgAwaitExpression(s.expr, awaitExpr, tempName, steps.length);
+            const assignmentAwait = this.tryBuildAssignmentAwaitStatementExpression(s.expr, awaitExpr, tempName);
+            if (assignmentAwait !== undefined) {
+              transformedExpr = assignmentAwait;
+            } else {
+              const callAwait = this.tryBuildCallArgAwaitExpression(s.expr, awaitExpr, tempName, steps.length);
+              transformedExpr = callAwait.transformedExpr;
+              preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
+              preAwaitArgTemps = callAwait.preAwaitArgTemps;
+            }
             steps.push({
               kind: "statement",
               stmt: s,
               awaitExpr,
-              transformedExpr: callAwait.transformedExpr,
-              preAwaitReceiverTemps: callAwait.preAwaitReceiverTemps,
-              preAwaitArgTemps: callAwait.preAwaitArgTemps,
+              transformedExpr,
+              preAwaitReceiverTemps,
+              preAwaitArgTemps,
               index: i,
               pc: steps.length,
               operandType,
@@ -4869,11 +4900,9 @@ class Emitter {
     }
     const firstAwaitIndex = steps[0].index;
     const lastAwaitIndex = steps[steps.length - 1].index;
-    const stepStatementIndices = new Set<number>();
-    for (const step of steps) stepStatementIndices.add(step.index);
     for (let i = 0; i < firstAwaitIndex; i++) {
       const s = block.stmts[i];
-      if (s.kind === "var_decl" || s.kind === "var_destr_decl") {
+      if (s.kind === "var_destr_decl") {
         throw new CodegenError(
           { pos: s.pos },
           "pre-await local declarations are deferred until async frame local capture is implemented",
@@ -4882,14 +4911,7 @@ class Emitter {
     }
     for (let i = firstAwaitIndex + 1; i < lastAwaitIndex; i++) {
       const s = block.stmts[i];
-      if (s.kind === "var_decl") {
-        if (!stepStatementIndices.has(i)) {
-          throw new CodegenError(
-            { pos: s.pos },
-            "local declarations across a later await require async frame local capture, which is deferred",
-          );
-        }
-      } else if (s.kind === "var_destr_decl") {
+      if (s.kind === "var_destr_decl") {
         throw new CodegenError(
           { pos: s.pos },
           "local declarations across a later await require async frame local capture, which is deferred",
@@ -4900,7 +4922,26 @@ class Emitter {
       // Keep payloadType threaded here so type-checking work above mirrors the
       // no-await path; void async functions are otherwise handled by return lowering.
     }
-    return { steps };
+    return { steps, localCaptures };
+  }
+
+  private inferVarDeclTypeForAsyncFrame(decl: VarDeclStmt): TopazType {
+    const declAnchor: { pos: number } = { pos: decl.pos };
+    const initMaybe = decl.init;
+    if (initMaybe === undefined) {
+      throw new CodegenError(declAnchor, "variable declaration must have an initializer");
+    }
+    const typeMaybe = decl.type;
+    if (typeMaybe !== undefined) {
+      const typeAnchor: { pos: number } = { pos: typeMaybe.pos };
+      const varType = this.typeFromAnnotation(typeMaybe, typeAnchor, g_currentModule!);
+      this.assertNotVoid(varType, declAnchor, "variable type");
+      this.expectType(initMaybe, varType);
+      return varType;
+    }
+    const varType = this.inferType(initMaybe);
+    this.assertNotVoid(varType, declAnchor, "variable initializer (void-returning call cannot be stored)");
+    return varType;
   }
 
   private collectAwaitExprsInExpr(expr: Expr): Array<AwaitExpr> {
@@ -4910,7 +4951,41 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, call-expression statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await, call-expression statement await, initializer expression await, bare/method call-argument await in declaration initializers and terminal returns, and one terminal return expression await are supported";
+  }
+
+  private tryBuildAssignmentAwaitStatementExpression(
+    expr: Expr,
+    awaitExpr: AwaitExpr,
+    awaitedTempName: string,
+  ): Expr | undefined {
+    const rootMaybe = this.unwrapParenExpr(expr);
+    if (rootMaybe.kind !== "assign_expr") return undefined;
+    const root = rootMaybe;
+    if (root.op !== "=") return undefined;
+    if (this.collectAwaitExprsInExpr(root.target).length > 0) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    const valueMaybe = this.unwrapParenExpr(root.value);
+    if (valueMaybe.kind !== "await_expr" || valueMaybe.pos !== awaitExpr.pos || valueMaybe.end !== awaitExpr.end) {
+      return undefined;
+    }
+    const awaitedTempExpr: IdentExpr = {
+      kind: "ident",
+      name: awaitedTempName,
+      pos: awaitExpr.pos,
+      end: awaitExpr.end,
+    };
+    const transformedExpr: AssignExpr = {
+      kind: "assign_expr",
+      op: root.op,
+      target: root.target,
+      value: awaitedTempExpr,
+      pos: root.pos,
+      end: root.end,
+    };
+    this.inferType(transformedExpr);
+    return transformedExpr;
   }
 
   private tryBuildCallArgAwaitExpression(
@@ -5259,6 +5334,7 @@ class Emitter {
       lines.push(this.emitStatement(s, 2));
       this.applyCarryNarrowing(s);
     }
+    this.emitAsyncLocalCaptureStores(frame, firstAwaitIndex, frameVar, lines, "    ");
     this.emitAwaitStepPreArgStores(firstStep, frameVar, lines, "    ");
     const operandExpr = this.emitWithExpected(firstStep.awaitExpr.operand, firstStep.operandType);
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
@@ -5328,6 +5404,20 @@ class Emitter {
     }
   }
 
+  private emitAsyncLocalCaptureStores(
+    frame: AsyncAwaitFrameInfo,
+    beforeIndex: number,
+    frameRef: string,
+    lines: string[],
+    indent: string,
+  ): void {
+    for (const capture of frame.localCaptures) {
+      if (capture.index < beforeIndex) {
+        lines.push(`${indent}${frameRef}->${capture.stmt.name} = ${capture.stmt.name};`);
+      }
+    }
+  }
+
   private recordAsyncAwaitRunner(
     ctxName: string,
     runnerName: string,
@@ -5354,6 +5444,9 @@ class Emitter {
       fields.push("  void *__topaz_env;");
     }
     for (const p of params) fields.push(`  ${cTypeName(p.type)} ${p.name};`);
+    for (const capture of frame.localCaptures) {
+      fields.push(`  ${cTypeName(capture.type)} ${capture.stmt.name};`);
+    }
     for (const binding of frame.steps) {
       if (binding.kind === "binding") {
         if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
@@ -5506,6 +5599,17 @@ class Emitter {
           }
         }
       }
+      for (const capture of frame.localCaptures) {
+        if (capture.index >= current.index) continue;
+        this.scope.declareBinding(
+          capture.stmt.name,
+          capture.type,
+          capture.isConst,
+          { pos: capture.stmt.pos },
+        );
+        lines.push(`        ${cTypeName(capture.type)} ${capture.stmt.name} = ctx->${capture.stmt.name};`);
+        lines.push(`        (void)${capture.stmt.name};`);
+      }
       if (current.kind === "return") {
         const returnExpr = current.returnExpr;
         if (returnExpr === undefined) {
@@ -5625,6 +5729,7 @@ class Emitter {
         if (hasNextStep) {
           const next = frame.steps[i + 1];
           const nextSourceVar = `__topaz_await_next_${i}`;
+          this.emitAsyncLocalCaptureStores(frame, next.index, "ctx", lines, "        ");
           this.emitAwaitStepPreArgStores(next, "ctx", lines, "        ");
           const operandExpr = this.emitWithExpected(next.awaitExpr.operand, next.operandType);
           lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
@@ -15269,6 +15374,14 @@ class Emitter {
     if (target.kind === "ident") {
       const bMaybe = this.scope.lookup(target.name);
       if (bMaybe === undefined) {
+        const captureContext = this.captureContext;
+        if (captureContext !== undefined && captureContext.captures.has(target.name)) {
+          const capturedBinding = this.scope.lookupAcrossBarrier(target.name);
+          if (capturedBinding !== undefined && capturedBinding.isConst) {
+            throw new CodegenError(anchor, `cannot assign to const '${target.name}'`);
+          }
+          return;
+        }
         throw new CodegenError({ pos: target.pos }, `unknown identifier '${target.name}'`);
       }
       const b = bMaybe;

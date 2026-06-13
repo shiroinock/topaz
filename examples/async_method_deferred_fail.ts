@@ -2,7 +2,7 @@ class AsyncBox {
   saved: number = 0;
 
   async value(): Promise<number> {
-    this.saved = await Promise.resolve(1);
+    this.saved += await Promise.resolve(1);
     return this.saved;
   }
 }
