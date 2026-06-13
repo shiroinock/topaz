@@ -8455,6 +8455,14 @@ class Emitter {
       // as well as `obj.field = new Circle(...)` when field is an interface).
       if (op === "=") {
         const lt = this.inferType(expr.target);
+        const valueExpr = expr.value;
+        if (valueExpr.kind === "call_expr") {
+          if (this.isPromiseStaticCall(valueExpr, "reject")) {
+            const lhsStr = this.emitExpression(expr.target);
+            const rhsStr = this.emitWithExpected(valueExpr, lt);
+            return `(${lhsStr} = ${rhsStr})`;
+          }
+        }
         const rt = this.inferType(expr.value);
         if (!typeEq(lt, rt) && this.isAssignableTo(rt, lt)) {
           const lhsStr = this.emitExpression(expr.target);
@@ -9249,6 +9257,101 @@ class Emitter {
     );
   }
 
+  private isPromiseStaticCall(expr: CallExpr, name: string): boolean {
+    if (expr.optional) return false;
+    const callee = expr.callee;
+    if (callee.kind !== "prop_access") return false;
+    const receiver = callee.receiver;
+    if (receiver.kind !== "ident") return false;
+    if (receiver.name !== "Promise") return false;
+    return callee.name === name;
+  }
+
+  private checkPromiseStaticTypeArgs(expr: CallExpr, name: string): void {
+    if (expr.typeArgs.length > 0) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        `Promise.${name} type arguments are unsupported (use value inference or a contextual Promise<T> annotation)`,
+      );
+    }
+  }
+
+  private inferPromiseResolveCall(expr: CallExpr): TopazType {
+    this.checkPromiseStaticTypeArgs(expr, "resolve");
+    if (expr.args.length === 0) return { kind: "promise", value: T_VOID };
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `Promise.resolve expects 0..1 argument(s), got ${expr.args.length}`);
+    }
+    const payloadType = this.inferType(expr.args[0]);
+    const promiseType = promiseOf(payloadType);
+    if (promiseType === undefined) {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        `Promise.resolve payload type ${typeIdent(payloadType)} is unsupported (must be value-representable or void; unknown, undefined, and unsupported unions are deferred)`,
+      );
+    }
+    return promiseType;
+  }
+
+  private inferPromiseRejectWithoutContext(expr: CallExpr): TopazType {
+    this.checkPromiseStaticTypeArgs(expr, "reject");
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `Promise.reject expects exactly one argument, got ${expr.args.length}`);
+    }
+    const errorType = this.inferType(expr.args[0]);
+    if (!isClassType(errorType)) {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        `Promise.reject error must be a class instance, got ${typeIdent(errorType)}`,
+      );
+    }
+    throw new CodegenError(
+      { pos: expr.pos },
+      "Promise.reject requires a contextual Promise<T> target (annotate the binding, return type, or parameter)",
+    );
+  }
+
+  private emitPromiseResolveCall(expr: CallExpr): string {
+    const promiseType = this.inferPromiseResolveCall(expr);
+    if (promiseType.kind !== "promise") {
+      throwInternalCodegenError("emitPromiseResolveCall: resolve did not infer Promise<T>");
+    }
+    if (promiseType.value.kind === "void") {
+      return "topaz_promise_resolve_void()";
+    }
+    const payloadType = promiseType.value;
+    const payloadTmp = `__topaz_promise_value_${this.tmpCounter++}`;
+    const payloadExpr = this.emitWithExpected(expr.args[0], payloadType);
+    return `({ ${cTypeName(payloadType)} ${payloadTmp} = ${payloadExpr}; topaz_promise_resolve_copy(&${payloadTmp}, sizeof(${payloadTmp})); })`;
+  }
+
+  private checkPromiseRejectWithExpected(expr: CallExpr, expected: TopazType): TopazType {
+    this.checkPromiseStaticTypeArgs(expr, "reject");
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `Promise.reject expects exactly one argument, got ${expr.args.length}`);
+    }
+    if (!isPromiseType(expected)) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        `Promise.reject requires a contextual Promise<T> target, got ${typeIdent(expected)}`,
+      );
+    }
+    const errorType = this.inferType(expr.args[0]);
+    if (!isClassType(errorType)) {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        `Promise.reject error must be a class instance, got ${typeIdent(errorType)}`,
+      );
+    }
+    return errorType;
+  }
+
+  private emitPromiseRejectWithExpected(expr: CallExpr, expected: TopazType): string {
+    const errorType = this.checkPromiseRejectWithExpected(expr, expected);
+    const errorExpr = this.emitWithExpected(expr.args[0], errorType);
+    return `topaz_promise_reject((void *)(${errorExpr}))`;
+  }
+
   private emitCall(expr: CallExpr): string {
     const callee = expr.callee;
 
@@ -9288,6 +9391,12 @@ class Emitter {
           return this.emitConsoleCall(expr, prop.name);
         }
         if (receiver.name === "Promise") {
+          if (prop.name === "resolve") {
+            return this.emitPromiseResolveCall(expr);
+          }
+          if (prop.name === "reject") {
+            this.inferPromiseRejectWithoutContext(expr);
+          }
           throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise.${prop.name}`);
         }
 
@@ -12051,6 +12160,12 @@ class Emitter {
             return this.inferStringStaticReturn(expr, prop);
           }
           if (receiver.name === "Promise") {
+            if (prop.name === "resolve") {
+              return this.inferPromiseResolveCall(expr);
+            }
+            if (prop.name === "reject") {
+              return this.inferPromiseRejectWithoutContext(expr);
+            }
             throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise.${prop.name}`);
           }
         }
@@ -12556,6 +12671,12 @@ class Emitter {
         return;
       }
     }
+    if (expr.kind === "call_expr") {
+      if (this.isPromiseStaticCall(expr, "reject")) {
+        this.checkPromiseRejectWithExpected(expr, expected);
+        return;
+      }
+    }
     // Phase 1.5-3.5g-array-fn: arrows without annotations need the expected fn
     // type to type-check (the unannotated `inferType` would throw). Mirror the
     // contextual path in emitWithExpected so `=` / `[i] = ` / `.push(arrow)`
@@ -12636,6 +12757,11 @@ class Emitter {
 
   private emitWithExpected(expr: Expr, expected: TopazType): string {
     const exprAnchor: { pos: number } = { pos: expr.pos };
+    if (expr.kind === "call_expr") {
+      if (this.isPromiseStaticCall(expr, "reject")) {
+        return this.emitPromiseRejectWithExpected(expr, expected);
+      }
+    }
     // Phase 1.5-3b: the literal `undefined` lowers based on the expected
     // container type (NULL pointer for reference, fat pointer with .data=NULL
     // for interface). Without a `T | undefined` expected this is a type error.

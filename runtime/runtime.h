@@ -86,6 +86,42 @@ typedef struct {
   size_t cap;
 } topaz_string_buffer;
 
+typedef enum {
+  TOPAZ_PROMISE_FULFILLED,
+  TOPAZ_PROMISE_REJECTED,
+} topaz_promise_state;
+
+typedef struct {
+  topaz_promise_state state;
+  void *fulfilled_payload;
+  size_t fulfilled_payload_size;
+  void *rejected_error;
+} topaz_promise;
+
+static inline void *topaz_promise_resolve_copy(const void *value, size_t size) {
+  topaz_promise *promise = (topaz_promise *)topaz_arena_calloc(1, sizeof(*promise));
+  promise->state = TOPAZ_PROMISE_FULFILLED;
+  promise->fulfilled_payload_size = size;
+  if (size > 0) {
+    promise->fulfilled_payload = topaz_arena_alloc(size);
+    memcpy(promise->fulfilled_payload, value, size);
+  }
+  return promise;
+}
+
+static inline void *topaz_promise_resolve_void(void) {
+  topaz_promise *promise = (topaz_promise *)topaz_arena_calloc(1, sizeof(*promise));
+  promise->state = TOPAZ_PROMISE_FULFILLED;
+  return promise;
+}
+
+static inline void *topaz_promise_reject(void *error) {
+  topaz_promise *promise = (topaz_promise *)topaz_arena_calloc(1, sizeof(*promise));
+  promise->state = TOPAZ_PROMISE_REJECTED;
+  promise->rejected_error = error;
+  return promise;
+}
+
 // Phase 2.4c: immutable arbitrary-precision bigint. Generated code only sees
 // `topaz_bigint *`; helpers allocate fresh arena objects for every result.
 // Limbs are little-endian base 2^32. `sign == 0` canonicalizes zero.

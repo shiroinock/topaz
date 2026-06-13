@@ -38,6 +38,7 @@ const CATEGORY = {
   NUMBER: "number/parse/libm formatting substrate",
   CONSOLE: "console IO helpers",
   CONTAINER: "container macro families / hash / key equality",
+  PROMISE: "promise value allocation substrate",
   EXCEPTION: "exception setjmp/longjmp substrate",
 };
 
@@ -52,6 +53,7 @@ const MIGRATION = {
   BIGINT_LIMB_INTRINSICS: "needs-bigint-limb-intrinsics",
   BIGINT_LIMB_INTRINSIC_FAMILY: "bigint-limb-intrinsic-family",
   C_ABI_TYPE: "c-abi-type-boundary",
+  PROMISE_VALUE: "promise-value-boundary",
 };
 
 const NEXT = {
@@ -75,6 +77,8 @@ const NEXT = {
     "Pinned as the active pre-v0.2 compiler-owned internal runtime-prelude BigIntBuffer and immutable limb-inspection substrate family for topaz_bigint_buffer_new, topaz_bigint_buffer_to_bigint, topaz_bigint_buffer_len, topaz_bigint_buffer_get_limb, topaz_bigint_buffer_set_limb, topaz_bigint_limb_len, topaz_bigint_limb, and topaz_bigint_sign; these hidden pseudo-type/intrinsic surfaces provide safe mutable limb-buffer allocation and writes, immutable bigint limb/sign inspection, and materialization for runtime prelude algorithms, are intentionally separate from the closed legacy needs-bigint-limb-intrinsics lane, and require a future explicit compiler intrinsic/backend representation decision or removal after all prelude clients stop needing them.",
   C_ABI_TYPE:
     "Pinned as the pre-v0.2 generated-C/runtime ABI type substrate for TOPAZ_RUNTIME_H, topaz_opt_wrap_number, topaz_opt_wrap_boolean, topaz_opt_wrap_string, topaz_opt_absent_number, topaz_opt_absent_boolean, topaz_opt_absent_string, and topaz_opt_passthrough because generated C, runtime container macros, optional narrowing, Map.get, optional chaining, nullish coalescing, and scalar T | undefined coercion share these optional wrapper, absent sentinel, passthrough, ABI, and layout shapes; moving them requires a future explicit generated-C ABI/type-layout/backend decision rather than helper-by-helper runtime prelude migration.",
+  PROMISE_VALUE:
+    "Pinned as the Phase 5.2 Topaz-owned Promise value allocation boundary for fulfilled/rejected state, copied fulfillment payload storage, and class-instance rejection payloads. Moving it requires the next scheduler continuation / async lowering design rather than fake synchronous Promise semantics.",
 };
 
 const CLOSED_MIGRATION_LANES = [
@@ -240,6 +244,25 @@ const inventory = {
     reason: "internal runtime prelude immutable string materialization primitive for StringBuffer.",
     migration: MIGRATION.STRING_BUFFER_INTRINSIC_FAMILY,
     next: NEXT.STRING_BUFFER_INTRINSIC_FAMILY,
+  },
+
+  topaz_promise_resolve_copy: {
+    category: CATEGORY.PROMISE,
+    reason: "opaque fulfilled Promise allocation with copied value payload storage.",
+    migration: MIGRATION.PROMISE_VALUE,
+    next: NEXT.PROMISE_VALUE,
+  },
+  topaz_promise_resolve_void: {
+    category: CATEGORY.PROMISE,
+    reason: "opaque fulfilled Promise allocation for Promise<void>.",
+    migration: MIGRATION.PROMISE_VALUE,
+    next: NEXT.PROMISE_VALUE,
+  },
+  topaz_promise_reject: {
+    category: CATEGORY.PROMISE,
+    reason: "opaque rejected Promise allocation storing a class-instance rejection payload.",
+    migration: MIGRATION.PROMISE_VALUE,
+    next: NEXT.PROMISE_VALUE,
   },
 
   topaz_fmod: {

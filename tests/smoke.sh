@@ -966,6 +966,11 @@ if [[ "${substrate_out}" != *"c-abi-type-boundary: 8"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${substrate_out}" != *"promise-value-boundary: 3"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: Promise value substrate lane count changed" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 if [[ "${substrate_out}" != *"bigint-limb-intrinsic-family: 8"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: active bigint intrinsic-family lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
@@ -1008,6 +1013,8 @@ for fragment in \
   'migration=libc-libm-boundary' \
   'topaz_stdout_write (helper,' \
   'migration=host-abi-boundary' \
+  'topaz_promise_resolve_copy (helper,' \
+  'migration=promise-value-boundary' \
   'topaz_try_push (helper,' \
   'migration=exception-boundary' \
   'topaz_string_buffer_new (helper,' \
@@ -1021,13 +1028,14 @@ for fragment in \
   fi
 done
 for fragment in \
-  'runtime substrate inventory ok: 56 symbols classified' \
+  'runtime substrate inventory ok: 59 symbols classified' \
   'bigint-limb-intrinsic-family: 8' \
   'c-abi-type-boundary: 8' \
   'container-monomorph-boundary: 13' \
   'exception-boundary: 4' \
   'host-abi-boundary: 12' \
   'libc-libm-boundary: 3' \
+  'promise-value-boundary: 3' \
   'raw-memory-boundary: 3' \
   'string-buffer-intrinsic-family: 5' \
   'needs-bigint-limb-intrinsics: closed' \
@@ -2916,9 +2924,16 @@ run_fail_case regexp_literal_deferred_fail examples/regexp_literal_deferred_fail
 run_fail_case regexp_constructor_deferred_fail examples/regexp_constructor_deferred_fail.ts "\`new RegExp\` is unsupported"
 run_fail_case regexp_string_test_deferred_fail examples/regexp_string_test_deferred_fail.ts "unsupported method '.test' on topaz_string"
 run_case promise_type_annotation $'promise annotations\nready'
+run_case promise_resolve_value $'number promise\nstring promise\nnumber promise\nstring promise\nresolve values\n42'
+run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejection\nreject values'
 run_tsc_bridge_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "async functions are unsupported"
 run_tsc_bridge_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "unsupported expression AwaitExpression"
-run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise.resolve is deferred until the Promise runtime/scheduler surface is implemented"
+run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise method '.then' is deferred until the Promise runtime/scheduler surface is implemented"
+run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
+run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"
+run_fail_case promise_reject_no_context_fail examples/promise_reject_no_context_fail.ts "Promise.reject requires a contextual Promise<T> target"
+run_fail_case promise_reject_non_class_fail examples/promise_reject_non_class_fail.ts "Promise.reject error must be a class instance"
+run_fail_case promise_reject_wrong_arity_fail examples/promise_reject_wrong_arity_fail.ts "Promise.reject expects exactly one argument, got 2"
 run_fail_case promise_payload_unknown_deferred_fail examples/promise_payload_unknown_deferred_fail.ts "Promise<T>: payload type topaz_unknown is unsupported"
 run_fail_case for_await_deferred_fail examples/for_await_deferred_fail.ts "expected '('"
 

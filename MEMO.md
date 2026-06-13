@@ -380,6 +380,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **4.47 pre-v0.2 intrinsic boundary handoff sync** — Phase 4.46 の `runtime_prelude_intrinsic_boundary_guard` を pre-v0.2 / v0.2 release-readiness surface と release skill に反映し、56 symbol の `runtime/runtime.h` substrate saturation guard とは別の `runtime/prelude.ts` intrinsic access boundary として operator が監査できるようにした。runtime behavior / runtime header / generated runtime / codegen behavior / release tag / GitHub Release state は変更しない。決定ログは `docs/adr/0466-pre-v0-2-intrinsic-boundary-handoff.md`。
 - [x] **5.0 post-v0.2 TypeScript compatibility priority reset** — v0.2 guidance follow-through よりも TS 構文 / 型互換性の体感カバー率を優先する方針へ切り替え、次 track を async/await 互換ロードマップと branded / brand / opaque / nominal / `unique symbol` 系の型専用互換性に絞った。async は Node-compatible single-thread scheduler と将来の Topaz-owned parallel scheduler を分けて扱い、brand 系は runtime object 追加ではなく erasable / type-only pattern から優先する。enum は低優先のまま clear reject 継続。runtime behavior / codegen behavior / release state は変更しない。決定ログは `docs/adr/0467-post-v0-2-typescript-compatibility-priorities.md`。
 - [x] **5.1 Promise<T> type frontier** — `Promise<T>` を Topaz-owned built-in type として受理し、function signature / annotation 用の opaque C pointer 境界を追加した。`Promise.resolve` / `Promise.reject` / `.then` / `.catch` / `.finally` などの値 runtime / scheduler surface は fake synchronous semantics を避けるため deferred diagnostic のままにする。async function / `await` / for-await lowering、scheduler、continuation、thenable assimilation は実装しない。決定ログは `docs/adr/0468-promise-type-frontier.md`。
+- [x] **5.2 Promise.resolve/reject value surface** — `Promise.resolve()` / `Promise.resolve(value)` / contextual `Promise.reject(classInstance)` を Topaz-owned opaque Promise value allocation に接続した。fulfilled/rejected state と payload copy / rejection class pointer を runtime に保持するだけで、`.then` / `.catch` / `.finally`、microtask queue、thenable assimilation、async function / `await` / for-await lowering は引き続き deferred。次の async slice は scheduler continuation substrate、async function lowering、`await` の順に進める。決定ログは `docs/adr/0469-promise-resolve-reject-value-surface.md`。
 
 Release/version allocation:
 
@@ -399,8 +400,9 @@ Release/version allocation:
 Post-MVP ecosystem items:
 
 - restore current self-host fixed-point gate (old blocker `src/codegen.ts:7843:15` cleanup target frame walk cleared by ADR `0347`; `src/codegen.ts:9612:24` `fixedTmps.length.toString()` cleared by ADR `0348`; `pnpm run test:selfhost` now reaches `PASS [selfhost_fixed_point]` and writes the final native compiler as `build/topaz`)
-- async/await compatibility roadmap: `Promise<T>` type frontier is complete;
-  next stages are scheduler-backed Promise values, async function lowering,
+- async/await compatibility roadmap: `Promise<T>` type frontier and
+  `Promise.resolve` / contextual `Promise.reject` value allocation are complete;
+  next stages are scheduler continuations, async function lowering,
   `await`, async arrow / async method, Promise method surface, explicit
   `PromiseLike` bridge, controlled static thenable assimilation,
   Node-compatible scheduler mode, and future Topaz-owned parallel scheduler mode
