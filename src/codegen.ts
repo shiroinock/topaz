@@ -7,6 +7,7 @@ import {
   FunctionDecl,
   ClassDecl,
   InterfaceDecl,
+  InterfaceFieldMember,
   TypeAliasDecl,
   ClassFieldMember,
   ClassMethodMember,
@@ -3564,8 +3565,8 @@ class Emitter {
   }
 
   // Phase 1.5-6e-3: consumes the Topaz `InterfaceDecl`. The syntactic rejects
-  // (generic interface, heritage, optional fields / methods, non-identifier
-  // names, index / call / construct signatures, accessors, generic methods,
+  // (generic interface, heritage, optional fields / methods, index / call /
+  // construct signatures, accessors, generic methods,
   // unsupported field modifiers) all live in convert now; codegen enforces the
   // remaining semantic rules (duplicate members, void / fn-typed fields and
   // method params / returns). `readonly` on interface fields is accepted as a
@@ -3580,7 +3581,8 @@ class Emitter {
       for (const m of iface.members) {
         if (m.kind === "interface_field") {
           const memberAnchor: { pos: number } = { pos: m.pos };
-          const fname = m.name;
+          const fname = this.interfaceFieldRuntimeName(m, phantomDescriptor);
+          if (fname === undefined) continue;
           if (info.fields.has(fname) || info.methods.has(fname)) {
             throw new CodegenError(memberAnchor, `duplicate member '${fname}' in interface '${info.name}'`);
           }
@@ -3626,7 +3628,29 @@ class Emitter {
     if (!member.isReadonly) return undefined;
     const payload = this.brandPayloadSpelling(member.type);
     if (payload === undefined) return undefined;
-    return { fieldKey: member.name, payload };
+    if (member.nameKind === "computed_unsupported") {
+      throw this.typeErr(
+        { pos: member.pos },
+        "unsupported computed phantom field name: expected computed identifier [Name]",
+      );
+    }
+    const fieldKey = member.nameKind === "computed_identifier" ? `[${member.name}]` : member.name;
+    return { fieldKey, payload };
+  }
+
+  private interfaceFieldRuntimeName(
+    member: InterfaceFieldMember,
+    phantomDescriptor: InterfacePhantomBrandDescriptor | undefined,
+  ): string | undefined {
+    if (member.nameKind === "identifier") return member.name;
+    const fieldKey = member.nameKind === "computed_identifier" ? `[${member.name}]` : "<computed>";
+    if (phantomDescriptor !== undefined && fieldKey === phantomDescriptor.fieldKey) {
+      return undefined;
+    }
+    throw this.typeErr(
+      { pos: member.pos },
+      "computed interface fields are unsupported outside phantom brand descriptors",
+    );
   }
 
   private interfacePhantomBrandFieldRuntimeType(node: TypeNode, sf: SourceModule): TopazType {

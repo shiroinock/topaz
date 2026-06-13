@@ -679,9 +679,13 @@ export class Parser {
   parseInterfaceMember(): InterfaceMember {
     let isReadonly: boolean = false;
     if (this.matchKeyword("readonly")) isReadonly = true;
-    const nameTok: { text: string; pos: number; end: number } = this.expectMemberName();
+    const nameTok: { text: string; nameKind: TypeLiteralFieldNameKind; pos: number; end: number } =
+      this.expectTypeLiteralFieldName();
     const after: Token = this.current();
     if (this.isPunct(after, "(")) {
+      if (nameTok.nameKind !== "identifier") {
+        throw this.error(after, "computed interface methods are unsupported");
+      }
       this.pos += 1;
       const params: Array<FunctionParam> = this.parseFunctionParams();
       this.expectPunct(":");
@@ -703,6 +707,7 @@ export class Parser {
       kind: "interface_field",
       isReadonly: isReadonly,
       name: nameTok.text,
+      nameKind: nameTok.nameKind,
       type: ty,
       pos: nameTok.pos,
       end: ty.end,

@@ -530,7 +530,21 @@ class Converter {
   }
 
   convertInterfaceField(m: ts.PropertySignature): InterfaceFieldMember {
-    if (!ts.isIdentifier(m.name)) throw this.err(m, "interface field name must be an identifier");
+    let name = "";
+    let nameKind: "identifier" | "computed_identifier" | "computed_unsupported" = "identifier";
+    if (ts.isIdentifier(m.name)) {
+      name = m.name.text;
+    } else if (ts.isComputedPropertyName(m.name)) {
+      if (ts.isIdentifier(m.name.expression)) {
+        name = m.name.expression.text;
+        nameKind = "computed_identifier";
+      } else {
+        name = "<computed>";
+        nameKind = "computed_unsupported";
+      }
+    } else {
+      throw this.err(m, "interface field name must be an identifier");
+    }
     if (m.questionToken) throw this.err(m, "optional interface field is unsupported");
     if (!m.type) throw this.err(m, "interface field must have a type annotation");
     let isReadonly = false;
@@ -547,7 +561,8 @@ class Converter {
     return {
       kind: "interface_field",
       isReadonly,
-      name: m.name.text,
+      name,
+      nameKind,
       type: this.convertType(m.type),
       ...this.span(m),
     };

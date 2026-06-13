@@ -641,6 +641,7 @@ export type InterfaceFieldMember = {
   kind: "interface_field";
   isReadonly: boolean;
   name: string;
+  nameKind: TypeLiteralFieldNameKind;
   type: TypeNode;
   pos: number;
   end: number;

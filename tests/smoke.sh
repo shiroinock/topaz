@@ -3471,6 +3471,7 @@ run_case brand_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_export_ambient_unique_symbol_marker $'u1\ntrue'
 run_case brand_interface_phantom $'u1\nu1\no1\ntrue\ntrue\nu1\nt1\nn1\no1'
+run_case brand_interface_computed_phantom $'u1\nu1\nt1\ntrue\ntrue\nn1'
 run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_template_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_type_query_cross_assign_fail examples/brand_generic_template_type_query_cross_assign_fail.ts "topaz_brand_Brand_3a__5b_UserIdBrand_5d__3a_typeof_20_UserIdBrand"
 run_fail_case brand_generic_template_default_cross_assign_fail examples/brand_generic_template_default_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
@@ -3495,6 +3496,8 @@ run_fail_case brand_phantom_object_bad_default_fail examples/brand_phantom_objec
 run_fail_case brand_phantom_object_default_cross_assign_fail examples/brand_phantom_object_default_cross_assign_fail.ts "topaz_brand_Phantom_3a___brand_3a_UserId"
 run_fail_case brand_interface_phantom_cross_assign_fail examples/brand_interface_phantom_cross_assign_fail.ts "topaz_brand_OrderIdBrand"
 run_fail_case brand_interface_phantom_bad_shape_fail examples/brand_interface_phantom_bad_shape_fail.ts "unsupported brand intersection shape"
+run_fail_case brand_interface_computed_phantom_bad_key_fail examples/brand_interface_computed_phantom_bad_key_fail.ts "unsupported computed phantom field name"
+run_fail_case interface_computed_field_fail examples/interface_computed_field_fail.ts "computed interface fields are unsupported outside phantom brand descriptors"
 run_fail_case brand_ambient_unique_symbol_initializer_fail examples/brand_ambient_unique_symbol_initializer_fail.ts "ambient unique-symbol markers cannot have initializers"
 run_fail_case brand_ambient_unique_symbol_wrong_type_fail examples/brand_ambient_unique_symbol_wrong_type_fail.ts "only \`unique symbol\` ambient markers are supported"
 run_fail_case brand_ambient_unique_symbol_non_const_fail examples/brand_ambient_unique_symbol_non_const_fail.ts "only \`declare const ...: unique symbol\` ambient markers are supported"
