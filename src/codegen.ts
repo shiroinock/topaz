@@ -4687,10 +4687,15 @@ class Emitter {
                 const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
                 transformedInitializer = this.replaceAwaitExprInExpr(initMaybe, awaitExpr, tempExpr);
               } else {
-                const callAwait = this.tryBuildCallArgAwaitExpression(initMaybe, awaitExpr, tempName, steps.length);
-                transformedInitializer = callAwait.transformedExpr;
-                preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
-                preAwaitArgTemps = callAwait.preAwaitArgTemps;
+                const receiverAwait = this.tryBuildCallReceiverAwaitExpression(initMaybe, awaitExpr, tempName);
+                if (receiverAwait !== undefined) {
+                  transformedInitializer = receiverAwait;
+                } else {
+                  const callAwait = this.tryBuildCallArgAwaitExpression(initMaybe, awaitExpr, tempName, steps.length);
+                  transformedInitializer = callAwait.transformedExpr;
+                  preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
+                  preAwaitArgTemps = callAwait.preAwaitArgTemps;
+                }
               }
               let bindingType = this.inferType(transformedInitializer);
               const typeMaybe = s.type;
@@ -4793,10 +4798,15 @@ class Emitter {
             if (assignmentAwait !== undefined) {
               transformedExpr = assignmentAwait;
             } else {
-              const callAwait = this.tryBuildCallArgAwaitExpression(s.expr, awaitExpr, tempName, steps.length);
-              transformedExpr = callAwait.transformedExpr;
-              preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
-              preAwaitArgTemps = callAwait.preAwaitArgTemps;
+              const receiverAwait = this.tryBuildCallReceiverAwaitExpression(s.expr, awaitExpr, tempName);
+              if (receiverAwait !== undefined) {
+                transformedExpr = receiverAwait;
+              } else {
+                const callAwait = this.tryBuildCallArgAwaitExpression(s.expr, awaitExpr, tempName, steps.length);
+                transformedExpr = callAwait.transformedExpr;
+                preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
+                preAwaitArgTemps = callAwait.preAwaitArgTemps;
+              }
             }
             steps.push({
               kind: "statement",
@@ -4848,10 +4858,15 @@ class Emitter {
                 const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
                 transformedReturnExpr = this.replaceAwaitExprInExpr(valueMaybe, awaitExpr, tempExpr);
               } else {
-                const callAwait = this.tryBuildCallArgAwaitExpression(valueMaybe, awaitExpr, tempName, steps.length);
-                transformedReturnExpr = callAwait.transformedExpr;
-                preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
-                preAwaitArgTemps = callAwait.preAwaitArgTemps;
+                const receiverAwait = this.tryBuildCallReceiverAwaitExpression(valueMaybe, awaitExpr, tempName);
+                if (receiverAwait !== undefined) {
+                  transformedReturnExpr = receiverAwait;
+                } else {
+                  const callAwait = this.tryBuildCallArgAwaitExpression(valueMaybe, awaitExpr, tempName, steps.length);
+                  transformedReturnExpr = callAwait.transformedExpr;
+                  preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
+                  preAwaitArgTemps = callAwait.preAwaitArgTemps;
+                }
               }
               returnExpr = transformedReturnExpr;
               returnType = this.inferType(transformedReturnExpr);
@@ -4986,6 +5001,81 @@ class Emitter {
     };
     this.inferType(transformedExpr);
     return transformedExpr;
+  }
+
+  private tryBuildCallReceiverAwaitExpression(
+    expr: Expr,
+    awaitExpr: AwaitExpr,
+    awaitedTempName: string,
+  ): Expr | undefined {
+    const rootMaybe = this.unwrapParenExpr(expr);
+    if (rootMaybe.kind !== "call_expr") return undefined;
+    const root: CallExpr = rootMaybe;
+    const calleeMaybe = root.callee;
+    if (calleeMaybe.kind !== "prop_access") return undefined;
+
+    const receiverMaybe = this.unwrapParenExpr(calleeMaybe.receiver);
+    if (
+      receiverMaybe.kind !== "await_expr" ||
+      receiverMaybe.pos !== awaitExpr.pos ||
+      receiverMaybe.end !== awaitExpr.end
+    ) {
+      return undefined;
+    }
+    if (root.optional || calleeMaybe.optional) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    if (this.firstSpreadArg(root.args) !== undefined) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    for (const arg of root.args) {
+      if (this.collectAwaitExprsInExpr(arg).length > 0) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+    }
+    for (const found of this.collectAwaitExprsInExpr(calleeMaybe)) {
+      if (found.pos !== awaitExpr.pos || found.end !== awaitExpr.end) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+    }
+
+    const operandType = this.inferType(awaitExpr.operand);
+    if (operandType.kind !== "promise") {
+      throw new CodegenError(
+        { pos: awaitExpr.operand.pos },
+        `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+      );
+    }
+    this.assertNotVoid(operandType.value, { pos: awaitExpr.pos }, "await method receiver");
+    const awaitedTempExpr: IdentExpr = {
+      kind: "ident",
+      name: awaitedTempName,
+      pos: awaitExpr.pos,
+      end: awaitExpr.end,
+    };
+    const transformedCallee: PropAccessExpr = {
+      kind: "prop_access",
+      receiver: awaitedTempExpr,
+      name: calleeMaybe.name,
+      optional: false,
+      pos: calleeMaybe.pos,
+      end: calleeMaybe.end,
+    };
+    const transformedCall: CallExpr = {
+      kind: "call_expr",
+      callee: transformedCallee,
+      typeArgs: root.typeArgs,
+      args: root.args,
+      optional: false,
+      pos: root.pos,
+      end: root.end,
+    };
+    const plan = this.resolveOrdinaryCallPlan(transformedCall, awaitExpr, false);
+    if (plan === undefined) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
+    return transformedCall;
   }
 
   private tryBuildCallArgAwaitExpression(
