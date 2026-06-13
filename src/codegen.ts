@@ -548,7 +548,7 @@ function mapOf(k: TopazType, v: TopazType): TopazType | undefined {
   if (!isScalarType(k)) return undefined;
   // Phase 1.5-6 prep #8: dunion value type is accepted (storage shape =
   // iface, absent sentinel = `{0}` with `.data == NULL`). Key stays scalar.
-  if (!isScalarType(v) && !isClassType(v) && !isInterfaceType(v) && v.kind !== "dunion") return undefined;
+  if (!isScalarType(v) && !isClassType(v) && !isInterfaceType(v) && v.kind !== "dunion" && v.kind !== "promise_like") return undefined;
   return { kind: "map", key: k, value: v };
 }
 
@@ -559,7 +559,7 @@ function setElem(t: TopazType): TopazType | undefined {
 function setOf(elem: TopazType): TopazType | undefined {
   // Phase 1.5-6 prep #8: Set<dunion> uses `.data` pointer as the identity key,
   // matching Set<class> / Set<iface> reference-identity semantics.
-  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion") return undefined;
+  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion" && elem.kind !== "promise_like") return undefined;
   return { kind: "set", elem };
 }
 
@@ -3492,6 +3492,8 @@ class Emitter {
       // (same shape as iface). The compound literal zero-initializes both
       // `.kind` (empty topaz_string) and `.data` (NULL).
       optAbsent = `((${typeIdent(v)}){0})`;
+    } else if (v.kind === "promise_like") {
+      optAbsent = "NULL";
     } else {
       throwInternalCodegenError(`emitMapMonomorphMacro: scalar V should be pre-expanded in runtime.h, got ${typeIdent(v)}`);
     }
@@ -3515,6 +3517,10 @@ class Emitter {
       hashFn = `topaz_hash_iface_${iname}`;
       eqFn = `topaz_key_eq_iface_${iname}`;
     } else if (elem.kind === "dunion") {
+      const tag2 = elemTag(elem);
+      hashFn = `topaz_hash_${tag2}`;
+      eqFn = `topaz_key_eq_${tag2}`;
+    } else if (elem.kind === "promise_like") {
       const tag2 = elemTag(elem);
       hashFn = `topaz_hash_${tag2}`;
       eqFn = `topaz_key_eq_${tag2}`;
@@ -3572,6 +3578,14 @@ class Emitter {
       return [
         `static inline size_t topaz_hash_${tag}(${cty} v) { return topaz_hash_pointer(v.data); }`,
         `static inline topaz_boolean topaz_key_eq_${tag}(${cty} a, ${cty} b) { return a.data == b.data; }`,
+      ];
+    }
+    if (elem.kind === "promise_like") {
+      const tag = elemTag(elem);
+      const cty = cTypeName(elem);
+      return [
+        `static inline size_t topaz_hash_${tag}(${cty} p) { return topaz_hash_pointer((const void *)p); }`,
+        `static inline topaz_boolean topaz_key_eq_${tag}(${cty} a, ${cty} b) { return a == b; }`,
       ];
     }
     throwInternalCodegenError(`unexpected set element type ${typeIdent(elem)} for helper emission`);
