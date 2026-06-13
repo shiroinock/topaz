@@ -2946,11 +2946,14 @@ run_case async_method_await $'method before await\nsync tail\nmethod between awa
 run_case async_return_await_terminal $'sync tail\ndeclared\n10\nmethod\n8\nexpr\n5\narrow\n22'
 run_case async_return_await_expression $'sync tail\ndeclared\n42\nmethod\n9\nexpr\n10\narrow\n23'
 run_case async_await_initializer_expression $'sync tail\narrow\n22\nmethod\n12\nexpr\n8\ndeclared\n42'
+run_case async_await_call_arg_initializer $'declared pre\narrow pre\nmethod pre\nexpr pre\nsync tail\ndeclared post\ndeclared call\ndeclared read\n123\narrow post\narrow call\narrow read\n456\nmethod post\nmethod call\nmethod read\n789\nexpr post\nexpr call\nexpr read\n234\ndeclared then\n123\narrow then\n456\nmethod then\n789\nexpr then\n234'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
 run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_call_arg_multiple_deferred_fail examples/await_call_arg_multiple_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_call_arg_method_deferred_fail examples/await_call_arg_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_statement_deferred_fail examples/await_expression_statement_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_try_deferred_fail examples/await_try_deferred_fail.ts "await inside try/catch/finally is deferred"

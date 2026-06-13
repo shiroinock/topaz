@@ -143,12 +143,19 @@ type AwaitReturnInfo = {
   tempName: string;
 };
 
+type AwaitCallArgTemp = {
+  tempName: string;
+  arg: Expr;
+  argType: TopazType;
+};
+
 type AwaitInitializerInfo = {
   kind: "initializer";
   stmt: VarDeclStmt;
   awaitExpr: AwaitExpr;
   initializer: Expr;
   transformedInitializer: Expr;
+  preAwaitArgTemps: Array<AwaitCallArgTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -4490,12 +4497,6 @@ class Emitter {
                 );
               }
               const awaitExpr = initializerAwaits[0];
-              if (!this.simpleAwaitReplacementSupported(initMaybe, awaitExpr)) {
-                throw new CodegenError(
-                  { pos: awaitExpr.pos },
-                  this.unsupportedAwaitLoweringMessage(),
-                );
-              }
               const operandType = this.inferType(awaitExpr.operand);
               if (operandType.kind !== "promise") {
                 throw new CodegenError(
@@ -4505,11 +4506,19 @@ class Emitter {
               }
               const awaitedPayload = operandType.value;
               const tempName = `__topaz_init_await_${steps.length}`;
+              let transformedInitializer: Expr = initMaybe;
+              let preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
               if (awaitedPayload.kind !== "void") {
                 this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
               }
-              const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
-              const transformedInitializer = this.replaceAwaitExprInExpr(initMaybe, awaitExpr, tempExpr);
+              if (this.simpleAwaitReplacementSupported(initMaybe, awaitExpr)) {
+                const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
+                transformedInitializer = this.replaceAwaitExprInExpr(initMaybe, awaitExpr, tempExpr);
+              } else {
+                const callAwait = this.tryBuildCallArgAwaitInitializer(initMaybe, awaitExpr, tempName, steps.length);
+                transformedInitializer = callAwait.transformedInitializer;
+                preAwaitArgTemps = callAwait.preAwaitArgTemps;
+              }
               let bindingType = this.inferType(transformedInitializer);
               const typeMaybe = s.type;
               if (typeMaybe !== undefined) {
@@ -4534,6 +4543,7 @@ class Emitter {
                 awaitExpr,
                 initializer: initMaybe,
                 transformedInitializer,
+                preAwaitArgTemps,
                 index: i,
                 pc: steps.length,
                 operandType,
@@ -4667,7 +4677,144 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, initializer expression await, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, initializer expression await, bare call-argument await in declaration initializers, and one terminal return expression await are supported";
+  }
+
+  private tryBuildCallArgAwaitInitializer(
+    initializer: Expr,
+    awaitExpr: AwaitExpr,
+    awaitedTempName: string,
+    stepOrdinal: number,
+  ): { transformedInitializer: Expr; preAwaitArgTemps: Array<AwaitCallArgTemp> } {
+    const rootMaybe = this.unwrapParenExpr(initializer);
+    if (rootMaybe.kind !== "call_expr") {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    const root: CallExpr = rootMaybe;
+    if (root.optional) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    const calleeMaybe = root.callee;
+    if (calleeMaybe.kind !== "ident") {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    if (this.firstSpreadArg(root.args) !== undefined) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+
+    let awaitArgIndex = -1;
+    for (let i = 0; i < root.args.length; i++) {
+      const arg = root.args[i];
+      const unwrapped = this.unwrapParenExpr(arg);
+      if (unwrapped.kind === "await_expr" && unwrapped.pos === awaitExpr.pos && unwrapped.end === awaitExpr.end) {
+        awaitArgIndex = i;
+        break;
+      }
+    }
+    if (awaitArgIndex < 0) {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+
+    const awaitedTempExpr: IdentExpr = {
+      kind: "ident",
+      name: awaitedTempName,
+      pos: awaitExpr.pos,
+      end: awaitExpr.end,
+    };
+    const signatureArgs: Array<Expr> = [];
+    for (let i = 0; i < root.args.length; i++) {
+      if (i === awaitArgIndex) {
+        signatureArgs.push(awaitedTempExpr);
+      } else {
+        signatureArgs.push(root.args[i]);
+      }
+    }
+    const signatureCall: CallExpr = {
+      kind: "call_expr",
+      callee: root.callee,
+      typeArgs: root.typeArgs,
+      args: signatureArgs,
+      optional: root.optional,
+      pos: root.pos,
+      end: root.end,
+    };
+    const params = this.resolveAwaitCallArgBareParams(signatureCall, awaitExpr);
+
+    const preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
+    const transformedArgs: Array<Expr> = [];
+    for (let i = 0; i < root.args.length; i++) {
+      if (i < awaitArgIndex) {
+        const arg = root.args[i];
+        const param = params[i];
+        const argType = param.type;
+        this.assertNotVoid(argType, { pos: arg.pos }, "await call pre-argument temporary");
+        const tempName = `__topaz_call_arg_${stepOrdinal}_${i}`;
+        this.scope.declareBinding(tempName, argType, /* isConst */ true, { pos: arg.pos });
+        preAwaitArgTemps.push({ tempName, arg, argType });
+        transformedArgs.push({ kind: "ident", name: tempName, pos: arg.pos, end: arg.end });
+      } else if (i === awaitArgIndex) {
+        transformedArgs.push(awaitedTempExpr);
+      } else {
+        transformedArgs.push(root.args[i]);
+      }
+    }
+
+    return {
+      transformedInitializer: {
+        kind: "call_expr",
+        callee: root.callee,
+        typeArgs: root.typeArgs,
+        args: transformedArgs,
+        optional: root.optional,
+        pos: root.pos,
+        end: root.end,
+      },
+      preAwaitArgTemps,
+    };
+  }
+
+  private resolveAwaitCallArgBareParams(expr: CallExpr, awaitExpr: AwaitExpr): Array<ParamInfo> {
+    const calleeMaybe = expr.callee;
+    if (calleeMaybe.kind !== "ident") {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
+    const callee: IdentExpr = calleeMaybe;
+    const callAnchor: { pos: number } = { pos: expr.pos };
+    if (this.genericFunctions.has(callee.name)) {
+      const resolved = this.resolveGenericCall(callee, expr)!;
+      this.checkCallArgCount(expr.args.length, resolved.sig.params, `${callee.name}()`, callAnchor);
+      return resolved.sig.params;
+    }
+    const sig = this.resolveFunctionSig(callee.name, { pos: callee.pos });
+    if (sig !== undefined) {
+      this.checkCallArgCount(expr.args.length, sig.params, `${callee.name}()`, callAnchor);
+      return sig.params;
+    }
+    const binding = this.scope.lookup(callee.name);
+    if (binding !== undefined) {
+      const bindingType = binding.type;
+      if (bindingType.kind === "fn") {
+        this.checkCallArgCount(expr.args.length, bindingType.params, "fn value", callAnchor);
+        return bindingType.params;
+      }
+    }
+    throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+  }
+
+  private checkCallArgCount(
+    actual: number,
+    params: Array<ParamInfo>,
+    label: string,
+    anchor: { pos: number },
+  ): void {
+    const req = requiredParamCount(params);
+    if (actual < req || actual > params.length) {
+      const want = req === params.length ? `${params.length}` : `${req}..${params.length}`;
+      throw new CodegenError(
+        anchor,
+        `${label} expects ${want} argument(s), got ${actual}`,
+      );
+    }
   }
 
   private simpleAwaitReplacementSupported(expr: Expr, target: AwaitExpr): boolean {
@@ -4756,6 +4903,7 @@ class Emitter {
       lines.push(this.emitStatement(s, 2));
       this.applyCarryNarrowing(s);
     }
+    this.emitAwaitStepPreArgStores(firstStep, frameVar, lines, "    ");
     const operandExpr = this.emitWithExpected(firstStep.awaitExpr.operand, firstStep.operandType);
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
     for (const p of params) {
@@ -4777,6 +4925,19 @@ class Emitter {
     lines.push("  }");
     lines.push("}");
     return lines.join("\n");
+  }
+
+  private emitAwaitStepPreArgStores(
+    step: AsyncSuspensionStep,
+    frameRef: string,
+    lines: string[],
+    indent: string,
+  ): void {
+    if (step.kind !== "initializer") return;
+    for (const temp of step.preAwaitArgTemps) {
+      const expr = this.emitWithExpected(temp.arg, temp.argType);
+      lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+    }
   }
 
   private recordAsyncAwaitRunner(
@@ -4810,6 +4971,9 @@ class Emitter {
         if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
       } else if (binding.kind === "initializer") {
         if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+        for (const temp of binding.preAwaitArgTemps) {
+          fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
+        }
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
         }
@@ -4975,6 +5139,11 @@ class Emitter {
             lines.push(`        (void)${current.stmt.name};`);
           }
         } else if (current.kind === "initializer") {
+          for (const temp of current.preAwaitArgTemps) {
+            this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
+            lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
+            lines.push(`        (void)${temp.tempName};`);
+          }
           if (current.awaitedType.kind !== "void") {
             this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
             lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
@@ -5000,6 +5169,7 @@ class Emitter {
         if (hasNextStep) {
           const next = frame.steps[i + 1];
           const nextSourceVar = `__topaz_await_next_${i}`;
+          this.emitAwaitStepPreArgStores(next, "ctx", lines, "        ");
           const operandExpr = this.emitWithExpected(next.awaitExpr.operand, next.operandType);
           lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
           lines.push(`        ctx->__topaz_pc = ${next.pc};`);

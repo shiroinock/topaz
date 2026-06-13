@@ -1,8 +1,7 @@
 /// <reference lib="es2015.promise" />
 
 async function answer(): Promise<number> {
-  const n = plusOne(await Promise.resolve(1));
-  return n;
+  return plusOne(await Promise.resolve(1));
 }
 
 function plusOne(n: number): number {

@@ -395,6 +395,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **5.14 terminal return-await lowering** — block-bodied async function / async arrow / async method / anonymous async function expression の共有 async frame に final top-level `return await Promise<T>;` terminal step を追加し、await binding 後の payload local を使う terminal operand も同じ frame で再開できるようにした。non-final / nested / arbitrary await、try/catch/finally 内 await、await 間をまたぐ通常 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0481-terminal-return-await-lowering.md`。
 - [x] **5.15 terminal return expression await lowering** — block-bodied async function / async arrow / async method / anonymous async function expression の共有 async frame を ordered suspension steps に寄せ、final top-level `return` expression 内の単発 `await` を frame-owned output Promise へ lowering できるようにした。top-level await binding と terminal `return await` は維持しつつ、複数 await in expression、call arg / non-terminal / nested-control-flow / try-catch-finally 内 await、await 間をまたぐ通常 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0482-terminal-return-expression-await-lowering.md`。
 - [x] **5.16 initializer expression await lowering** — block-bodied async function / async arrow / async method / anonymous async function expression の共有 async frame で、top-level `const` / `let` initializer の単発 simple-expression `await` を ordered suspension step として扱い、再開後に frame-backed declared binding へ格納して後続 statement / await step から読めるようにした。複数 await in initializer、call arg / object-array / conditional / logical / assignment / property-index expression await、non-declaration expression await、nested-control-flow / try-catch-finally 内 await、一般 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0483-initializer-expression-await-lowering.md`。
+- [x] **5.17 bare call-argument await lowering** — block-bodied async function / async arrow / async method / anonymous async function expression の top-level `const` / `let` initializer で、bare function call の直接引数に 1 個だけ現れる `await` を ordered suspension step として扱う。await より左の引数は suspension 前に frame temp へ保存し、await payload と一緒に再開後の call initializer へ渡すことで左から右の評価順を保つ。method / property / builtin / Promise method call、複数 await、return-expression call arg await、任意式 decomposition、一般 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0484-bare-call-argument-await-decomposition.md`。
 
 Release/version allocation:
 
@@ -422,8 +423,9 @@ Post-MVP ecosystem items:
   no-await async method lowering, async method frame lowering, anonymous
   synchronous function expression lowering, no-await async function expression
   lowering, async function expression await frames, terminal return-await
-  lowering, terminal return expression await lowering, and initializer
-  expression await lowering are complete; next stages are arbitrary await, rejection handler
+  lowering, terminal return expression await lowering, initializer
+  expression await lowering, and bare call-argument await in declaration
+  initializers are complete; next stages are arbitrary await, rejection handler
   Promise method surface, explicit `PromiseLike` bridge, controlled static thenable
   assimilation, Node-compatible scheduler mode, and future Topaz-owned parallel
   scheduler mode
