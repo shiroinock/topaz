@@ -4966,7 +4966,11 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
+  }
+
+  private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
+    return op === "+=" || op === "-=" || op === "*=" || op === "/=" || op === "%=";
   }
 
   private tryBuildAssignmentAwaitStatementExpression(
@@ -4977,7 +4981,11 @@ class Emitter {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "assign_expr") return undefined;
     const root = rootMaybe;
-    if (root.op !== "=") return undefined;
+    if (root.op !== "=") {
+      if (!this.isAwaitLowerableCompoundAssignmentOp(root.op)) return undefined;
+      const target = this.unwrapParenExpr(root.target);
+      if (target.kind !== "ident") return undefined;
+    }
     if (this.collectAwaitExprsInExpr(root.target).length > 0) {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
