@@ -2958,6 +2958,7 @@ run_case async_await_synthetic_call_arg $'declared pre\narrow pre\nmethod pre\ne
 run_case async_await_flat_builtin_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\ndiscard pre\nsync tail\ndeclared parsed\n123\narrow parsed\n255\nmethod parsed\n2.5\ndiscard after\ndeclared then\n123\narrow then\n255\nmethod then\n2.5\nexpr then\n6.25\ndiscard then'
 run_case async_await_path_url_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\ndiscard pre\nsync tail\ndeclared dir\n/a\narrow base\nmain\nmethod ext\n.mjs\ndiscard after\ndeclared then\n/a\narrow then\nmain\nmethod then\n.mjs\nexpr then\n/tmp/a b.ts\ndiscard then'
 run_case async_await_path_variadic_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\ndiscard pre\ndiscard segment pre\nsync tail\ndeclared path\n/tmp/x\narrow path\n/tmp/pkg\nmethod path\na/b\ndiscard segment post\ndiscard after\ndeclared then\n/tmp/x\narrow then\n/tmp/pkg\nmethod then\na/b\nexpr then\na/b/c\ndiscard then'
+run_case async_await_fs_read_metadata_call_arg $'declared pre\ndeclared path\narrow pre\narrow path\nmethod pre\nmethod path\nexpr pre\nexpr path\ndiscard pre\ndiscard path\nsync tail\ndeclared read\nhello\narrow exists\ntrue\ndiscard after\ndeclared then\nhello\narrow then\ntrue\nmethod then\nhello\nexpr then\ntrue\ndiscard then'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -2965,6 +2966,7 @@ run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_multiple_deferred_fail examples/await_call_arg_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_builtin_deferred_fail examples/await_call_arg_builtin_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_call_arg_fs_write_deferred_fail examples/await_call_arg_fs_write_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_string_static_deferred_fail examples/await_call_arg_string_static_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_nested_flat_builtin_deferred_fail examples/await_call_arg_nested_flat_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_path_variadic_deferred_fail examples/await_call_arg_path_variadic_deferred_fail.ts "await expression lowering is deferred"
@@ -3234,6 +3236,7 @@ run_fail_case node_fs_read_file_missing_encoding_fail examples/node_fs_read_file
 run_fail_case node_fs_read_file_too_many_args_fail examples/node_fs_read_file_too_many_args_fail.ts "readFileSync expects exactly two arguments"
 run_fail_case node_fs_read_file_path_type_fail examples/node_fs_read_file_path_type_fail.ts "readFileSync path argument must be string"
 run_fail_case node_fs_read_file_encoding_not_literal_fail examples/node_fs_read_file_encoding_not_literal_fail.ts "encoding argument must be the string literal"
+run_fail_case node_fs_read_file_encoding_await_fail examples/node_fs_read_file_encoding_await_fail.ts "encoding argument must be the string literal"
 run_fail_case node_fs_read_file_unknown_encoding_fail examples/node_fs_read_file_unknown_encoding_fail.ts "encoding argument must be \"utf8\""
 run_fail_case node_fs_read_file_as_value_fail examples/node_fs_read_file_as_value_fail.ts "unknown identifier 'readFileSync'"
 run_fail_case node_fs_unknown_named_import_fail examples/node_fs_unknown_named_import_fail.ts "unsupported named import 'unlinkSync'"

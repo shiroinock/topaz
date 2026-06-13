@@ -206,6 +206,8 @@ type SyntheticCallKind =
   | "path_extname"
   | "path_resolve"
   | "path_join"
+  | "fs_read_file_sync"
+  | "fs_exists_sync"
   | "url_file_url_to_path";
 
 type OrdinaryCallPlan =
@@ -11725,6 +11727,28 @@ class Emitter {
         label: "join",
       };
     }
+    if (callee.name === "readFileSync") {
+      this.checkNodeFsReadFileSyncArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "fs_read_file_sync",
+        params: [this.makeParamInfo("path", T_STRING), this.makeParamInfo("encoding", T_STRING)],
+        returnType: T_STRING,
+        label: "readFileSync",
+      };
+    }
+    if (callee.name === "existsSync") {
+      this.checkNodeFsExistsSyncArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "fs_exists_sync",
+        params: [this.makeParamInfo("path", T_STRING)],
+        returnType: T_BOOLEAN,
+        label: "existsSync",
+      };
+    }
     if (callee.name === "fileURLToPath") {
       this.checkNodeUrlFileURLToPathArgs(expr);
       return {
@@ -11743,8 +11767,6 @@ class Emitter {
     return (
       name === "resolve" ||
       name === "join" ||
-      name === "readFileSync" ||
-      name === "existsSync" ||
       name === "writeFileSync" ||
       name === "mkdirSync" ||
       name === "execFileSync" ||
@@ -12098,6 +12120,12 @@ class Emitter {
       if (plan.syntheticKind === "path_join") {
         return this.emitNodePathJoin(expr);
       }
+      if (plan.syntheticKind === "fs_read_file_sync") {
+        return this.emitNodeFsReadFileSync(expr);
+      }
+      if (plan.syntheticKind === "fs_exists_sync") {
+        return this.emitNodeFsExistsSync(expr);
+      }
       if (plan.syntheticKind === "url_file_url_to_path") {
         return this.emitNodeUrlFileURLToPath(expr);
       }
@@ -12317,11 +12345,9 @@ class Emitter {
     }
 
     if (callee.kind === "ident") {
-      // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
-      // shortcut。loader 側で `node:fs` specifier を受理し、`readFileSync`
-      // 識別子は scope に登録されない (String.fromCharCode と同方針)。
-      // bare 利用 (`let f = readFileSync;`) は scope lookup が「unknown
-      // identifier」で fall するので、ここの call-site 経路だけ受理する。
+      // Stdlib shortcut identifiers are not scope bindings; call sites are
+      // recognized syntactically and bare values still fall through scope
+      // lookup as unknown identifiers.
       if (this.isCompilingRuntimePrelude()) {
         if (callee.name === "__topaz_panic") {
           return this.emitInternalPreludePanic(expr);
@@ -12369,14 +12395,6 @@ class Emitter {
           return this.emitInternalPreludeBigIntSign(expr);
         }
       }
-      if (callee.name === "readFileSync") {
-        return this.emitNodeFsReadFileSync(expr);
-      }
-      // Phase 1.5-6 prep #17: `existsSync(path)` -> bool, same syntactic
-      // shortcut path as readFileSync (loader accepts the `node:fs` specifier).
-      if (callee.name === "existsSync") {
-        return this.emitNodeFsExistsSync(expr);
-      }
       // Phase 1.5-6 prep #19: `writeFileSync(path, content)` -> void, same
       // syntactic shortcut path as readFileSync. Encoding is implicit utf8.
       if (callee.name === "writeFileSync") {
@@ -12417,8 +12435,8 @@ class Emitter {
       if (callee.name === "writeError") {
         return this.emitStdProcessWriteError(expr);
       }
-      // Phase 1.5-6 prep #16 / Phase 5.26 / Phase 5.27: pure fixed/optional
-      // flat builtins stay call-site-only, but lower through ordinary call
+      // Phase 1.5-6 prep #16 / Phase 5.26-5.29: descriptor-backed flat
+      // builtins stay call-site-only, but lower through ordinary call
       // descriptors so call-argument await can share the same metadata.
       const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
       if (ordinaryPlan !== undefined) {
@@ -14820,10 +14838,7 @@ class Emitter {
         throw new CodegenError({ pos: prop.pos }, `unsupported method '.${prop.name}' on ${typeIdent(baseType)}`);
       }
       if (callee.kind === "ident") {
-        // Phase 1.5-6 prep #13: `readFileSync(path, "utf8")` の syntactic
-        // shortcut (mirrors emitCall) — `readFileSync` 識別子は scope に存在
-        // しないので、ここで先に拾わないと scope lookup が「unknown
-        // identifier」で fall する。
+        // Mirrors emitCall for call-site-only stdlib shortcut identifiers.
         if (this.isCompilingRuntimePrelude()) {
           if (callee.name === "__topaz_panic") {
             this.checkInternalPreludePanicArgs(expr);
@@ -14886,15 +14901,6 @@ class Emitter {
             return T_NUMBER;
           }
         }
-        if (callee.name === "readFileSync") {
-          this.checkNodeFsReadFileSyncArgs(expr);
-          return T_STRING;
-        }
-        // Phase 1.5-6 prep #17: existsSync types as boolean.
-        if (callee.name === "existsSync") {
-          this.checkNodeFsExistsSyncArgs(expr);
-          return T_BOOLEAN;
-        }
         // Phase 1.5-6 prep #19: writeFileSync returns void; reject value use
         // (mirrors Array.push / console.log).
         if (callee.name === "writeFileSync") {
@@ -14949,8 +14955,8 @@ class Emitter {
             "console.error returns void and cannot be used as a value",
           );
         }
-        // Phase 1.5-6 prep #16 / Phase 5.26 / Phase 5.27: pure fixed/optional
-        // flat builtins type through their call-site-only descriptors.
+        // Phase 1.5-6 prep #16 / Phase 5.26-5.29: descriptor-backed flat
+        // builtins type through their call-site-only descriptors.
         const flatBuiltinPlan = this.resolveFlatBuiltinCallPlan(expr, callee);
         if (flatBuiltinPlan !== undefined) return flatBuiltinPlan.returnType;
         if (this.genericFunctions.has(callee.name)) {
