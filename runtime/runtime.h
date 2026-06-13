@@ -210,13 +210,14 @@ static inline const void *topaz_promise_fulfilled_payload(topaz_promise *promise
   return promise->fulfilled_payload;
 }
 
-static inline void *topaz_promise_then(
+static inline void *topaz_promise_then_into(
   void *source_value,
   topaz_promise_continuation_fn fn,
-  void *ctx
+  void *ctx,
+  void *target_value
 ) {
   topaz_promise *source = (topaz_promise *)source_value;
-  topaz_promise *target = topaz_promise_new_pending();
+  topaz_promise *target = (topaz_promise *)target_value;
   topaz_promise_continuation *cont = (topaz_promise_continuation *)topaz_arena_calloc(1, sizeof(*cont));
   cont->fn = fn;
   cont->ctx = ctx;
@@ -234,6 +235,15 @@ static inline void *topaz_promise_then(
     topaz_promise_reject_with(target, source->rejected_error);
   }
   return target;
+}
+
+static inline void *topaz_promise_then(
+  void *source_value,
+  topaz_promise_continuation_fn fn,
+  void *ctx
+) {
+  topaz_promise *target = topaz_promise_new_pending();
+  return topaz_promise_then_into(source_value, fn, ctx, target);
 }
 
 static inline void topaz_promise_drain_microtasks(void) {

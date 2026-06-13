@@ -315,6 +315,12 @@ const inventory = {
     migration: MIGRATION.PROMISE_CONTINUATION,
     next: NEXT.PROMISE_CONTINUATION,
   },
+  topaz_promise_then_into: {
+    category: CATEGORY.PROMISE,
+    reason: "register a fulfillment continuation into an existing target Promise for async frame resumption.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
   topaz_promise_drain_microtasks: {
     category: CATEGORY.PROMISE,
     reason: "single-thread Promise microtask queue drain called from generated main.",

@@ -971,7 +971,7 @@ if [[ "${substrate_out}" != *"promise-value-boundary: 3"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"promise-continuation-boundary: 9"* ]]; then
+if [[ "${substrate_out}" != *"promise-continuation-boundary: 10"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: Promise continuation substrate lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
@@ -1021,6 +1021,7 @@ for fragment in \
   'topaz_promise_resolve_copy (helper,' \
   'migration=promise-value-boundary' \
   'topaz_promise_then (helper,' \
+  'topaz_promise_then_into (helper,' \
   'migration=promise-continuation-boundary' \
   'topaz_try_push (helper,' \
   'migration=exception-boundary' \
@@ -1035,14 +1036,14 @@ for fragment in \
   fi
 done
 for fragment in \
-  'runtime substrate inventory ok: 68 symbols classified' \
+  'runtime substrate inventory ok: 69 symbols classified' \
   'bigint-limb-intrinsic-family: 8' \
   'c-abi-type-boundary: 8' \
   'container-monomorph-boundary: 13' \
   'exception-boundary: 4' \
   'host-abi-boundary: 12' \
   'libc-libm-boundary: 3' \
-  'promise-continuation-boundary: 9' \
+  'promise-continuation-boundary: 10' \
   'promise-value-boundary: 3' \
   'raw-memory-boundary: 3' \
   'string-buffer-intrinsic-family: 5' \
@@ -2937,10 +2938,11 @@ run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejecti
 run_case promise_then_fulfilled $'sync\npromise returned\nthen number\n42\nthen string\nready'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
+run_case async_await_two_bindings $'before a\nsync tail\nbetween\nafter b\nthen sum\n42'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
-run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "more than one await in an async function is deferred"
+run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_try_deferred_fail examples/await_try_deferred_fail.ts "await inside try/catch/finally is deferred"
 run_fail_case async_function_wrong_return_fail examples/async_function_wrong_return_fail.ts "async function return annotation must be Promise<T>"

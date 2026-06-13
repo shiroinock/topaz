@@ -126,6 +126,10 @@ type AwaitBindingInfo = {
   bindingType: TopazType;
 };
 
+type AsyncAwaitFrameInfo = {
+  bindings: Array<AwaitBindingInfo>;
+};
+
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BIGINT: TopazType = { kind: "bigint" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
@@ -4261,9 +4265,9 @@ class Emitter {
     sig: TopLevelFunctionSig,
   ): string {
     return this.withSfString(sf, () => {
-      const awaitBinding = this.findAsyncAwaitBinding(block, payloadType);
-      if (awaitBinding !== undefined) {
-        return this.emitAsyncFunctionBodyWithAwaitBinding(block, payloadType, sig, awaitBinding);
+      const awaitFrame = this.findAsyncAwaitFrame(block, payloadType);
+      if (awaitFrame !== undefined) {
+        return this.emitAsyncFunctionBodyWithAwaitFrame(block, payloadType, sig, awaitFrame);
       }
       const lines: string[] = [];
       lines.push("{");
@@ -4291,7 +4295,7 @@ class Emitter {
     });
   }
 
-  private findAsyncAwaitBinding(block: BlockStmt, payloadType: TopazType): AwaitBindingInfo | undefined {
+  private findAsyncAwaitFrame(block: BlockStmt, payloadType: TopazType): AsyncAwaitFrameInfo | undefined {
     let awaitCount = 0;
     let hasAwaitAnchor = false;
     let awaitAnchorPos = block.pos;
@@ -4313,13 +4317,8 @@ class Emitter {
         throw new CodegenError(awaitAnchor, "await inside try/catch/finally is deferred");
       }
     }
-    if (awaitCount > 1) {
-      throw new CodegenError(awaitAnchor, "more than one await in an async function is deferred");
-    }
-
-    let awaitIndex = -1;
-    let awaitStmt: VarDeclStmt | undefined = undefined;
-    let awaitExpr: AwaitExpr | undefined = undefined;
+    const bindings: Array<AwaitBindingInfo> = [];
+    const supportedAwaitExprs = new Set<AwaitExpr>();
     for (let i = 0; i < block.stmts.length; i++) {
       const s = block.stmts[i];
       if (s.kind === "var_decl") {
@@ -4327,32 +4326,54 @@ class Emitter {
         if (initMaybe !== undefined) {
           const init = this.unwrapParenExpr(initMaybe);
           if (init.kind === "await_expr") {
-            awaitIndex = i;
-            awaitStmt = s;
-            awaitExpr = init;
-            break;
+            if (s.declKind !== "const" && s.declKind !== "let") {
+              throw new CodegenError({ pos: s.pos }, "await binding must use `const` or `let`");
+            }
+            const operandType = this.inferType(init.operand);
+            if (operandType.kind !== "promise") {
+              throw new CodegenError(
+                { pos: init.operand.pos },
+                `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+              );
+            }
+            let bindingType = operandType.value;
+            const typeMaybe = s.type;
+            if (typeMaybe !== undefined) {
+              const annotated = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
+              this.assertNotVoid(annotated, { pos: s.pos }, "await binding type");
+              if (!typeEq(bindingType, annotated) && !this.isAssignableTo(bindingType, annotated)) {
+                throw new CodegenError(
+                  { pos: s.pos },
+                  `type mismatch: expected ${typeIdent(annotated)}, got ${typeIdent(bindingType)}`,
+                );
+              }
+              bindingType = annotated;
+            }
+            bindings.push({ stmt: s, awaitExpr: init, index: i, operandType, bindingType });
+            supportedAwaitExprs.add(init);
           }
         }
       }
     }
-    if (awaitStmt === undefined) {
+    if (bindings.length === 0) {
       throw new CodegenError(
         awaitAnchor,
         "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
       );
     }
-    const supportedStmt = awaitStmt;
-    if (awaitExpr === undefined) {
-      throw new CodegenError(
-        awaitAnchor,
-        "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
-      );
+    for (const s of block.stmts) {
+      for (const found of this.collectAwaitExprsInStmt(s)) {
+        if (!supportedAwaitExprs.has(found)) {
+          throw new CodegenError(
+            { pos: found.pos },
+            "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
+          );
+        }
+      }
     }
-    const supportedExpr = awaitExpr;
-    if (supportedStmt.declKind !== "const" && supportedStmt.declKind !== "let") {
-      throw new CodegenError({ pos: supportedStmt.pos }, "await binding must use `const` or `let`");
-    }
-    for (let i = 0; i < awaitIndex; i++) {
+    const firstAwaitIndex = bindings[0].index;
+    const lastAwaitIndex = bindings[bindings.length - 1].index;
+    for (let i = 0; i < firstAwaitIndex; i++) {
       const s = block.stmts[i];
       if (s.kind === "var_decl" || s.kind === "var_destr_decl") {
         throw new CodegenError(
@@ -4361,68 +4382,70 @@ class Emitter {
         );
       }
     }
-    const operandType = this.inferType(supportedExpr.operand);
-    if (operandType.kind !== "promise") {
-      throw new CodegenError(
-        { pos: supportedExpr.operand.pos },
-        `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
-      );
-    }
-    let bindingType = operandType.value;
-    const typeMaybe = supportedStmt.type;
-    if (typeMaybe !== undefined) {
-      const annotated = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
-      this.assertNotVoid(annotated, { pos: supportedStmt.pos }, "await binding type");
-      if (!typeEq(bindingType, annotated) && !this.isAssignableTo(bindingType, annotated)) {
+    for (let i = firstAwaitIndex + 1; i < lastAwaitIndex; i++) {
+      const s = block.stmts[i];
+      if (s.kind === "var_decl") {
+        const initMaybe = s.init;
+        const init = initMaybe === undefined ? undefined : this.unwrapParenExpr(initMaybe);
+        if (init === undefined || init.kind !== "await_expr") {
+          throw new CodegenError(
+            { pos: s.pos },
+            "local declarations across a later await require async frame local capture, which is deferred",
+          );
+        }
+      } else if (s.kind === "var_destr_decl") {
         throw new CodegenError(
-          { pos: supportedStmt.pos },
-          `type mismatch: expected ${typeIdent(annotated)}, got ${typeIdent(bindingType)}`,
+          { pos: s.pos },
+          "local declarations across a later await require async frame local capture, which is deferred",
         );
       }
-      bindingType = annotated;
     }
     if (payloadType.kind === "void") {
       // Keep payloadType threaded here so type-checking work above mirrors the
       // no-await path; void async functions are otherwise handled by return lowering.
     }
-    return { stmt: supportedStmt, awaitExpr: supportedExpr, index: awaitIndex, operandType, bindingType };
+    return { bindings };
   }
 
-  private emitAsyncFunctionBodyWithAwaitBinding(
+  private emitAsyncFunctionBodyWithAwaitFrame(
     block: BlockStmt,
     payloadType: TopazType,
     sig: TopLevelFunctionSig,
-    awaitBinding: AwaitBindingInfo,
+    frame: AsyncAwaitFrameInfo,
   ): string {
+    const firstAwait = frame.bindings[0];
     const id = this.asyncAwaitCounter++;
-    const ctxName = `__topaz_async_await_${id}_ctx`;
+    const ctxName = `__topaz_async_await_${id}_frame`;
     const runnerName = `__topaz_async_await_${id}_runner`;
     const sourceVar = `__topaz_await_source_${id}`;
-    const ctxVar = `__topaz_await_ctx_${id}`;
-    this.recordAsyncAwaitRunner(ctxName, runnerName, payloadType, sig.params, awaitBinding, block.stmts.slice(awaitBinding.index + 1));
+    const frameVar = `__topaz_await_frame_${id}`;
+    this.recordAsyncAwaitRunner(ctxName, runnerName, payloadType, sig.params, frame, block.stmts);
 
     const lines: string[] = [];
     lines.push("{");
+    lines.push(`  ${ctxName} *${frameVar} = (${ctxName} *)topaz_arena_calloc(1, sizeof(${ctxName}));`);
+    lines.push(`  ${frameVar}->output = topaz_promise_new_pending();`);
     lines.push("  topaz_try_frame __topaz_async_frame;");
     lines.push("  topaz_try_push(&__topaz_async_frame);");
     lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
     this.liveTryFrames++;
-    const prefix = block.stmts.slice(0, awaitBinding.index);
+    const prefix = block.stmts.slice(0, firstAwait.index);
     for (const s of prefix) {
       lines.push(this.emitStatement(s, 2));
       this.applyCarryNarrowing(s);
     }
-    const operandExpr = this.emitWithExpected(awaitBinding.awaitExpr.operand, awaitBinding.operandType);
+    const operandExpr = this.emitWithExpected(firstAwait.awaitExpr.operand, firstAwait.operandType);
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
-    lines.push(`    ${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_calloc(1, sizeof(${ctxName}));`);
     for (const p of sig.params) {
-      lines.push(`    ${ctxVar}->${p.name} = ${p.name};`);
+      lines.push(`    ${frameVar}->${p.name} = ${p.name};`);
     }
+    lines.push(`    ${frameVar}->__topaz_pc = 0;`);
     this.liveTryFrames--;
     lines.push(`    topaz_try_pop();`);
-    lines.push(`    return topaz_promise_then(${sourceVar}, ${runnerName}, ${ctxVar});`);
+    lines.push(`    return topaz_promise_then_into(${sourceVar}, ${runnerName}, ${frameVar}, ${frameVar}->output);`);
     lines.push("  } else {");
-    lines.push("    return topaz_promise_reject(topaz_throw_value);");
+    lines.push(`    topaz_promise_reject_with(${frameVar}->output, topaz_throw_value);`);
+    lines.push(`    return ${frameVar}->output;`);
     lines.push("  }");
     lines.push("}");
     return lines.join("\n");
@@ -4433,12 +4456,16 @@ class Emitter {
     runnerName: string,
     payloadType: TopazType,
     params: Array<ParamInfo>,
-    awaitBinding: AwaitBindingInfo,
-    suffix: Array<Stmt>,
+    frame: AsyncAwaitFrameInfo,
+    stmts: Array<Stmt>,
   ): void {
     const fields: string[] = [];
-    if (params.length === 0) fields.push("  int __topaz_unused;");
+    fields.push("  int __topaz_pc;");
+    fields.push("  topaz_promise *output;");
     for (const p of params) fields.push(`  ${cTypeName(p.type)} ${p.name};`);
+    for (const binding of frame.bindings) {
+      if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+    }
     this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n${fields.join("\n")}\n} ${ctxName};`);
     this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
 
@@ -4448,35 +4475,77 @@ class Emitter {
     this.currentAsyncContinuationTarget = "target";
     this.liveTryFrames = 0;
     this.finallyReturnContext = undefined;
-    this.scope.push();
-    this.scope.declareBinding(
-      awaitBinding.stmt.name,
-      awaitBinding.bindingType,
-      awaitBinding.stmt.declKind === "const",
-      { pos: awaitBinding.stmt.pos },
-    );
 
     const lines: string[] = [];
     lines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target) {`);
     lines.push(`  ${ctxName} *ctx = (${ctxName} *)__topaz_ctx;`);
-    if (params.length === 0) lines.push("  (void)ctx;");
-    for (const p of params) {
-      lines.push(`  ${cTypeName(p.type)} ${p.name} = ctx->${p.name};`);
+    lines.push("  switch (ctx->__topaz_pc) {");
+    for (let i = 0; i < frame.bindings.length; i++) {
+      const binding = frame.bindings[i];
+      lines.push(`    case ${i}: {`);
+      if (binding.bindingType.kind === "void") {
+        lines.push("      (void)source;");
+      } else {
+        const awaitC = cTypeName(binding.bindingType);
+        lines.push(`      ctx->${binding.stmt.name} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+      }
+      lines.push("      break;");
+      lines.push("    }");
     }
-    if (awaitBinding.bindingType.kind === "void") {
-      lines.push("  (void)source;");
-    } else {
-      const awaitC = cTypeName(awaitBinding.bindingType);
-      lines.push(`  ${awaitC} ${awaitBinding.stmt.name} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
-    }
+    lines.push("    default:");
+    lines.push("      topaz_panic((topaz_string){ \"topaz: invalid async frame state\", 32 });");
+    lines.push("  }");
     lines.push("  topaz_try_frame __topaz_async_frame;");
     lines.push("  topaz_try_push(&__topaz_async_frame);");
     lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
     this.liveTryFrames++;
-    for (const s of suffix) {
-      lines.push(this.emitStatement(s, 2));
-      this.applyCarryNarrowing(s);
+    lines.push("    switch (ctx->__topaz_pc) {");
+    for (let i = 0; i < frame.bindings.length; i++) {
+      const current = frame.bindings[i];
+      const hasNext = i + 1 < frame.bindings.length;
+      const segmentStart = current.index + 1;
+      const segmentEnd = hasNext ? frame.bindings[i + 1].index : stmts.length;
+      lines.push(`      case ${i}: {`);
+      this.scope.push();
+      for (const p of params) {
+        this.scope.declareBinding(p.name, p.type, /* isConst */ false, { pos: current.stmt.pos });
+        lines.push(`        ${cTypeName(p.type)} ${p.name} = ctx->${p.name};`);
+        lines.push(`        (void)${p.name};`);
+      }
+      for (let j = 0; j <= i; j++) {
+        const prior = frame.bindings[j];
+        this.scope.declareBinding(
+          prior.stmt.name,
+          prior.bindingType,
+          prior.stmt.declKind === "const",
+          { pos: prior.stmt.pos },
+        );
+        if (prior.bindingType.kind !== "void") {
+          lines.push(`        ${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${prior.stmt.name};`);
+          lines.push(`        (void)${prior.stmt.name};`);
+        }
+      }
+      for (const s of stmts.slice(segmentStart, segmentEnd)) {
+        lines.push(this.emitStatement(s, 4));
+        this.applyCarryNarrowing(s);
+      }
+      if (hasNext) {
+        const next = frame.bindings[i + 1];
+        const nextSourceVar = `__topaz_await_next_${i}`;
+        const operandExpr = this.emitWithExpected(next.awaitExpr.operand, next.operandType);
+        lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
+        lines.push(`        ctx->__topaz_pc = ${i + 1};`);
+        lines.push(`        topaz_try_pop();`);
+        lines.push(`        topaz_promise_then_into(${nextSourceVar}, ${runnerName}, ctx, target);`);
+        lines.push("        return;");
+      }
+      this.scope.pop();
+      lines.push("        break;");
+      lines.push("      }");
     }
+    lines.push("      default:");
+    lines.push("        topaz_panic((topaz_string){ \"topaz: invalid async frame state\", 32 });");
+    lines.push("    }");
     this.liveTryFrames--;
     lines.push("    topaz_try_pop();");
     if (payloadType.kind === "void") {
@@ -4489,7 +4558,6 @@ class Emitter {
     lines.push("  }");
     lines.push("}");
 
-    this.scope.pop();
     this.currentAsyncContinuationTarget = prevContinuationTarget;
     this.liveTryFrames = prevLive;
     this.finallyReturnContext = prevFinallyReturn;

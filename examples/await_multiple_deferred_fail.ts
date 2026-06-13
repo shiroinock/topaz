@@ -2,8 +2,10 @@
 
 async function answer(): Promise<number> {
   const a = await Promise.resolve(1);
-  const b = await Promise.resolve(2);
-  return a + b;
+  if (a === 1) {
+    return await Promise.resolve(2);
+  }
+  return a;
 }
 
 answer();
