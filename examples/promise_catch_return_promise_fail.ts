@@ -3,5 +3,5 @@
 class AsyncErr {}
 
 const rejected: Promise<number> = Promise.reject(new AsyncErr());
-rejected.catch((e: unknown): Promise<number> => Promise.resolve(1));
+rejected.catch((e: unknown): Promise<string> => Promise.resolve("bad"));
 console.log("bad");

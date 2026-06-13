@@ -11838,10 +11838,13 @@ class Emitter {
     const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
     const resultType = fnType.returnType;
     if (resultType.kind === "promise") {
-      throw new CodegenError(
-        { pos: expr.args[0].pos },
-        "Promise.catch callback returning Promise<T> is deferred until explicit thenable assimilation is implemented",
-      );
+      if (!typeEq(resultType.value, baseType.value)) {
+        throw new CodegenError(
+          { pos: expr.args[0].pos },
+          `Promise.catch callback return type ${typeIdent(resultType)} does not match expected ${typeIdent({ kind: "promise", value: baseType.value })}`,
+        );
+      }
+      return resultType;
     }
     if (!typeEq(resultType, baseType.value)) {
       throw new CodegenError(
@@ -11939,21 +11942,22 @@ class Emitter {
     return runnerName;
   }
 
-  private promiseCatchRunnerName(payloadType: TopazType): string {
-    return `__topaz_promise_catch_${cIdentFragment(typeKey(payloadType))}`;
+  private promiseCatchRunnerName(payloadType: TopazType, resultType: TopazType): string {
+    return `__topaz_promise_catch_${cIdentFragment(typeKey(payloadType))}__to__${cIdentFragment(typeKey(resultType))}`;
   }
 
-  private promiseCatchContextName(payloadType: TopazType): string {
-    return `${this.promiseCatchRunnerName(payloadType)}_ctx`;
+  private promiseCatchContextName(payloadType: TopazType, resultType: TopazType): string {
+    return `${this.promiseCatchRunnerName(payloadType, resultType)}_ctx`;
   }
 
   private recordPromiseCatchRunner(payloadType: TopazType, fnType: FnType): string {
-    const runnerName = this.promiseCatchRunnerName(payloadType);
+    const resultType = fnType.returnType;
+    const runnerName = this.promiseCatchRunnerName(payloadType, resultType);
     if (this.promiseThenRunners.has(runnerName)) return runnerName;
     this.promiseThenRunners.add(runnerName);
     this.recordFnMonomorph(fnType);
 
-    const ctxName = this.promiseCatchContextName(payloadType);
+    const ctxName = this.promiseCatchContextName(payloadType, resultType);
     const fnTypeName = typeIdent(fnType);
     this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n  ${fnTypeName} cb;\n} ${ctxName};`);
     this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
@@ -11965,7 +11969,11 @@ class Emitter {
     lines.push("  topaz_try_push(&__topaz_promise_frame);");
     lines.push("  if (setjmp(__topaz_promise_frame.env) == 0) {");
     lines.push("    void *__topaz_promise_error = source->rejected_error;");
-    if (payloadType.kind === "void") {
+    if (resultType.kind === "promise") {
+      lines.push("    void *__topaz_promise_result = ctx->cb.fn(ctx->cb.env, __topaz_promise_error);");
+      lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_forward_into(__topaz_promise_result, target);");
+    } else if (payloadType.kind === "void") {
       lines.push("    ctx->cb.fn(ctx->cb.env, __topaz_promise_error);");
       lines.push("    topaz_try_pop();");
       lines.push("    topaz_promise_fulfill_void(target);");
@@ -12046,7 +12054,7 @@ class Emitter {
     if (expr.args.length === 2) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedRunnerName = this.recordPromiseCatchRunner(resultType, rejectedFnType);
-      const rejectedCtxName = this.promiseCatchContextName(resultType);
+      const rejectedCtxName = this.promiseCatchContextName(resultType, rejectedFnType.returnType);
       const rejectedFnTypeName = typeIdent(rejectedFnType);
       const targetVar = `__topaz_then_target_${id}`;
       const rejectedCbVar = `__topaz_then_reject_cb_${id}`;
@@ -12082,7 +12090,7 @@ class Emitter {
     }
     const fnType = this.inferPromiseCatchCallbackFn(expr.args[0]);
     const runnerName = this.recordPromiseCatchRunner(baseType.value, fnType);
-    const ctxName = this.promiseCatchContextName(baseType.value);
+    const ctxName = this.promiseCatchContextName(baseType.value, fnType.returnType);
     const fnTypeName = typeIdent(fnType);
     const id = this.tmpCounter++;
     const sourceVar = `__topaz_catch_src_${id}`;

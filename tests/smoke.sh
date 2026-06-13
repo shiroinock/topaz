@@ -2965,6 +2965,7 @@ run_case promise_catch_rejected $'sync tail\nfifo then\nfifo catch\nfifo\ncatch 
 run_case promise_then_on_rejected $'sync tail\nfulfilled branch\n2\nrejected branch\nrecover\nvoid fulfilled\nthrowing fulfilled\nfulfilled then\n2\nrejected then\n7\nvoid then\nthrow recovery\n9\nthrow then\n9'
 run_case promise_finally $'sync tail\ncleanup fulfilled\ncleanup rejected\ncleanup void\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n1\nrejected preserved\nsource\nvoid then\nfifo final then\n5\noverride catch\n77\nrejected recovery\n2\noverride then\n77'
 run_case promise_then_return_promise $'sync tail\nfulfilled callback\nrejected callback\nouter callback\nfifo marker\nthrow callback\ninner callback\nthrow rejection\n9\nfulfilled result\n2\nreturned rejection\nreturned\nthrow result\n9\nrecovered result\n7\nouter result\n14'
+run_case promise_catch_return_promise $'sync tail\nfulfilled bypass\n40\ncatch recover\nrecover\ncatch reject\ncatch nested\nfifo marker\ncatch throw\ninner nested\nthrow rejection\n12\nrecover result\n7\ncatch returned rejection\nreturned\nthrow result\n12\nreturned recovery\n9\nnested result\n5'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
@@ -3034,7 +3035,7 @@ run_fail_case promise_then_wrong_arity_fail examples/promise_then_wrong_arity_fa
 run_fail_case promise_then_non_fn_fail examples/promise_then_non_fn_fail.ts "Promise.then callback must be a function value"
 run_fail_case promise_catch_deferred_fail examples/promise_catch_deferred_fail.ts "Promise.catch callback parameter type"
 run_fail_case promise_catch_return_mismatch_fail examples/promise_catch_return_mismatch_fail.ts "Promise.catch callback return type topaz_string does not match expected topaz_number"
-run_fail_case promise_catch_return_promise_fail examples/promise_catch_return_promise_fail.ts "Promise.catch callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
+run_fail_case promise_catch_return_promise_fail examples/promise_catch_return_promise_fail.ts "Promise.catch callback return type topaz_promise_string does not match expected topaz_promise_number"
 run_fail_case promise_catch_wrong_arity_fail examples/promise_catch_wrong_arity_fail.ts "Promise.catch expects exactly one argument, got 0"
 run_fail_case promise_finally_wrong_arity_fail examples/promise_finally_wrong_arity_fail.ts "Promise.finally expects exactly one argument, got 0"
 run_fail_case promise_finally_parameter_fail examples/promise_finally_parameter_fail.ts "Promise.finally callback arity 1 does not match expected 0"
