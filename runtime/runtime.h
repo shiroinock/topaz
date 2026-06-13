@@ -162,6 +162,15 @@ static inline void topaz_promise_propagate_fulfilled(topaz_promise *target, topa
   topaz_promise_fulfill_copy(target, source->fulfilled_payload, source->fulfilled_payload_size);
 }
 
+static inline void topaz_promise_forward_settlement(void *ctx, topaz_promise *source, topaz_promise *target) {
+  (void)ctx;
+  if (source->state == TOPAZ_PROMISE_FULFILLED) {
+    topaz_promise_propagate_fulfilled(target, source);
+  } else {
+    topaz_promise_reject_with(target, source->rejected_error);
+  }
+}
+
 static inline void topaz_promise_settle_continuations(topaz_promise *promise) {
   topaz_promise_continuation *cont = promise->continuations_head;
   promise->continuations_head = NULL;
@@ -305,6 +314,17 @@ static inline void *topaz_promise_then(
 ) {
   topaz_promise *target = topaz_promise_new_pending();
   return topaz_promise_then_into(source_value, fn, ctx, target);
+}
+
+static inline void *topaz_promise_forward_into(void *source_value, void *target_value) {
+  return topaz_promise_add_continuation(
+    source_value,
+    TOPAZ_PROMISE_CONTINUATION_SETTLED,
+    topaz_promise_forward_settlement,
+    NULL,
+    target_value,
+    false
+  );
 }
 
 static inline void *topaz_promise_catch(

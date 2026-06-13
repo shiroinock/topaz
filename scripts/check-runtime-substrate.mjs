@@ -309,6 +309,12 @@ const inventory = {
     migration: MIGRATION.PROMISE_CONTINUATION,
     next: NEXT.PROMISE_CONTINUATION,
   },
+  topaz_promise_forward_settlement: {
+    category: CATEGORY.PROMISE,
+    reason: "forward a returned Promise settlement into an existing chained Promise target.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
   topaz_promise_fulfilled_payload: {
     category: CATEGORY.PROMISE,
     reason: "typed continuation trampoline payload read boundary for fulfilled Promises.",
@@ -330,6 +336,12 @@ const inventory = {
   topaz_promise_then_into: {
     category: CATEGORY.PROMISE,
     reason: "register a fulfillment continuation into an existing target Promise for async frame resumption.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_forward_into: {
+    category: CATEGORY.PROMISE,
+    reason: "register returned-Promise settlement forwarding into an existing chained target Promise.",
     migration: MIGRATION.PROMISE_CONTINUATION,
     next: NEXT.PROMISE_CONTINUATION,
   },

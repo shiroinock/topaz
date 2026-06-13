@@ -11773,8 +11773,14 @@ class Emitter {
     return this.inferCallbackFn(cb, [], "Promise.finally");
   }
 
-  private checkPromiseThenResultType(cb: Expr, resultType: TopazType, label: string): void {
+  private checkPromiseThenResultType(
+    cb: Expr,
+    resultType: TopazType,
+    label: string,
+    allowPromiseReturn: boolean,
+  ): void {
     if (resultType.kind === "promise") {
+      if (allowPromiseReturn) return;
       throw new CodegenError(
         { pos: cb.pos },
         `${label} callback returning Promise<T> is deferred until explicit thenable assimilation is implemented`,
@@ -11798,11 +11804,12 @@ class Emitter {
     }
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
-    this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then");
+    const allowPromiseReturn = expr.args.length === 1;
+    this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", allowPromiseReturn);
     if (expr.args.length === 2) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedResultType = rejectedFnType.returnType;
-      this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected");
+      this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", false);
       if (!typeEq(resultType, rejectedResultType)) {
         throw new CodegenError(
           { pos: expr.args[1].pos },
@@ -11810,7 +11817,7 @@ class Emitter {
         );
       }
     }
-    const promiseType = promiseOf(resultType);
+    const promiseType = resultType.kind === "promise" ? resultType : promiseOf(resultType);
     if (promiseType === undefined) {
       throw new CodegenError(
         { pos: expr.args[0].pos },
@@ -11914,6 +11921,10 @@ class Emitter {
       lines.push(`    ctx->cb.fn(${callArgs});`);
       lines.push("    topaz_try_pop();");
       lines.push("    topaz_promise_fulfill_void(target);");
+    } else if (resultType.kind === "promise") {
+      lines.push(`    void *__topaz_promise_result = ctx->cb.fn(${callArgs});`);
+      lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_forward_into(__topaz_promise_result, target);");
     } else {
       const resultC = cTypeName(resultType);
       lines.push(`    ${resultC} __topaz_promise_result = ctx->cb.fn(${callArgs});`);
