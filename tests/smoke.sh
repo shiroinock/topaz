@@ -2935,8 +2935,14 @@ run_case promise_type_annotation $'promise annotations\nready'
 run_case promise_resolve_value $'number promise\nstring promise\nnumber promise\nstring promise\nresolve values\n42'
 run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejection\nreject values'
 run_case promise_then_fulfilled $'sync\npromise returned\nthen number\n42\nthen string\nready'
-run_tsc_bridge_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "async functions are unsupported"
+run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
+run_tsc_bridge_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "unsupported expression AwaitExpression"
 run_tsc_bridge_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "unsupported expression AwaitExpression"
+run_fail_case async_function_wrong_return_fail examples/async_function_wrong_return_fail.ts "async function return annotation must be Promise<T>"
+run_fail_case async_function_return_promise_fail examples/async_function_return_promise_fail.ts "type mismatch: expected topaz_number, got topaz_promise_number"
+run_tsc_bridge_fail_case async_arrow_deferred_fail examples/async_arrow_deferred_fail.ts "async functions are unsupported"
+run_tsc_bridge_fail_case async_method_deferred_fail examples/async_method_deferred_fail.ts "async functions are unsupported"
+run_fail_case async_generic_deferred_fail examples/async_generic_deferred_fail.ts "async generic functions are unsupported"
 run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
 run_fail_case promise_then_on_rejected_deferred_fail examples/promise_then_on_rejected_deferred_fail.ts "Promise.then expects exactly one argument, got 2"
 run_fail_case promise_then_non_fn_fail examples/promise_then_non_fn_fail.ts "Promise.then callback must be a function value"

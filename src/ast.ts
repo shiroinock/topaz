@@ -537,6 +537,7 @@ export type TypeParam = {
 export type FunctionDecl = {
   kind: "function_decl";
   isExported: boolean;
+  isAsync: boolean;
   name: string;
   typeParams: Array<TypeParam>;
   params: Array<FunctionParam>;

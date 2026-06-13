@@ -277,7 +277,8 @@ class Converter {
   convertFunctionDecl(stmt: ts.FunctionDeclaration): FunctionDecl {
     if (!stmt.name) throw this.err(stmt, "function declaration must be named");
     if (!stmt.body) throw this.err(stmt, "function declaration must have a body");
-    this.rejectAsyncStar(stmt);
+    const isAsync = this.hasAsyncModifier(stmt);
+    this.rejectStar(stmt);
     const isExported = this.hasExportModifier(stmt);
     const typeParams = this.convertTypeParams(stmt.typeParameters);
     const params = this.convertParams(stmt.parameters);
@@ -286,6 +287,7 @@ class Converter {
     return {
       kind: "function_decl",
       isExported,
+      isAsync,
       name: stmt.name.text,
       typeParams,
       params,
@@ -572,14 +574,27 @@ class Converter {
   rejectAsyncStar(
     fn: ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.ArrowFunction | ts.FunctionExpression,
   ): void {
+    if (this.hasAsyncModifier(fn)) {
+      throw this.err(fn, "async functions are unsupported");
+    }
+    this.rejectStar(fn);
+  }
+
+  hasAsyncModifier(
+    fn: ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.ArrowFunction | ts.FunctionExpression,
+  ): boolean {
     const modifiers = ts.canHaveModifiers(fn) ? ts.getModifiers(fn) : undefined;
     if (modifiers) {
       for (const m of modifiers) {
-        if (m.kind === ts.SyntaxKind.AsyncKeyword) {
-          throw this.err(m, "async functions are unsupported");
-        }
+        if (m.kind === ts.SyntaxKind.AsyncKeyword) return true;
       }
     }
+    return false;
+  }
+
+  rejectStar(
+    fn: ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.ArrowFunction | ts.FunctionExpression,
+  ): void {
     if ("asteriskToken" in fn && (fn as { asteriskToken?: ts.Node }).asteriskToken) {
       throw this.err(fn, "generator functions are unsupported");
     }

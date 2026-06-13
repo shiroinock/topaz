@@ -143,6 +143,7 @@ function isKeyword(word: string): boolean {
   if (word === "extends") return true;
   if (word === "implements") return true;
   if (word === "function") return true;
+  if (word === "async") return true;
   if (word === "new") return true;
   if (word === "this") return true;
   if (word === "true") return true;

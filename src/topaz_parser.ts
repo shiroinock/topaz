@@ -209,9 +209,15 @@ export class Parser {
       this.pos += 1;
       isExported = true;
     }
-    const head: Token = this.current();
+    let isAsync: boolean = false;
+    let head: Token = this.current();
+    if (this.isKeyword(head, "async")) {
+      this.pos += 1;
+      isAsync = true;
+      head = this.current();
+    }
     if (this.isKeyword(head, "function")) {
-      const d: Decl = this.parseFunctionDecl(isExported);
+      const d: Decl = this.parseFunctionDecl(isExported, isAsync);
       return { kind: "module_decl", decl: d };
     }
     if (this.isKeyword(head, "class")) {
@@ -362,7 +368,7 @@ export class Parser {
     };
   }
 
-  parseFunctionDecl(isExported: boolean): Decl {
+  parseFunctionDecl(isExported: boolean, isAsync: boolean): Decl {
     const start: Token = this.expectKeyword("function");
     const name: Token = this.expectIdent();
     const typeParams: Array<TypeParam> = this.parseTypeParamsOpt();
@@ -376,6 +382,7 @@ export class Parser {
     return {
       kind: "function_decl",
       isExported: isExported,
+      isAsync: isAsync,
       name: name.text,
       typeParams: typeParams,
       params: params,

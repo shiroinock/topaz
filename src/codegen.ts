@@ -1087,6 +1087,7 @@ type TopLevelFunctionSig = {
   params: ParamInfo[];
   returnType: TopazType;
   returnsNever: boolean;
+  isAsync: boolean;
 };
 
 function typeNodeIsNever(node: TypeNode | undefined): boolean {
@@ -1334,6 +1335,7 @@ class Emitter {
   private interfaces: Map<string, InterfaceInfo> = new Map<string, InterfaceInfo>();
   private currentClass: string | undefined = undefined;
   private currentReturnType: TopazType | undefined = undefined;
+  private currentAsyncReturnPayloadType: TopazType | undefined = undefined;
   // Phase 1.5-6i prep: enclosing-construct stack for `continue` validation.
   // Topaz nodes carry no `.parent`, so we maintain the nearest loop / switch
   // context explicitly with linked frames. A nested arrow is a function
@@ -2393,6 +2395,9 @@ class Emitter {
         throw new CodegenError(fnAnchor, `redeclaration of function '${fname}'`);
       }
       if (fn.typeParams.length > 0) {
+        if (fn.isAsync) {
+          throw new CodegenError(fnAnchor, "async generic functions are unsupported");
+        }
         // Generic function: defer signature resolution until call sites
         // supply concrete type arguments. Constraint / default rejection
         // already happened in convert; only the duplicate-name check remains.
@@ -2410,7 +2415,18 @@ class Emitter {
         this.genericFunctions.set(fname, { name: fname, typeParams, decl: fn, sf });
         return;
       }
-      const ret = this.typeFromAnnotation(fn.returnType, fnAnchor, sf);
+      const fnReturnType = fn.returnType;
+      if (fn.isAsync && fnReturnType === undefined) {
+        throw new CodegenError(fnAnchor, "async function return annotation must be Promise<T>");
+      }
+      let retAnchor: { pos: number } = fnAnchor;
+      if (fnReturnType !== undefined) {
+        retAnchor = { pos: fnReturnType.pos };
+      }
+      const ret = this.typeFromAnnotation(fnReturnType, retAnchor, sf);
+      if (fn.isAsync && ret.kind !== "promise") {
+        throw new CodegenError(retAnchor, `async function return annotation must be Promise<T>, got ${typeIdent(ret)}`);
+      }
       const params = this.collectParams(fn.params, sf);
       this.registerFunctionSig(fn, {
         name: fname,
@@ -2418,7 +2434,8 @@ class Emitter {
         cName: this.functionCName(sf, fname),
         params,
         returnType: ret,
-        returnsNever: typeNodeIsNever(fn.returnType),
+        returnsNever: typeNodeIsNever(fnReturnType),
+        isAsync: fn.isAsync,
       });
       });
     }
@@ -4182,9 +4199,21 @@ class Emitter {
   private emitFunctionDefinition(fn: FunctionDecl, sf: SourceModule): string {
     const sig = this.functionSigForDecl(fn);
     const prevRet = this.currentReturnType;
+    const prevAsyncPayload = this.currentAsyncReturnPayloadType;
     const prevLive = this.liveTryFrames;
     const prevFinallyReturn = this.finallyReturnContext;
-    this.currentReturnType = sig.returnType;
+    const sigReturnType = sig.returnType;
+    if (sig.isAsync && sigReturnType.kind !== "promise") {
+      throwInternalCodegenError("async function signature is not Promise<T>");
+    }
+    let asyncPayload: TopazType | undefined = undefined;
+    if (sig.isAsync) {
+      if (sigReturnType.kind === "promise") {
+        asyncPayload = sigReturnType.value;
+      }
+    }
+    this.currentReturnType = asyncPayload === undefined ? sigReturnType : asyncPayload;
+    this.currentAsyncReturnPayloadType = asyncPayload;
     this.liveTryFrames = 0;
     this.finallyReturnContext = undefined;
     this.scope.push();
@@ -4196,13 +4225,50 @@ class Emitter {
     for (const p of sig.params) {
       this.scope.declareBinding(p.name, p.type, /* isConst */ false, fnAnchor);
     }
-    const body = this.emitBlockBoundary(fn.body, sf);
+    let body: string = "";
+    if (sig.isAsync) {
+      if (asyncPayload === undefined) {
+        throwInternalCodegenError("async function payload missing");
+      }
+      body = this.emitAsyncFunctionBody(fn.body, sf, asyncPayload);
+    } else {
+      body = this.emitBlockBoundary(fn.body, sf);
+    }
     const rendered = `${this.formatSignature(sig)} ${body}`;
     this.scope.pop();
     this.currentReturnType = prevRet;
+    this.currentAsyncReturnPayloadType = prevAsyncPayload;
     this.liveTryFrames = prevLive;
     this.finallyReturnContext = prevFinallyReturn;
     return rendered;
+  }
+
+  private emitAsyncFunctionBody(block: BlockStmt, sf: SourceModule, payloadType: TopazType): string {
+    return this.withSfString(sf, () => {
+      const lines: string[] = [];
+      lines.push("{");
+      lines.push("  topaz_try_frame __topaz_async_frame;");
+      lines.push("  topaz_try_push(&__topaz_async_frame);");
+      lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
+      this.liveTryFrames++;
+      for (const s of block.stmts) {
+        lines.push(this.emitStatement(s, 2));
+        this.applyCarryNarrowing(s);
+      }
+      this.liveTryFrames--;
+      lines.push("    topaz_try_pop();");
+      if (payloadType.kind === "void") {
+        lines.push("    return topaz_promise_resolve_void();");
+      } else {
+        lines.push("    topaz_panic((topaz_string){ \"topaz: async function fell through without a value\", 50 });");
+        lines.push("    return topaz_promise_resolve_void();");
+      }
+      lines.push("  } else {");
+      lines.push("    return topaz_promise_reject(topaz_throw_value);");
+      lines.push("  }");
+      lines.push("}");
+      return lines.join("\n");
+    });
   }
 
   // Phase 1.4c-2: format a monomorph's C signature from its resolved
@@ -5792,6 +5858,7 @@ class Emitter {
         throw new CodegenError(stmtAnchor, "`return` outside of a function or method");
       }
       const currentReturnType: TopazType = currentReturnTypeMaybe;
+      const asyncPayloadMaybe = this.currentAsyncReturnPayloadType;
       const returnValueMaybe = stmt.value;
       if (returnValueMaybe === undefined) {
         if (currentReturnType.kind !== "void") {
@@ -5807,6 +5874,12 @@ class Emitter {
           const cleanupLabel = finallyReturnContext.cleanupLabel;
           const popCount = this.liveTryFrames - finallyReturnContext.outerLiveTryFrames;
           return `${pad}{ ${reasonVar} = 1; ${this.popFrameCount(popCount)}goto ${cleanupLabel}; }`;
+        }
+        if (asyncPayloadMaybe !== undefined) {
+          if (this.liveTryFrames > 0) {
+            return `${pad}{ ${this.popFrames()}return topaz_promise_resolve_void(); }`;
+          }
+          return `${pad}return topaz_promise_resolve_void();`;
         }
         if (this.liveTryFrames > 0) {
           return `${pad}{ ${this.popFrames()}return; }`;
@@ -5841,7 +5914,15 @@ class Emitter {
         // expression to the wrong handler.
         const rv = `__topaz_ret_${this.tmpCounter++}`;
         const ct = cTypeName(currentReturnType);
+        if (asyncPayloadMaybe !== undefined) {
+          return `${pad}{ ${ct} ${rv} = ${retExpr}; ${this.popFrames()}return topaz_promise_resolve_copy(&${rv}, sizeof(${rv})); }`;
+        }
         return `${pad}{ ${ct} ${rv} = ${retExpr}; ${this.popFrames()}return ${rv}; }`;
+      }
+      if (asyncPayloadMaybe !== undefined) {
+        const rv = `__topaz_ret_${this.tmpCounter++}`;
+        const ct = cTypeName(currentReturnType);
+        return `${pad}{ ${ct} ${rv} = ${retExpr}; return topaz_promise_resolve_copy(&${rv}, sizeof(${rv})); }`;
       }
       return `${pad}return ${retExpr};`;
     }

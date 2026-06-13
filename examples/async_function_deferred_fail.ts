@@ -1,4 +1,4 @@
-async function answer(): number {
+async function answer(): Promise<number> {
   return (await Promise.resolve(42));
 }
 
