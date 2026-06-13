@@ -130,6 +130,12 @@ type AsyncAwaitFrameInfo = {
   bindings: Array<AwaitBindingInfo>;
 };
 
+type CaptureContext = {
+  envType: string;
+  envIsEmpty: boolean;
+  captures: Map<string, TopazType>;
+};
+
 const T_NUMBER: TopazType = { kind: "number" };
 const T_BIGINT: TopazType = { kind: "bigint" };
 const T_BOOLEAN: TopazType = { kind: "boolean" };
@@ -1448,9 +1454,7 @@ class Emitter {
   private promiseThenRunners: Set<string> = new Set<string>();
   private asyncAwaitCounter: number = 0;
   private fnValueWrappers: Set<string> = new Set<string>();
-  private captureContext:
-    | { envType: string; envIsEmpty: boolean; captures: Map<string, TopazType> }
-    | undefined = undefined;
+  private captureContext: CaptureContext | undefined = undefined;
 
   private recordArrayMonomorph(t: TopazType): void {
     if (!isArrayType(t)) return;
@@ -4267,7 +4271,7 @@ class Emitter {
     return this.withSfString(sf, () => {
       const awaitFrame = this.findAsyncAwaitFrame(block, payloadType);
       if (awaitFrame !== undefined) {
-        return this.emitAsyncFunctionBodyWithAwaitFrame(block, payloadType, sig, awaitFrame);
+        return this.emitAsyncFunctionBodyWithAwaitFrame(block, payloadType, sig.params, awaitFrame);
       }
       const lines: string[] = [];
       lines.push("{");
@@ -4410,8 +4414,9 @@ class Emitter {
   private emitAsyncFunctionBodyWithAwaitFrame(
     block: BlockStmt,
     payloadType: TopazType,
-    sig: TopLevelFunctionSig,
+    params: Array<ParamInfo>,
     frame: AsyncAwaitFrameInfo,
+    runnerCaptureContext?: CaptureContext,
   ): string {
     const firstAwait = frame.bindings[0];
     const id = this.asyncAwaitCounter++;
@@ -4419,7 +4424,7 @@ class Emitter {
     const runnerName = `__topaz_async_await_${id}_runner`;
     const sourceVar = `__topaz_await_source_${id}`;
     const frameVar = `__topaz_await_frame_${id}`;
-    this.recordAsyncAwaitRunner(ctxName, runnerName, payloadType, sig.params, frame, block.stmts);
+    this.recordAsyncAwaitRunner(ctxName, runnerName, payloadType, params, frame, block.stmts, runnerCaptureContext);
 
     const lines: string[] = [];
     lines.push("{");
@@ -4436,8 +4441,11 @@ class Emitter {
     }
     const operandExpr = this.emitWithExpected(firstAwait.awaitExpr.operand, firstAwait.operandType);
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
-    for (const p of sig.params) {
+    for (const p of params) {
       lines.push(`    ${frameVar}->${p.name} = ${p.name};`);
+    }
+    if (runnerCaptureContext !== undefined && runnerCaptureContext.captures.size > 0) {
+      lines.push(`    ${frameVar}->__topaz_env = __topaz_env;`);
     }
     lines.push(`    ${frameVar}->__topaz_pc = 0;`);
     this.liveTryFrames--;
@@ -4458,10 +4466,14 @@ class Emitter {
     params: Array<ParamInfo>,
     frame: AsyncAwaitFrameInfo,
     stmts: Array<Stmt>,
+    runnerCaptureContext?: CaptureContext,
   ): void {
     const fields: string[] = [];
     fields.push("  int __topaz_pc;");
     fields.push("  topaz_promise *output;");
+    if (runnerCaptureContext !== undefined && runnerCaptureContext.captures.size > 0) {
+      fields.push("  void *__topaz_env;");
+    }
     for (const p of params) fields.push(`  ${cTypeName(p.type)} ${p.name};`);
     for (const binding of frame.bindings) {
       if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
@@ -4479,6 +4491,10 @@ class Emitter {
     const lines: string[] = [];
     lines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target) {`);
     lines.push(`  ${ctxName} *ctx = (${ctxName} *)__topaz_ctx;`);
+    if (runnerCaptureContext !== undefined && runnerCaptureContext.captures.size > 0) {
+      lines.push("  void *__topaz_env = ctx->__topaz_env;");
+      lines.push("  (void)__topaz_env;");
+    }
     lines.push("  switch (ctx->__topaz_pc) {");
     for (let i = 0; i < frame.bindings.length; i++) {
       const binding = frame.bindings[i];
@@ -4802,28 +4818,6 @@ class Emitter {
     );
   }
 
-  private collectAwaitExprsInArrow(arrow: ArrowExpr): Array<AwaitExpr> {
-    const out: Array<AwaitExpr> = [];
-    const body = arrow.body;
-    if (body.kind === "arrow_expr_body") {
-      this.collectAwaitExprsInExprInto(body.expr, out);
-    } else {
-      for (const s of body.stmts) this.collectAwaitExprsInStmtInto(s, out);
-    }
-    return out;
-  }
-
-  private checkAsyncArrowNoAwait(arrow: ArrowExpr): void {
-    if (!arrow.isAsync) return;
-    const awaits = this.collectAwaitExprsInArrow(arrow);
-    if (awaits.length === 0) return;
-    const first = awaits[0];
-    throw new CodegenError(
-      { pos: first.pos },
-      "async arrow with await is deferred until async arrow frame lowering",
-    );
-  }
-
   private asyncArrowPayloadType(returnType: TopazType, anchor: { pos: number }): TopazType {
     if (returnType.kind === "promise") return returnType.value;
     throw new CodegenError(
@@ -4886,7 +4880,6 @@ class Emitter {
         `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
-    this.checkAsyncArrowNoAwait(arrow);
     const params: ParamInfo[] = [];
     for (let i = 0; i < arrow.params.length; i++) {
       const p = arrow.params[i];
@@ -5095,7 +5088,6 @@ class Emitter {
   ): FnType {
     const cbAnchor: { pos: number } = { pos: cb.pos };
     if (cb.kind === "arrow_expr") {
-      this.checkAsyncArrowNoAwait(cb);
       const cbBody = cb.body;
       if (cb.params.length !== paramTypes.length) {
         throw new CodegenError(
@@ -5356,7 +5348,6 @@ class Emitter {
         `arrow function arity ${arrow.params.length} does not match expected type ${typeIdent(expectedFn)} (arity ${expectedFn.params.length})`,
       );
     }
-    this.checkAsyncArrowNoAwait(arrow);
     const params: ParamInfo[] = [];
     const seenNames = new Set<string>();
     for (let i = 0; i < arrow.params.length; i++) {
@@ -5485,7 +5476,7 @@ class Emitter {
     }
     const bodyText: string = asyncPayloadType === undefined
       ? this.emitArrowBodyText(arrow, returnType)
-      : this.emitAsyncArrowBodyText(arrow, asyncPayloadType);
+      : this.emitAsyncArrowBodyText(arrow, asyncPayloadType, params);
 
     // C function signature: env is `void *` so the same callable shape
     // works for both capturing and non-capturing arrows.
@@ -5556,8 +5547,16 @@ class Emitter {
     return `{\n  return ${exprStr};\n}`;
   }
 
-  private emitAsyncArrowBodyText(arrow: ArrowExpr, payloadType: TopazType): string {
+  private emitAsyncArrowBodyText(arrow: ArrowExpr, payloadType: TopazType, params: Array<ParamInfo>): string {
     const body = arrow.body;
+    if (body.kind === "arrow_block_body") {
+      const blk: BlockStmt = { kind: "block_stmt", stmts: body.stmts, pos: arrow.pos, end: arrow.end };
+      const awaitFrame = this.findAsyncAwaitFrame(blk, payloadType);
+      if (awaitFrame !== undefined) {
+        const captureContext = this.captureContext;
+        return this.emitAsyncFunctionBodyWithAwaitFrame(blk, payloadType, params, awaitFrame, captureContext);
+      }
+    }
     const lines: string[] = [];
     lines.push("{");
     lines.push("  topaz_try_frame __topaz_async_frame;");
