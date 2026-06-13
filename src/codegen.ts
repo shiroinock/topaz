@@ -11891,16 +11891,10 @@ class Emitter {
     }
     const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
     const resultType = fnType.returnType;
-    if (resultType.kind === "promise") {
+    if (resultType.kind !== "void" && resultType.kind !== "promise") {
       throw new CodegenError(
         { pos: expr.args[0].pos },
-        "Promise.finally callback returning Promise<T> is deferred until explicit thenable assimilation is implemented",
-      );
-    }
-    if (resultType.kind !== "void") {
-      throw new CodegenError(
-        { pos: expr.args[0].pos },
-        `Promise.finally callback must return void, got ${typeIdent(resultType)}`,
+        `Promise.finally callback must return void or Promise<T>, got ${typeIdent(resultType)}`,
       );
     }
     return baseType;
@@ -12010,21 +12004,22 @@ class Emitter {
     return runnerName;
   }
 
-  private promiseFinallyRunnerName(payloadType: TopazType): string {
-    return `__topaz_promise_finally_${cIdentFragment(typeKey(payloadType))}`;
+  private promiseFinallyRunnerName(payloadType: TopazType, cleanupType: TopazType): string {
+    return `__topaz_promise_finally_${cIdentFragment(typeKey(payloadType))}__cleanup__${cIdentFragment(typeKey(cleanupType))}`;
   }
 
-  private promiseFinallyContextName(payloadType: TopazType): string {
-    return `${this.promiseFinallyRunnerName(payloadType)}_ctx`;
+  private promiseFinallyContextName(payloadType: TopazType, cleanupType: TopazType): string {
+    return `${this.promiseFinallyRunnerName(payloadType, cleanupType)}_ctx`;
   }
 
   private recordPromiseFinallyRunner(payloadType: TopazType, fnType: FnType): string {
-    const runnerName = this.promiseFinallyRunnerName(payloadType);
+    const cleanupType = fnType.returnType;
+    const runnerName = this.promiseFinallyRunnerName(payloadType, cleanupType);
     if (this.promiseThenRunners.has(runnerName)) return runnerName;
     this.promiseThenRunners.add(runnerName);
     this.recordFnMonomorph(fnType);
 
-    const ctxName = this.promiseFinallyContextName(payloadType);
+    const ctxName = this.promiseFinallyContextName(payloadType, cleanupType);
     const fnTypeName = typeIdent(fnType);
     this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n  ${fnTypeName} cb;\n} ${ctxName};`);
     this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
@@ -12035,17 +12030,23 @@ class Emitter {
     lines.push("  topaz_try_frame __topaz_promise_frame;");
     lines.push("  topaz_try_push(&__topaz_promise_frame);");
     lines.push("  if (setjmp(__topaz_promise_frame.env) == 0) {");
-    lines.push("    ctx->cb.fn(ctx->cb.env);");
-    lines.push("    topaz_try_pop();");
-    lines.push("    if (source->state == TOPAZ_PROMISE_FULFILLED) {");
-    if (payloadType.kind === "void") {
-      lines.push("      topaz_promise_fulfill_void(target);");
+    if (cleanupType.kind === "promise") {
+      lines.push("    void *__topaz_promise_cleanup = ctx->cb.fn(ctx->cb.env);");
+      lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_finally_cleanup_into(__topaz_promise_cleanup, source, target);");
     } else {
-      lines.push("      topaz_promise_propagate_fulfilled(target, source);");
+      lines.push("    ctx->cb.fn(ctx->cb.env);");
+      lines.push("    topaz_try_pop();");
+      lines.push("    if (source->state == TOPAZ_PROMISE_FULFILLED) {");
+      if (payloadType.kind === "void") {
+        lines.push("      topaz_promise_fulfill_void(target);");
+      } else {
+        lines.push("      topaz_promise_propagate_fulfilled(target, source);");
+      }
+      lines.push("    } else {");
+      lines.push("      topaz_promise_reject_with(target, source->rejected_error);");
+      lines.push("    }");
     }
-    lines.push("    } else {");
-    lines.push("      topaz_promise_reject_with(target, source->rejected_error);");
-    lines.push("    }");
     lines.push("  } else {");
     lines.push("    topaz_promise_reject_with(target, topaz_throw_value);");
     lines.push("  }");
@@ -12137,7 +12138,7 @@ class Emitter {
     }
     const fnType = this.inferPromiseFinallyCallbackFn(expr.args[0]);
     const runnerName = this.recordPromiseFinallyRunner(baseType.value, fnType);
-    const ctxName = this.promiseFinallyContextName(baseType.value);
+    const ctxName = this.promiseFinallyContextName(baseType.value, fnType.returnType);
     const fnTypeName = typeIdent(fnType);
     const id = this.tmpCounter++;
     const sourceVar = `__topaz_finally_src_${id}`;

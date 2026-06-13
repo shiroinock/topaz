@@ -171,6 +171,22 @@ static inline void topaz_promise_forward_settlement(void *ctx, topaz_promise *so
   }
 }
 
+typedef struct {
+  topaz_promise *original;
+} topaz_promise_finally_cleanup_ctx;
+
+static inline void topaz_promise_finally_cleanup_settlement(void *ctx, topaz_promise *cleanup, topaz_promise *target) {
+  topaz_promise_finally_cleanup_ctx *cleanup_ctx = (topaz_promise_finally_cleanup_ctx *)ctx;
+  topaz_promise *original = cleanup_ctx->original;
+  if (cleanup->state == TOPAZ_PROMISE_REJECTED) {
+    topaz_promise_reject_with(target, cleanup->rejected_error);
+  } else if (original->state == TOPAZ_PROMISE_FULFILLED) {
+    topaz_promise_propagate_fulfilled(target, original);
+  } else {
+    topaz_promise_reject_with(target, original->rejected_error);
+  }
+}
+
 static inline void topaz_promise_settle_continuations(topaz_promise *promise) {
   topaz_promise_continuation *cont = promise->continuations_head;
   promise->continuations_head = NULL;
@@ -322,6 +338,24 @@ static inline void *topaz_promise_forward_into(void *source_value, void *target_
     TOPAZ_PROMISE_CONTINUATION_SETTLED,
     topaz_promise_forward_settlement,
     NULL,
+    target_value,
+    false
+  );
+}
+
+static inline void *topaz_promise_finally_cleanup_into(
+  void *cleanup_value,
+  void *original_value,
+  void *target_value
+) {
+  topaz_promise_finally_cleanup_ctx *ctx =
+    (topaz_promise_finally_cleanup_ctx *)topaz_arena_alloc(sizeof(*ctx));
+  ctx->original = (topaz_promise *)original_value;
+  return topaz_promise_add_continuation(
+    cleanup_value,
+    TOPAZ_PROMISE_CONTINUATION_SETTLED,
+    topaz_promise_finally_cleanup_settlement,
+    ctx,
     target_value,
     false
   );
