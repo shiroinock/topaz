@@ -234,7 +234,8 @@ type SyntheticCallKind =
   | "std_process_write_stderr"
   | "std_process_write_error"
   | "url_file_url_to_path"
-  | "promise_resolve";
+  | "promise_resolve"
+  | "promise_reject";
 
 type OrdinaryCallPlan =
   | {
@@ -4995,6 +4996,13 @@ class Emitter {
                 );
               }
               const awaitedPayload = operandType.value;
+              let expectedInitializerType: TopazType | undefined = undefined;
+              const typeMaybe = s.type;
+              if (typeMaybe !== undefined) {
+                const annotatedInitializerType = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
+                this.assertNotVoid(annotatedInitializerType, { pos: s.pos }, "await initializer binding type");
+                expectedInitializerType = annotatedInitializerType;
+              }
               const tempName = `__topaz_init_await_${steps.length}`;
               let transformedInitializer: Expr = initMaybe;
               let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
@@ -5010,24 +5018,27 @@ class Emitter {
                 if (receiverAwait !== undefined) {
                   transformedInitializer = receiverAwait;
                 } else {
-                  const callAwait = this.tryBuildCallArgAwaitExpression(initMaybe, awaitExpr, tempName, steps.length);
+                  const callAwait = this.tryBuildCallArgAwaitExpression(
+                    initMaybe,
+                    awaitExpr,
+                    tempName,
+                    steps.length,
+                    expectedInitializerType,
+                  );
                   transformedInitializer = callAwait.transformedExpr;
                   preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
                   preAwaitArgTemps = callAwait.preAwaitArgTemps;
                 }
               }
-              let bindingType = this.inferType(transformedInitializer);
-              const typeMaybe = s.type;
-              if (typeMaybe !== undefined) {
-                const annotated = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
-                this.assertNotVoid(annotated, { pos: s.pos }, "await initializer binding type");
-                if (!typeEq(bindingType, annotated) && !this.isAssignableTo(bindingType, annotated)) {
+              let bindingType = this.inferTypeWithOptionalExpected(transformedInitializer, expectedInitializerType);
+              if (expectedInitializerType !== undefined) {
+                if (!typeEq(bindingType, expectedInitializerType) && !this.isAssignableTo(bindingType, expectedInitializerType)) {
                   throw new CodegenError(
                     { pos: s.pos },
-                    `type mismatch: expected ${typeIdent(annotated)}, got ${typeIdent(bindingType)}`,
+                    `type mismatch: expected ${typeIdent(expectedInitializerType)}, got ${typeIdent(bindingType)}`,
                   );
                 }
-                bindingType = annotated;
+                bindingType = expectedInitializerType;
               }
               this.assertNotVoid(
                 bindingType,
@@ -5125,7 +5136,7 @@ class Emitter {
               if (receiverAwait !== undefined) {
                 transformedExpr = receiverAwait;
               } else {
-                const callAwait = this.tryBuildCallArgAwaitExpression(s.expr, awaitExpr, tempName, steps.length);
+                const callAwait = this.tryBuildCallArgAwaitExpression(s.expr, awaitExpr, tempName, steps.length, undefined);
                 transformedExpr = callAwait.transformedExpr;
                 preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
                 preAwaitArgTemps = callAwait.preAwaitArgTemps;
@@ -5186,14 +5197,20 @@ class Emitter {
                 if (receiverAwait !== undefined) {
                   transformedReturnExpr = receiverAwait;
                 } else {
-                  const callAwait = this.tryBuildCallArgAwaitExpression(valueMaybe, awaitExpr, tempName, steps.length);
+                  const callAwait = this.tryBuildCallArgAwaitExpression(
+                    valueMaybe,
+                    awaitExpr,
+                    tempName,
+                    steps.length,
+                    payloadType,
+                  );
                   transformedReturnExpr = callAwait.transformedExpr;
                   preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
                   preAwaitArgTemps = callAwait.preAwaitArgTemps;
                 }
               }
               returnExpr = transformedReturnExpr;
-              returnType = this.inferType(transformedReturnExpr);
+              returnType = this.inferTypeWithOptionalExpected(transformedReturnExpr, payloadType);
             }
             if (!typeEq(returnType, payloadType) && !this.isAssignableTo(returnType, payloadType)) {
               throw new CodegenError(
@@ -5525,7 +5542,7 @@ class Emitter {
       pos: root.pos,
       end: root.end,
     };
-    const plan = this.resolveOrdinaryCallPlan(transformedCall, awaitExpr, false);
+    const plan = this.resolveOrdinaryCallPlan(transformedCall, awaitExpr, false, undefined);
     if (plan === undefined) {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
@@ -5538,6 +5555,7 @@ class Emitter {
     awaitExpr: AwaitExpr,
     awaitedTempName: string,
     stepOrdinal: number,
+    expectedReturnType: TopazType | undefined,
   ): {
     transformedExpr: Expr;
     preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
@@ -5607,7 +5625,7 @@ class Emitter {
       pos: root.pos,
       end: root.end,
     };
-    const plan = this.resolveOrdinaryCallPlan(signatureCall, awaitExpr, false);
+    const plan = this.resolveOrdinaryCallPlan(signatureCall, awaitExpr, false, expectedReturnType);
     if (plan === undefined) {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
@@ -12391,6 +12409,18 @@ class Emitter {
     );
   }
 
+  private inferTypeWithOptionalExpected(expr: Expr, expected: TopazType | undefined): TopazType {
+    if (expected !== undefined) {
+      if (expr.kind === "call_expr") {
+        if (this.isPromiseStaticCall(expr, "reject")) {
+          this.checkPromiseRejectWithExpected(expr, expected);
+          return expected;
+        }
+      }
+    }
+    return this.inferType(expr);
+  }
+
   private emitPromiseResolveCall(expr: CallExpr): string {
     const promiseType = this.inferPromiseResolveCall(expr);
     if (promiseType.kind !== "promise") {
@@ -13098,6 +13128,7 @@ class Emitter {
   private resolveSyntheticCallPlan(
     expr: CallExpr,
     callee: PropAccessExpr,
+    expectedReturnType: TopazType | undefined,
   ): OrdinaryCallPlan | undefined {
     const receiver = callee.receiver;
     if (callee.name === "write" && receiver.kind === "prop_access") {
@@ -13164,6 +13195,18 @@ class Emitter {
             : [this.makeParamInfo("value", returnType.value)],
         returnType,
         label: "Promise.resolve",
+      };
+    }
+    if (receiver.name === "Promise" && callee.name === "reject") {
+      if (expectedReturnType === undefined) return undefined;
+      const errorType = this.checkPromiseRejectWithExpected(expr, expectedReturnType);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "promise_reject",
+        params: [this.makeParamInfo("error", errorType)],
+        returnType: expectedReturnType,
+        label: "Promise.reject",
       };
     }
     return undefined;
@@ -13491,6 +13534,7 @@ class Emitter {
     expr: CallExpr,
     awaitExpr: AwaitExpr | undefined,
     allowComplexFnCallee: boolean,
+    expectedReturnType: TopazType | undefined,
   ): OrdinaryCallPlan | undefined {
     const callee = expr.callee;
 
@@ -13542,7 +13586,7 @@ class Emitter {
       if (awaitExpr !== undefined && this.collectAwaitExprsInExpr(receiver).length > 0) {
         throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
       }
-      const syntheticPlan = this.resolveSyntheticCallPlan(expr, callee);
+      const syntheticPlan = this.resolveSyntheticCallPlan(expr, callee, expectedReturnType);
       if (syntheticPlan !== undefined) return syntheticPlan;
 
       // Promise/process namespaces stay outside this descriptor frontier;
@@ -13769,6 +13813,9 @@ class Emitter {
       if (plan.syntheticKind === "promise_resolve") {
         return this.emitPromiseResolveCall(expr);
       }
+      if (plan.syntheticKind === "promise_reject") {
+        return this.emitPromiseRejectWithExpected(expr, plan.returnType);
+      }
     }
     if (plan.kind === "class_method") {
       const base = this.emitExpression(plan.receiver);
@@ -13959,7 +14006,7 @@ class Emitter {
       }
 
       if (receiver.kind === "ident" && (receiver.name === "console" || receiver.name === "String")) {
-        const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+        const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true, undefined);
         if (ordinaryPlan !== undefined) {
           return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
         }
@@ -13971,7 +14018,7 @@ class Emitter {
           (prop.name === "includes" || prop.name === "slice" || prop.name === "join") ||
           (prop.name === "push" && firstSpread === undefined)
         ) {
-          const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+          const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true, undefined);
           if (ordinaryPlan !== undefined) {
             return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
           }
@@ -14002,7 +14049,7 @@ class Emitter {
       if (baseType.kind === "number") {
         return this.emitNumberMethodCall(expr, prop);
       }
-      const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+      const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true, undefined);
       if (ordinaryPlan !== undefined) {
         return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
       }
@@ -14103,7 +14150,7 @@ class Emitter {
       // Phase 1.5-6 prep #16 / Phase 5.26-5.29: descriptor-backed flat
       // builtins stay call-site-only, but lower through ordinary call
       // descriptors so call-argument await can share the same metadata.
-      const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+      const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true, undefined);
       if (ordinaryPlan !== undefined) {
         return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
       }
@@ -14114,7 +14161,7 @@ class Emitter {
     // `obj.callback()` once class fields can hold fn values, or parenthesized
     // arrow IIFE `((n) => n + 1)(42)`). For 1.5-3.5e we only support the
     // identifier path and parenthesized arrow IIFEs.
-    const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
+    const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true, undefined);
     if (ordinaryPlan !== undefined) {
       return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
     }
@@ -16329,7 +16376,7 @@ class Emitter {
           // synthetic call; the `String` identifier still has no real binding,
           // so short-circuit before `inferType(receiver)`.
           if (receiver.name === "String") {
-            const syntheticPlan = this.resolveSyntheticCallPlan(expr, prop);
+            const syntheticPlan = this.resolveSyntheticCallPlan(expr, prop, undefined);
             if (syntheticPlan !== undefined) return syntheticPlan.returnType;
           }
           if (receiver.name === "Promise") {

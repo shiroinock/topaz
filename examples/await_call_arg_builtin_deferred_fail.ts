@@ -9,7 +9,7 @@ class AsyncErr {
 }
 
 async function bad(): Promise<Promise<void>> {
-  const p: Promise<void> = Promise.reject(await Promise.resolve(new AsyncErr("boom")));
+  const p = Promise.reject(await Promise.resolve(new AsyncErr("boom")));
   return Promise.resolve(p);
 }
 
