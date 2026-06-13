@@ -3002,6 +3002,7 @@ run_case async_await_array_method_call_arg $'declared recv\narrow recv\nmethod r
 run_case async_await_array_push_call_arg $'declared recv\ndeclared awaited\narrow recv\narrow prefix\narrow awaited\nmethod awaited\nexpr recv\nexpr prefix\nexpr awaited\nsync tail\ndeclared after\n1\n1\narrow after\n2\n10\n20\nmethod after\n2\n30\nexpr suffix\nexpr after\n3\n40\n50\n60\ndeclared then\n1\narrow then\n2\nmethod then\n2\nexpr then\n3'
 run_case async_await_promise_resolve_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\nsync tail\ndeclared after\nmethod nested\nmethod after\nexpr after\ndeclared then\narrow then\nmethod then\nexpr then\n11\n22'
 run_case async_await_promise_reject_call_arg $'declared pre\ndeclared await\narrow pre\narrow await\nmethod pre\nmethod await\nexpr pre\nexpr await\nsync tail\ndeclared after\ndeclared error\ndeclared outer then\narrow outer then\nmethod outer then\nexpr outer then\ndeclared recovered\n11\narrow error\narrow rejected\nmethod error\nexpr error\nmethod recovered\nexpr recovered\n44'
+run_case async_await_promise_reject_operand $'binding pre\ndeclared pre\narrow pre\nmethod pre\nsync tail\nbinding error\nbinding caught\ndeclared error\narrow error\nmethod error\ndeclared recovered\n11\narrow recovered\nmethod recovered\n22'
 run_case async_await_assignment_statement $'declared pre\narrow pre\nmethod pre\nexpr pre\narray pre\nsync tail\ndeclared post\narrow post\nmethod post\nexpr post\narray post\ndeclared then\n11\narrow then\n22\nmethod then\n35\nexpr then\n44\narray then\n66'
 run_case async_await_string_index_of_return $'return search\nsync tail\nthen\n1'
 run_case async_await_method_receiver $'return before\nreturn receiver\ndecl receiver\niface receiver\ndiscard receiver\nsync tail\nreturn arg\ndecl arg\ndecl method\ndecl value\n15\niface arg\niface method\ndiscard arg\ndiscard method\ndiscard after\nreturn then\n1\ndecl then\n15\niface then\n23\ndiscard then'
@@ -3035,6 +3036,7 @@ run_fail_case await_call_arg_process_write_deferred_fail examples/await_call_arg
 run_fail_case await_call_arg_method_deferred_fail examples/await_call_arg_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_collection_void_deferred_fail examples/await_call_arg_collection_void_deferred_fail.ts "Map.set returns void in this dialect and cannot be used as a value"
 run_fail_case await_call_arg_array_push_deferred_fail examples/await_call_arg_array_push_deferred_fail.ts "Array.push returns void in this dialect and cannot be used as a value"
+run_fail_case await_promise_reject_no_context_fail examples/await_promise_reject_no_context_fail.ts "Promise.reject requires a contextual Promise<T> target"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_statement_deferred_fail examples/await_expression_statement_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_try_deferred_fail examples/await_try_deferred_fail.ts "await inside try/catch/finally is deferred"

@@ -4944,7 +4944,14 @@ class Emitter {
             if (s.declKind !== "const" && s.declKind !== "let") {
               throw new CodegenError({ pos: s.pos }, "await binding must use `const` or `let`");
             }
-            const operandType = this.inferType(init.operand);
+            const typeMaybe = s.type;
+            let expectedPayload: TopazType | undefined = undefined;
+            if (typeMaybe !== undefined) {
+              const annotated = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
+              this.assertNotVoid(annotated, { pos: s.pos }, "await binding type");
+              expectedPayload = annotated;
+            }
+            const operandType = this.inferAwaitOperandTypeWithExpectedPayload(init.operand, expectedPayload);
             if (operandType.kind !== "promise") {
               throw new CodegenError(
                 { pos: init.operand.pos },
@@ -4952,17 +4959,14 @@ class Emitter {
               );
             }
             let bindingType = operandType.value;
-            const typeMaybe = s.type;
-            if (typeMaybe !== undefined) {
-              const annotated = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
-              this.assertNotVoid(annotated, { pos: s.pos }, "await binding type");
-              if (!typeEq(bindingType, annotated) && !this.isAssignableTo(bindingType, annotated)) {
+            if (expectedPayload !== undefined) {
+              if (!typeEq(bindingType, expectedPayload) && !this.isAssignableTo(bindingType, expectedPayload)) {
                 throw new CodegenError(
                   { pos: s.pos },
-                  `type mismatch: expected ${typeIdent(annotated)}, got ${typeIdent(bindingType)}`,
+                  `type mismatch: expected ${typeIdent(expectedPayload)}, got ${typeIdent(bindingType)}`,
                 );
               }
-              bindingType = annotated;
+              bindingType = expectedPayload;
             }
             steps.push({
               kind: "binding",
@@ -5172,7 +5176,9 @@ class Emitter {
               );
             }
             const awaitExpr = returnAwaits[0];
-            const operandType = this.inferType(awaitExpr.operand);
+            const isDirectReturnAwait = value.kind === "await_expr";
+            const expectedAwaitPayload = isDirectReturnAwait ? payloadType : undefined;
+            const operandType = this.inferAwaitOperandTypeWithExpectedPayload(awaitExpr.operand, expectedAwaitPayload);
             if (operandType.kind !== "promise") {
               throw new CodegenError(
                 { pos: awaitExpr.operand.pos },
@@ -5180,7 +5186,6 @@ class Emitter {
               );
             }
             const awaitedPayload = operandType.value;
-            const isDirectReturnAwait = value.kind === "await_expr";
             let returnExpr: Expr | undefined = undefined;
             let returnType = awaitedPayload;
             let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
@@ -12419,6 +12424,27 @@ class Emitter {
       }
     }
     return this.inferType(expr);
+  }
+
+  private inferAwaitOperandTypeWithExpectedPayload(
+    operand: Expr,
+    expectedPayload: TopazType | undefined,
+  ): TopazType {
+    if (expectedPayload !== undefined) {
+      const directOperand = this.unwrapParenExpr(operand);
+      if (directOperand.kind === "call_expr" && this.isPromiseStaticCall(directOperand, "reject")) {
+        const expectedPromise = promiseOf(expectedPayload);
+        if (expectedPromise === undefined) {
+          throw new CodegenError(
+            { pos: operand.pos },
+            `Promise.reject await payload type ${typeIdent(expectedPayload)} is unsupported (must be value-representable or void)`,
+          );
+        }
+        this.checkPromiseRejectWithExpected(directOperand, expectedPromise);
+        return expectedPromise;
+      }
+    }
+    return this.inferType(operand);
   }
 
   private emitPromiseResolveCall(expr: CallExpr): string {
