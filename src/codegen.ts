@@ -198,7 +198,9 @@ type SyntheticCallKind =
   | "console_log"
   | "console_error"
   | "console_warn"
-  | "string_from_char_code";
+  | "string_from_char_code"
+  | "parse_int"
+  | "parse_float";
 
 type OrdinaryCallPlan =
   | {
@@ -227,7 +229,7 @@ type OrdinaryCallPlan =
     }
   | {
       kind: "synthetic_call";
-      callee: PropAccessExpr;
+      callee: IdentExpr | PropAccessExpr;
       syntheticKind: SyntheticCallKind;
       params: Array<ParamInfo>;
       returnType: TopazType;
@@ -11636,6 +11638,35 @@ class Emitter {
     return undefined;
   }
 
+  private resolveFlatBuiltinCallPlan(
+    expr: CallExpr,
+    callee: IdentExpr,
+  ): OrdinaryCallPlan | undefined {
+    if (callee.name === "parseInt") {
+      this.checkParseIntArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "parse_int",
+        params: [this.makeParamInfo("s", T_STRING), this.makeParamInfo("radix", T_NUMBER)],
+        returnType: T_NUMBER,
+        label: "parseInt",
+      };
+    }
+    if (callee.name === "parseFloat") {
+      this.checkParseFloatArgs(expr);
+      return {
+        kind: "synthetic_call",
+        callee,
+        syntheticKind: "parse_float",
+        params: [this.makeParamInfo("s", T_STRING)],
+        returnType: T_NUMBER,
+        label: "parseFloat",
+      };
+    }
+    return undefined;
+  }
+
   private resolveStringMethodCallPlan(
     expr: CallExpr,
     callee: PropAccessExpr,
@@ -11757,6 +11788,9 @@ class Emitter {
     const callee = expr.callee;
 
     if (callee.kind === "ident") {
+      const flatBuiltinPlan = this.resolveFlatBuiltinCallPlan(expr, callee);
+      if (flatBuiltinPlan !== undefined) return flatBuiltinPlan;
+
       if (this.genericFunctions.has(callee.name)) {
         const resolved = this.resolveGenericCall(callee, expr)!;
         return {
@@ -11941,10 +11975,24 @@ class Emitter {
         plan.syntheticKind === "console_error" ||
         plan.syntheticKind === "console_warn"
       ) {
-        return this.emitConsoleCall(expr, plan.callee.name);
+        const syntheticCallee = plan.callee;
+        if (syntheticCallee.kind === "prop_access") {
+          return this.emitConsoleCall(expr, syntheticCallee.name);
+        }
+        throwInternalCodegenError("emitOrdinaryCallPlan: console synthetic callee is not property access");
       }
       if (plan.syntheticKind === "string_from_char_code") {
-        return this.emitStringStaticCall(expr, plan.callee);
+        const syntheticCallee = plan.callee;
+        if (syntheticCallee.kind === "prop_access") {
+          return this.emitStringStaticCall(expr, syntheticCallee);
+        }
+        throwInternalCodegenError("emitOrdinaryCallPlan: String synthetic callee is not property access");
+      }
+      if (plan.syntheticKind === "parse_int") {
+        return this.emitParseInt(expr);
+      }
+      if (plan.syntheticKind === "parse_float") {
+        return this.emitParseFloat(expr);
       }
     }
     if (plan.kind === "class_method") {
@@ -12279,15 +12327,9 @@ class Emitter {
       if (callee.name === "writeError") {
         return this.emitStdProcessWriteError(expr);
       }
-      // Phase 1.5-6 prep #16: global parseInt(s, radix) / parseFloat(s). Like
-      // String.fromCharCode / readFileSync these are recognized only at the
-      // call site — `let f = parseInt;` still falls to "unknown identifier".
-      if (callee.name === "parseInt") {
-        return this.emitParseInt(expr);
-      }
-      if (callee.name === "parseFloat") {
-        return this.emitParseFloat(expr);
-      }
+      // Phase 1.5-6 prep #16 / Phase 5.26: global parseInt(s, radix) /
+      // parseFloat(s) stay call-site-only, but lower through ordinary call
+      // descriptors so call-argument await can share the same metadata.
       const ordinaryPlan = this.resolveOrdinaryCallPlan(expr, undefined, true);
       if (ordinaryPlan !== undefined) {
         return this.emitOrdinaryCallPlan(expr, ordinaryPlan);
@@ -14835,15 +14877,10 @@ class Emitter {
             "console.error returns void and cannot be used as a value",
           );
         }
-        // Phase 1.5-6 prep #16: parseInt / parseFloat both type as number.
-        if (callee.name === "parseInt") {
-          this.checkParseIntArgs(expr);
-          return T_NUMBER;
-        }
-        if (callee.name === "parseFloat") {
-          this.checkParseFloatArgs(expr);
-          return T_NUMBER;
-        }
+        // Phase 1.5-6 prep #16 / Phase 5.26: parseInt / parseFloat both type
+        // as number through their call-site-only flat builtin descriptors.
+        const flatBuiltinPlan = this.resolveFlatBuiltinCallPlan(expr, callee);
+        if (flatBuiltinPlan !== undefined) return flatBuiltinPlan.returnType;
         if (this.genericFunctions.has(callee.name)) {
           const resolved = this.resolveGenericCall(callee, expr)!;
           return resolved.sig.returnType;

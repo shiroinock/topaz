@@ -2955,6 +2955,7 @@ run_case async_await_string_call_arg $'declared char recv\narrow slice recv\nmet
 run_case async_await_expression_statement $'declared pre\narrow pre\nmethod pre\nexpr pre\nsync tail\ndeclared middle\narrow post\nmethod post\nexpr post\ndeclared post\narrow then\n22\nmethod then\n8\nexpr then\n8\ndeclared then\n11'
 run_case async_await_call_statement $'declared pre\narrow pre\nmethod recv\nmethod pre\nexpr recv\nmap key recv\nmap value recv\nmap value pre\nset recv\nstring recv\nstring pre\nsync tail\ndeclared post\ndeclared call\n123\narrow call\n45\nmethod post\nmethod call\n789\nexpr call\n6\nmap key post\ndeclared then\narrow then\nmethod then\nexpr then\nmap key then\n20\nmap value then\n30\nset then\ntrue\nstring then'
 run_case async_await_synthetic_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\ninitializer pre\ndiscard pre\nsync tail\ndeclared log\ndeclared after\narrow after\nmethod after\ninitializer char\nB\ndiscard after\ndeclared then\narrow then\nmethod then\nexpr then\nA\ninitializer then\nB\ndiscard then'
+run_case async_await_flat_builtin_call_arg $'declared pre\narrow pre\nmethod pre\nexpr pre\ndiscard pre\nsync tail\ndeclared parsed\n123\narrow parsed\n255\nmethod parsed\n2.5\ndiscard after\ndeclared then\n123\narrow then\n255\nmethod then\n2.5\nexpr then\n6.25\ndiscard then'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
@@ -2963,6 +2964,7 @@ run_fail_case await_initializer_multiple_deferred_fail examples/await_initialize
 run_fail_case await_call_arg_multiple_deferred_fail examples/await_call_arg_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_builtin_deferred_fail examples/await_call_arg_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_string_static_deferred_fail examples/await_call_arg_string_static_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_call_arg_nested_flat_builtin_deferred_fail examples/await_call_arg_nested_flat_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_method_deferred_fail examples/await_call_arg_method_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_collection_void_deferred_fail examples/await_call_arg_collection_void_deferred_fail.ts "Map.set returns void in this dialect and cannot be used as a value"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"

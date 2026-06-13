@@ -407,6 +407,8 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 
 - [x] **5.25 synthetic call descriptor await** — 5.20-5.24 の call descriptor frontier を synthetic namespace call の最初の subset へ広げ、`console.log` / `console.error` / `console.warn` と `String.fromCharCode` を descriptor-backed plan に移した。block-bodied async declaration / arrow / method / anonymous function expression で、console call statement の直接引数 `await` と `String.fromCharCode(await p)` の declaration initializer / terminal return / expression statement discard を受理する。Promise/process/Node flat builtin descriptors、nested synthetic arguments、assignment await、general expression decomposition、scheduler work は引き続き deferred。決定ログは `docs/adr/0492-synthetic-call-descriptor-await.md`。
 
+- [x] **5.26 flat builtin call descriptor await** — 5.25 の synthetic call descriptor frontier を pure global parser builtin の `parseInt` / `parseFloat` へ広げ、既存の arity / type diagnostic と call-site-only value surface を保ったまま descriptor-backed plan から lowering するようにした。block-bodied async declaration / arrow / method / anonymous function expression で、`parseInt(await p, radix)` / `parseInt(text, await p)` / `parseFloat(await p)` の declaration initializer / terminal return / expression statement discard を受理する。Promise/process/Node flat builtin descriptors、nested flat builtin arguments、assignment await、general expression decomposition、scheduler work は引き続き deferred。決定ログは `docs/adr/0493-flat-builtin-call-descriptor-await.md`。
+
 Release/version allocation:
 
 - `v0.1.0` — single-binary MVP。Topaz-subset TS source graph を single native binary にし、native compiler artifact / README / MVP doc / GitHub Actions draft Release 導線を持つ。
