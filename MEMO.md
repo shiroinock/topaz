@@ -394,6 +394,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **5.13 async function expression await-frame lowering** — block-bodied anonymous `async function (...) { ... }` expression 内の top-level `const` / `let` await binding を既存 async arrow await-frame machinery に接続し、params / output Promise / capture env pointer を同じ fn fat pointer + closure env ABI のまま frame に保持して再開する。named function expression、function-expression `this`、return await / arbitrary await、try/catch/finally 内 await、await 間をまたぐ通常 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0480-async-function-expression-await-frame-lowering.md`。
 - [x] **5.14 terminal return-await lowering** — block-bodied async function / async arrow / async method / anonymous async function expression の共有 async frame に final top-level `return await Promise<T>;` terminal step を追加し、await binding 後の payload local を使う terminal operand も同じ frame で再開できるようにした。non-final / nested / arbitrary await、try/catch/finally 内 await、await 間をまたぐ通常 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0481-terminal-return-await-lowering.md`。
 - [x] **5.15 terminal return expression await lowering** — block-bodied async function / async arrow / async method / anonymous async function expression の共有 async frame を ordered suspension steps に寄せ、final top-level `return` expression 内の単発 `await` を frame-owned output Promise へ lowering できるようにした。top-level await binding と terminal `return await` は維持しつつ、複数 await in expression、call arg / non-terminal / nested-control-flow / try-catch-finally 内 await、await 間をまたぐ通常 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0482-terminal-return-expression-await-lowering.md`。
+- [x] **5.16 initializer expression await lowering** — block-bodied async function / async arrow / async method / anonymous async function expression の共有 async frame で、top-level `const` / `let` initializer の単発 simple-expression `await` を ordered suspension step として扱い、再開後に frame-backed declared binding へ格納して後続 statement / await step から読めるようにした。複数 await in initializer、call arg / object-array / conditional / logical / assignment / property-index expression await、non-declaration expression await、nested-control-flow / try-catch-finally 内 await、一般 local capture、PromiseLike / thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0483-initializer-expression-await-lowering.md`。
 
 Release/version allocation:
 
@@ -421,7 +422,8 @@ Post-MVP ecosystem items:
   no-await async method lowering, async method frame lowering, anonymous
   synchronous function expression lowering, no-await async function expression
   lowering, async function expression await frames, terminal return-await
-  lowering, and terminal return expression await lowering are complete; next stages are arbitrary await, rejection handler
+  lowering, terminal return expression await lowering, and initializer
+  expression await lowering are complete; next stages are arbitrary await, rejection handler
   Promise method surface, explicit `PromiseLike` bridge, controlled static thenable
   assimilation, Node-compatible scheduler mode, and future Topaz-owned parallel
   scheduler mode

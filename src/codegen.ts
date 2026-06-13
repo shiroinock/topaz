@@ -143,7 +143,21 @@ type AwaitReturnInfo = {
   tempName: string;
 };
 
-type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo;
+type AwaitInitializerInfo = {
+  kind: "initializer";
+  stmt: VarDeclStmt;
+  awaitExpr: AwaitExpr;
+  initializer: Expr;
+  transformedInitializer: Expr;
+  index: number;
+  pc: number;
+  operandType: TopazType;
+  awaitedType: TopazType;
+  bindingType: TopazType;
+  tempName: string;
+};
+
+type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo | AwaitInitializerInfo;
 
 type AsyncAwaitFrameInfo = {
   steps: Array<AsyncSuspensionStep>;
@@ -4463,6 +4477,73 @@ class Emitter {
             });
             supportedAwaitExprs.add(init);
             this.scope.declareBinding(s.name, bindingType, s.declKind === "const", { pos: s.pos });
+          } else {
+            const initializerAwaits = this.collectAwaitExprsInExpr(initMaybe);
+            if (initializerAwaits.length > 0) {
+              if (s.declKind !== "const" && s.declKind !== "let") {
+                throw new CodegenError({ pos: s.pos }, "await binding must use `const` or `let`");
+              }
+              if (initializerAwaits.length > 1) {
+                throw new CodegenError(
+                  { pos: initializerAwaits[1].pos },
+                  this.unsupportedAwaitLoweringMessage(),
+                );
+              }
+              const awaitExpr = initializerAwaits[0];
+              if (!this.simpleAwaitReplacementSupported(initMaybe, awaitExpr)) {
+                throw new CodegenError(
+                  { pos: awaitExpr.pos },
+                  this.unsupportedAwaitLoweringMessage(),
+                );
+              }
+              const operandType = this.inferType(awaitExpr.operand);
+              if (operandType.kind !== "promise") {
+                throw new CodegenError(
+                  { pos: awaitExpr.operand.pos },
+                  `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+                );
+              }
+              const awaitedPayload = operandType.value;
+              const tempName = `__topaz_init_await_${steps.length}`;
+              if (awaitedPayload.kind !== "void") {
+                this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
+              }
+              const tempExpr: IdentExpr = { kind: "ident", name: tempName, pos: awaitExpr.pos, end: awaitExpr.end };
+              const transformedInitializer = this.replaceAwaitExprInExpr(initMaybe, awaitExpr, tempExpr);
+              let bindingType = this.inferType(transformedInitializer);
+              const typeMaybe = s.type;
+              if (typeMaybe !== undefined) {
+                const annotated = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
+                this.assertNotVoid(annotated, { pos: s.pos }, "await initializer binding type");
+                if (!typeEq(bindingType, annotated) && !this.isAssignableTo(bindingType, annotated)) {
+                  throw new CodegenError(
+                    { pos: s.pos },
+                    `type mismatch: expected ${typeIdent(annotated)}, got ${typeIdent(bindingType)}`,
+                  );
+                }
+                bindingType = annotated;
+              }
+              this.assertNotVoid(
+                bindingType,
+                { pos: s.pos },
+                "await initializer binding type",
+              );
+              steps.push({
+                kind: "initializer",
+                stmt: s,
+                awaitExpr,
+                initializer: initMaybe,
+                transformedInitializer,
+                index: i,
+                pc: steps.length,
+                operandType,
+                awaitedType: awaitedPayload,
+                bindingType,
+                tempName,
+              });
+              supportedAwaitExprs.add(awaitExpr);
+              this.scope.declareBinding(s.name, bindingType, s.declKind === "const", { pos: s.pos });
+            }
           }
         }
       } else if (s.kind === "return_stmt" && i === block.stmts.length - 1) {
@@ -4478,7 +4559,7 @@ class Emitter {
               );
             }
             const awaitExpr = returnAwaits[0];
-            if (!this.terminalReturnAwaitPlacementSupported(valueMaybe, awaitExpr)) {
+            if (!this.simpleAwaitReplacementSupported(valueMaybe, awaitExpr)) {
               throw new CodegenError(
                 { pos: awaitExpr.pos },
                 this.unsupportedAwaitLoweringMessage(),
@@ -4545,6 +4626,8 @@ class Emitter {
     }
     const firstAwaitIndex = steps[0].index;
     const lastAwaitIndex = steps[steps.length - 1].index;
+    const stepStatementIndices = new Set<number>();
+    for (const step of steps) stepStatementIndices.add(step.index);
     for (let i = 0; i < firstAwaitIndex; i++) {
       const s = block.stmts[i];
       if (s.kind === "var_decl" || s.kind === "var_destr_decl") {
@@ -4557,9 +4640,7 @@ class Emitter {
     for (let i = firstAwaitIndex + 1; i < lastAwaitIndex; i++) {
       const s = block.stmts[i];
       if (s.kind === "var_decl") {
-        const initMaybe = s.init;
-        const init = initMaybe === undefined ? undefined : this.unwrapParenExpr(initMaybe);
-        if (init === undefined || init.kind !== "await_expr") {
+        if (!stepStatementIndices.has(i)) {
           throw new CodegenError(
             { pos: s.pos },
             "local declarations across a later await require async frame local capture, which is deferred",
@@ -4586,24 +4667,24 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, initializer expression await, and one terminal return expression await are supported";
   }
 
-  private terminalReturnAwaitPlacementSupported(expr: Expr, target: AwaitExpr): boolean {
+  private simpleAwaitReplacementSupported(expr: Expr, target: AwaitExpr): boolean {
     if (expr.kind === "await_expr") return expr.pos === target.pos && expr.end === target.end;
     switch (expr.kind) {
       case "paren_expr":
-        return this.terminalReturnAwaitPlacementSupported(expr.inner, target);
+        return this.simpleAwaitReplacementSupported(expr.inner, target);
       case "non_null":
-        return this.terminalReturnAwaitPlacementSupported(expr.operand, target);
+        return this.simpleAwaitReplacementSupported(expr.operand, target);
       case "prefix_op":
-        return this.terminalReturnAwaitPlacementSupported(expr.operand, target);
+        return this.simpleAwaitReplacementSupported(expr.operand, target);
       case "typeof_expr":
-        return this.terminalReturnAwaitPlacementSupported(expr.operand, target);
+        return this.simpleAwaitReplacementSupported(expr.operand, target);
       case "bin_op":
         return (
-          this.terminalReturnAwaitPlacementSupported(expr.lhs, target) ||
-          this.terminalReturnAwaitPlacementSupported(expr.rhs, target)
+          this.simpleAwaitReplacementSupported(expr.lhs, target) ||
+          this.simpleAwaitReplacementSupported(expr.rhs, target)
         );
       default:
         return false;
@@ -4708,12 +4789,9 @@ class Emitter {
     runnerCaptureContext?: CaptureContext,
     runnerThisContext?: AsyncFrameThisContext,
   ): void {
-    const bindingSteps: Array<AwaitBindingInfo> = [];
     let returnStep: AwaitReturnInfo | undefined = undefined;
     for (const step of frame.steps) {
-      if (step.kind === "binding") {
-        bindingSteps.push(step);
-      } else {
+      if (step.kind === "return") {
         returnStep = step;
       }
     }
@@ -4727,8 +4805,15 @@ class Emitter {
       fields.push("  void *__topaz_env;");
     }
     for (const p of params) fields.push(`  ${cTypeName(p.type)} ${p.name};`);
-    for (const binding of bindingSteps) {
-      if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+    for (const binding of frame.steps) {
+      if (binding.kind === "binding") {
+        if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+      } else if (binding.kind === "initializer") {
+        if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+        if (binding.awaitedType.kind !== "void") {
+          fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
+        }
+      }
     }
     if (returnStep !== undefined && returnStep.awaitedType.kind !== "void") {
       fields.push(`  ${cTypeName(returnStep.awaitedType)} ${returnStep.tempName};`);
@@ -4768,13 +4853,22 @@ class Emitter {
           const awaitC = cTypeName(step.bindingType);
           lines.push(`      ctx->${step.stmt.name} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
         }
-      } else {
+      } else if (step.kind === "initializer") {
         if (step.awaitedType.kind === "void") {
           lines.push("      (void)source;");
         } else {
           const awaitC = cTypeName(step.awaitedType);
           lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
         }
+      } else if (step.kind === "return") {
+        if (step.awaitedType.kind === "void") {
+          lines.push("      (void)source;");
+        } else {
+          const awaitC = cTypeName(step.awaitedType);
+          lines.push(`      ctx->${step.tempName} = *(const ${awaitC} *)topaz_promise_fulfilled_payload(source);`);
+        }
+      } else {
+        throwInternalCodegenError("unknown async suspension step");
       }
       lines.push("      break;");
       lines.push("    }");
@@ -4804,17 +4898,30 @@ class Emitter {
         lines.push(`        ${cTypeName(p.type)} ${p.name} = ctx->${p.name};`);
         lines.push(`        (void)${p.name};`);
       }
-      for (const prior of bindingSteps) {
-        if (prior.pc > current.pc) continue;
-        this.scope.declareBinding(
-          prior.stmt.name,
-          prior.bindingType,
-          prior.stmt.declKind === "const",
-          { pos: prior.stmt.pos },
-        );
-        if (prior.bindingType.kind !== "void") {
-          lines.push(`        ${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${prior.stmt.name};`);
-          lines.push(`        (void)${prior.stmt.name};`);
+      for (const prior of frame.steps) {
+        if (prior.pc >= current.pc) continue;
+        if (prior.kind === "binding") {
+          this.scope.declareBinding(
+            prior.stmt.name,
+            prior.bindingType,
+            prior.stmt.declKind === "const",
+            { pos: prior.stmt.pos },
+          );
+          if (prior.bindingType.kind !== "void") {
+            lines.push(`        ${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${prior.stmt.name};`);
+            lines.push(`        (void)${prior.stmt.name};`);
+          }
+        } else if (prior.kind === "initializer") {
+          this.scope.declareBinding(
+            prior.stmt.name,
+            prior.bindingType,
+            prior.stmt.declKind === "const",
+            { pos: prior.stmt.pos },
+          );
+          if (prior.bindingType.kind !== "void") {
+            lines.push(`        ${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${prior.stmt.name};`);
+            lines.push(`        (void)${prior.stmt.name};`);
+          }
         }
       }
       if (current.kind === "return") {
@@ -4856,6 +4963,36 @@ class Emitter {
           lines.push("        return;");
         }
       } else {
+        if (current.kind === "binding") {
+          this.scope.declareBinding(
+            current.stmt.name,
+            current.bindingType,
+            current.stmt.declKind === "const",
+            { pos: current.stmt.pos },
+          );
+          if (current.bindingType.kind !== "void") {
+            lines.push(`        ${cTypeName(current.bindingType)} ${current.stmt.name} = ctx->${current.stmt.name};`);
+            lines.push(`        (void)${current.stmt.name};`);
+          }
+        } else if (current.kind === "initializer") {
+          if (current.awaitedType.kind !== "void") {
+            this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
+            lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
+            lines.push(`        (void)${current.tempName};`);
+          }
+          const initExpr = this.emitWithExpected(current.transformedInitializer, current.bindingType);
+          lines.push(`        ${cTypeName(current.bindingType)} ${current.stmt.name} = ${initExpr};`);
+          this.scope.declareBinding(
+            current.stmt.name,
+            current.bindingType,
+            current.stmt.declKind === "const",
+            { pos: current.stmt.pos },
+          );
+          lines.push(`        ctx->${current.stmt.name} = ${current.stmt.name};`);
+          lines.push(`        (void)${current.stmt.name};`);
+        } else {
+          throwInternalCodegenError("unknown non-return async suspension step");
+        }
         for (const s of stmts.slice(segmentStart, segmentEnd)) {
           lines.push(this.emitStatement(s, 4));
           this.applyCarryNarrowing(s);
@@ -5132,7 +5269,7 @@ class Emitter {
     }
     return new CodegenError(
       { pos: expr.pos },
-      "await expression lowering is deferred; only a top-level variable declaration `const x = await promise` is supported",
+      this.unsupportedAwaitLoweringMessage(),
     );
   }
 
