@@ -4978,7 +4978,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier or class field compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, or interface field compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -5002,7 +5002,7 @@ class Emitter {
       if (target.kind === "ident") {
         // Identifier compound assignment does not need a target-reference temp.
       } else if (target.kind === "prop_access") {
-        const receiverTemp = this.tryBuildClassFieldCompoundAssignmentReceiverTemp(target, stepOrdinal);
+        const receiverTemp = this.tryBuildFieldCompoundAssignmentReceiverTemp(target, stepOrdinal);
         if (receiverTemp === undefined) return undefined;
         preAwaitReceiverTemps = [receiverTemp];
         const receiverTempExpr: IdentExpr = {
@@ -5047,17 +5047,25 @@ class Emitter {
     return { transformedExpr, preAwaitReceiverTemps };
   }
 
-  private tryBuildClassFieldCompoundAssignmentReceiverTemp(
+  private tryBuildFieldCompoundAssignmentReceiverTemp(
     target: PropAccessExpr,
     stepOrdinal: number,
   ): AwaitCallReceiverTemp | undefined {
     this.checkAssignTarget(target, { pos: target.pos });
     const receiverType = this.inferType(target.receiver);
-    if (!isClassType(receiverType)) return undefined;
-    const className = classNameOf(receiverType);
-    if (className === undefined) return undefined;
-    const cls = this.classes.get(className);
-    if (cls === undefined || !cls.fields.has(target.name)) return undefined;
+    let hasField = false;
+    if (isClassType(receiverType)) {
+      const className = classNameOf(receiverType);
+      if (className === undefined) return undefined;
+      const cls = this.classes.get(className);
+      hasField = cls !== undefined && cls.fields.has(target.name);
+    } else if (isInterfaceType(receiverType)) {
+      const interfaceName = interfaceNameOf(receiverType);
+      if (interfaceName === undefined) return undefined;
+      const iface = this.interfaces.get(interfaceName);
+      hasField = iface !== undefined && iface.fields.has(target.name);
+    }
+    if (!hasField) return undefined;
     const tempName = `__topaz_assign_recv_${stepOrdinal}`;
     this.scope.declareBinding(tempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
     return {
@@ -10510,6 +10518,38 @@ class Emitter {
     return top;
   }
 
+  private emitInterfaceFieldCompoundAssignment(
+    target: PropAccessExpr,
+    op: string,
+    value: Expr,
+    baseType: TopazType,
+    fieldType: TopazType,
+    anchor: { pos: number },
+  ): string {
+    if (!this.isAwaitLowerableCompoundAssignmentOp(op)) {
+      throw new CodegenError(anchor, `unsupported assignment operator '${op}'`);
+    }
+    const id = this.tmpCounter++;
+    const baseTmp = `__topaz_ib_${id}`;
+    const oldTmp = `__topaz_if_old_${id}`;
+    const nextTmp = `__topaz_if_next_${id}`;
+    const baseStr = this.emitExpression(target.receiver);
+    const rhsStr = this.emitWithExpected(value, fieldType);
+    const fieldC = cTypeName(fieldType);
+    const getter = `${baseTmp}.vt->get_${target.name}(${baseTmp}.data)`;
+    if (op === "+=" && fieldType.kind === "string") {
+      const nextExpr = this.emitRuntimePreludeStringConcat(oldTmp, rhsStr, anchor);
+      return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
+    }
+    if (op === "%=") {
+      const nextExpr = `topaz_fmod(${oldTmp}, ${rhsStr})`;
+      return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
+    }
+    const binOp = op.slice(0, -1);
+    const nextExpr = `${oldTmp} ${binOp} ${rhsStr}`;
+    return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
+  }
+
   private emitExpression(expr: Expr): string {
     if (expr.kind === "num_lit") {
       return emitNumberLiteralText(expr.text, expr.value);
@@ -10821,18 +10861,12 @@ class Emitter {
         return `topaz_array_${name}_set(${base}, ${idx}, ${val})`;
       }
       // Interface property assignment goes through the vtable's setter; no
-      // C lvalue exists for the underlying field. Compound forms would need
-      // to evaluate the base twice, so reject them.
+      // C lvalue exists for the underlying field. Compound forms snapshot the
+      // fat pointer once, read through the getter, and write through the setter.
       if (assignTarget.kind === "prop_access") {
         const target = assignTarget;
         const baseT = this.inferType(target.receiver);
         if (isInterfaceType(baseT)) {
-          if (op !== "=") {
-            throw new CodegenError(
-              assignAnchor,
-              "compound assignment on interface field is unsupported; use iface.field = ...",
-            );
-          }
           const iname = interfaceNameOf(baseT);
           if (iname === undefined) {
             throw new CodegenError(assignAnchor, "internal error: validated interface assignment target missing interface name");
@@ -10845,6 +10879,9 @@ class Emitter {
           const ftype = iface.fields.get(fname);
           if (ftype === undefined) {
             throw new CodegenError(assignAnchor, `internal error: validated interface assignment target missing field '${fname}'`);
+          }
+          if (op !== "=") {
+            return this.emitInterfaceFieldCompoundAssignment(target, op, expr.value, baseT, ftype, assignAnchor);
           }
           const id = this.tmpCounter++;
           const tmp = `__topaz_ib_${id}`;
