@@ -1,14 +1,13 @@
 /// <reference lib="es2015.promise" />
 
 class Box {
-  plus(n: number): number {
-    return n + 1;
-  }
+  values: Array<number> = [1, 2, 3];
 }
 
 async function answer(): Promise<number> {
-  const n = new Box().plus(await Promise.resolve(1));
-  return n;
+  const yes = new Box().values.includes(await Promise.resolve(1));
+  if (yes) return 1;
+  return 0;
 }
 
 answer();

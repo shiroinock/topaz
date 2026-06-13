@@ -149,12 +149,19 @@ type AwaitCallArgTemp = {
   argType: TopazType;
 };
 
+type AwaitCallReceiverTemp = {
+  tempName: string;
+  receiver: Expr;
+  receiverType: TopazType;
+};
+
 type AwaitInitializerInfo = {
   kind: "initializer";
   stmt: VarDeclStmt;
   awaitExpr: AwaitExpr;
   initializer: Expr;
   transformedInitializer: Expr;
+  preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   index: number;
   pc: number;
@@ -4507,6 +4514,7 @@ class Emitter {
               const awaitedPayload = operandType.value;
               const tempName = `__topaz_init_await_${steps.length}`;
               let transformedInitializer: Expr = initMaybe;
+              let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
               let preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
               if (awaitedPayload.kind !== "void") {
                 this.scope.declareBinding(tempName, awaitedPayload, /* isConst */ true, { pos: awaitExpr.pos });
@@ -4517,6 +4525,7 @@ class Emitter {
               } else {
                 const callAwait = this.tryBuildCallArgAwaitInitializer(initMaybe, awaitExpr, tempName, steps.length);
                 transformedInitializer = callAwait.transformedInitializer;
+                preAwaitReceiverTemps = callAwait.preAwaitReceiverTemps;
                 preAwaitArgTemps = callAwait.preAwaitArgTemps;
               }
               let bindingType = this.inferType(transformedInitializer);
@@ -4543,6 +4552,7 @@ class Emitter {
                 awaitExpr,
                 initializer: initMaybe,
                 transformedInitializer,
+                preAwaitReceiverTemps,
                 preAwaitArgTemps,
                 index: i,
                 pc: steps.length,
@@ -4685,7 +4695,11 @@ class Emitter {
     awaitExpr: AwaitExpr,
     awaitedTempName: string,
     stepOrdinal: number,
-  ): { transformedInitializer: Expr; preAwaitArgTemps: Array<AwaitCallArgTemp> } {
+  ): {
+    transformedInitializer: Expr;
+    preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+    preAwaitArgTemps: Array<AwaitCallArgTemp>;
+  } {
     const rootMaybe = this.unwrapParenExpr(initializer);
     if (rootMaybe.kind !== "call_expr") {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
@@ -4695,9 +4709,6 @@ class Emitter {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
     const calleeMaybe = root.callee;
-    if (calleeMaybe.kind !== "ident") {
-      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
-    }
     if (this.firstSpreadArg(root.args) !== undefined) {
       throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
     }
@@ -4738,7 +4749,57 @@ class Emitter {
       pos: root.pos,
       end: root.end,
     };
-    const params = this.resolveAwaitCallArgBareParams(signatureCall, awaitExpr);
+    const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+    let transformedCallee: Expr = root.callee;
+    let params: Array<ParamInfo> = [];
+    if (calleeMaybe.kind === "ident") {
+      params = this.resolveAwaitCallArgBareParams(signatureCall, awaitExpr);
+    } else if (calleeMaybe.kind === "prop_access") {
+      if (calleeMaybe.optional) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      if (this.collectAwaitExprsInExpr(calleeMaybe.receiver).length > 0) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      const receiverType = this.inferType(calleeMaybe.receiver);
+      if (!isClassType(receiverType) && !isInterfaceType(receiverType)) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      const receiverTempName = `__topaz_call_recv_${stepOrdinal}`;
+      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: calleeMaybe.receiver.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: calleeMaybe.receiver,
+        receiverType,
+      });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: calleeMaybe.receiver.pos,
+        end: calleeMaybe.receiver.end,
+      };
+      const signatureCallee: PropAccessExpr = {
+        kind: "prop_access",
+        receiver: receiverTempExpr,
+        name: calleeMaybe.name,
+        optional: calleeMaybe.optional,
+        pos: calleeMaybe.pos,
+        end: calleeMaybe.end,
+      };
+      const methodSignatureCall: CallExpr = {
+        kind: "call_expr",
+        callee: signatureCallee,
+        typeArgs: root.typeArgs,
+        args: signatureArgs,
+        optional: root.optional,
+        pos: root.pos,
+        end: root.end,
+      };
+      params = this.resolveAwaitCallArgMethodParams(methodSignatureCall, signatureCallee, receiverType, awaitExpr);
+      transformedCallee = signatureCallee;
+    } else {
+      throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+    }
 
     const preAwaitArgTemps: Array<AwaitCallArgTemp> = [];
     const transformedArgs: Array<Expr> = [];
@@ -4762,13 +4823,14 @@ class Emitter {
     return {
       transformedInitializer: {
         kind: "call_expr",
-        callee: root.callee,
+        callee: transformedCallee,
         typeArgs: root.typeArgs,
         args: transformedArgs,
         optional: root.optional,
         pos: root.pos,
         end: root.end,
       },
+      preAwaitReceiverTemps,
       preAwaitArgTemps,
     };
   }
@@ -4797,6 +4859,34 @@ class Emitter {
         this.checkCallArgCount(expr.args.length, bindingType.params, "fn value", callAnchor);
         return bindingType.params;
       }
+    }
+    throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+  }
+
+  private resolveAwaitCallArgMethodParams(
+    expr: CallExpr,
+    callee: PropAccessExpr,
+    baseType: TopazType,
+    awaitExpr: AwaitExpr,
+  ): Array<ParamInfo> {
+    const callAnchor: { pos: number } = { pos: expr.pos };
+    if (isClassType(baseType)) {
+      const cls = this.classes.get(classNameOf(baseType)!)!;
+      const method = cls.methods.get(callee.name);
+      if (method === undefined) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      this.checkCallArgCount(expr.args.length, method.params, `${cls.name}.${callee.name}`, callAnchor);
+      return method.params;
+    }
+    if (isInterfaceType(baseType)) {
+      const iface = this.interfaces.get(interfaceNameOf(baseType)!)!;
+      const sig = iface.methods.get(callee.name);
+      if (sig === undefined) {
+        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+      }
+      this.checkCallArgCount(expr.args.length, sig.params, `${iface.name}.${callee.name}`, callAnchor);
+      return sig.params;
     }
     throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
   }
@@ -4934,6 +5024,10 @@ class Emitter {
     indent: string,
   ): void {
     if (step.kind !== "initializer") return;
+    for (const receiverTemp of step.preAwaitReceiverTemps) {
+      const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
+      lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
+    }
     for (const temp of step.preAwaitArgTemps) {
       const expr = this.emitWithExpected(temp.arg, temp.argType);
       lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
@@ -4971,6 +5065,9 @@ class Emitter {
         if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
       } else if (binding.kind === "initializer") {
         if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+        for (const receiverTemp of binding.preAwaitReceiverTemps) {
+          fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
+        }
         for (const temp of binding.preAwaitArgTemps) {
           fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
         }
@@ -5139,6 +5236,11 @@ class Emitter {
             lines.push(`        (void)${current.stmt.name};`);
           }
         } else if (current.kind === "initializer") {
+          for (const receiverTemp of current.preAwaitReceiverTemps) {
+            this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
+            lines.push(`        ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
+            lines.push(`        (void)${receiverTemp.tempName};`);
+          }
           for (const temp of current.preAwaitArgTemps) {
             this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
             lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
