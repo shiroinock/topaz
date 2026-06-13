@@ -531,7 +531,8 @@ function arrayOf(elem: TopazType): TopazType | undefined {
   // variants are guaranteed to be concrete classes.
   if (
     !isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)
-    && elem.kind !== "fn" && elem.kind !== "dunion" && elem.kind !== "array" && elem.kind !== "promise_like" && !isBrandType(elem)
+    && elem.kind !== "fn" && elem.kind !== "dunion" && elem.kind !== "array"
+    && elem.kind !== "promise" && elem.kind !== "promise_like" && !isBrandType(elem)
   ) return undefined;
   return { kind: "array", elem };
 }
@@ -548,7 +549,7 @@ function mapOf(k: TopazType, v: TopazType): TopazType | undefined {
   if (!isScalarType(k)) return undefined;
   // Phase 1.5-6 prep #8: dunion value type is accepted (storage shape =
   // iface, absent sentinel = `{0}` with `.data == NULL`). Key stays scalar.
-  if (!isScalarType(v) && !isClassType(v) && !isInterfaceType(v) && v.kind !== "dunion" && v.kind !== "promise_like") return undefined;
+  if (!isScalarType(v) && !isClassType(v) && !isInterfaceType(v) && v.kind !== "dunion" && v.kind !== "promise" && v.kind !== "promise_like") return undefined;
   return { kind: "map", key: k, value: v };
 }
 
@@ -559,7 +560,7 @@ function setElem(t: TopazType): TopazType | undefined {
 function setOf(elem: TopazType): TopazType | undefined {
   // Phase 1.5-6 prep #8: Set<dunion> uses `.data` pointer as the identity key,
   // matching Set<class> / Set<iface> reference-identity semantics.
-  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion" && elem.kind !== "promise_like") return undefined;
+  if (!isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion" && elem.kind !== "promise" && elem.kind !== "promise_like") return undefined;
   return { kind: "set", elem };
 }
 
@@ -759,6 +760,7 @@ function elemTag(t: TopazType): string {
     // `topaz_set_dunion_A_or_B` mangle is unique per variant set.
     return typeIdent(t).slice("topaz_".length);
   }
+  if (t.kind === "promise") return typeIdent(t).slice("topaz_".length);
   if (t.kind === "promise_like") return typeIdent(t).slice("topaz_".length);
   if (t.kind === "undefined") {
     throwInternalCodegenError("elemTag: bare undefined cannot be a container element");
@@ -3441,7 +3443,8 @@ class Emitter {
     const elem = arrayElem(t)!;
     if (
       !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion"
-      && elem.kind !== "array" && elem.kind !== "brand" && elem.kind !== "promise_like"
+      && elem.kind !== "array" && elem.kind !== "brand"
+      && elem.kind !== "promise" && elem.kind !== "promise_like"
     ) {
       throwInternalCodegenError(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
@@ -3492,7 +3495,7 @@ class Emitter {
       // (same shape as iface). The compound literal zero-initializes both
       // `.kind` (empty topaz_string) and `.data` (NULL).
       optAbsent = `((${typeIdent(v)}){0})`;
-    } else if (v.kind === "promise_like") {
+    } else if (v.kind === "promise" || v.kind === "promise_like") {
       optAbsent = "NULL";
     } else {
       throwInternalCodegenError(`emitMapMonomorphMacro: scalar V should be pre-expanded in runtime.h, got ${typeIdent(v)}`);
@@ -3520,7 +3523,7 @@ class Emitter {
       const tag2 = elemTag(elem);
       hashFn = `topaz_hash_${tag2}`;
       eqFn = `topaz_key_eq_${tag2}`;
-    } else if (elem.kind === "promise_like") {
+    } else if (elem.kind === "promise" || elem.kind === "promise_like") {
       const tag2 = elemTag(elem);
       hashFn = `topaz_hash_${tag2}`;
       eqFn = `topaz_key_eq_${tag2}`;
@@ -3580,7 +3583,7 @@ class Emitter {
         `static inline topaz_boolean topaz_key_eq_${tag}(${cty} a, ${cty} b) { return a.data == b.data; }`,
       ];
     }
-    if (elem.kind === "promise_like") {
+    if (elem.kind === "promise" || elem.kind === "promise_like") {
       const tag = elemTag(elem);
       const cty = cTypeName(elem);
       return [
@@ -3601,7 +3604,7 @@ class Emitter {
     // of the container macros (see emit() containerMonomorphSlot order).
     if (elem.kind === "dunion") return typeIdent(elem);
     if (elem.kind === "array") return cTypeName(elem);
-    if (elem.kind === "promise_like") return cTypeName(elem);
+    if (elem.kind === "promise" || elem.kind === "promise_like") return cTypeName(elem);
     throwInternalCodegenError(`unexpected container element type ${typeIdent(elem)}`);
   }
 
