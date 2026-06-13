@@ -149,6 +149,7 @@ export type Expr =
   | AssignExpr
   | AwaitExpr
   | ArrowExpr
+  | FunctionExpr
   | NonNullExpr
   | SpreadExpr;
 
@@ -341,6 +342,17 @@ export type ArrowExpr = {
   params: Array<ArrowParam>;
   returnType: TypeNode | undefined;
   body: ArrowBody;
+  pos: number;
+  end: number;
+};
+
+export type FunctionExpr = {
+  kind: "function_expr";
+  name: string | undefined;
+  isAsync: boolean;
+  params: Array<ArrowParam>;
+  returnType: TypeNode | undefined;
+  body: Array<Stmt>;
   pos: number;
   end: number;
 };

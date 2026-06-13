@@ -308,6 +308,9 @@ function collectExprUses(
       }
       return;
     }
+    case "function_expr":
+      for (const stmt of expr.body) collectStmtUses(mod, stmt, importedBindings, syntheticDescriptorByName, sink);
+      return;
   }
 }
 

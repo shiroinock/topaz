@@ -16,6 +16,7 @@ import {
   IdentExpr,
   CallExpr,
   ArrowExpr,
+  FunctionExpr,
   PropAccessExpr,
   ElemAccessExpr,
   BinOpExpr,
@@ -4859,6 +4860,7 @@ class Emitter {
       case "this_expr":
       case "import_meta_url":
       case "arrow_expr":
+      case "function_expr":
         return;
     }
   }
@@ -5040,6 +5042,211 @@ class Emitter {
       }
     }
     return { kind: "fn", params, returnType };
+  }
+
+  private functionExprAsArrow(fn: FunctionExpr): ArrowExpr {
+    return {
+      kind: "arrow_expr",
+      isAsync: false,
+      params: fn.params,
+      returnType: fn.returnType,
+      body: { kind: "arrow_block_body", stmts: fn.body },
+      pos: fn.pos,
+      end: fn.end,
+    };
+  }
+
+  private ensureFunctionExprSupported(fn: FunctionExpr): void {
+    if (fn.name !== undefined) {
+      throw new CodegenError({ pos: fn.pos }, "named function expressions are deferred");
+    }
+    if (fn.isAsync) {
+      throw new CodegenError({ pos: fn.pos }, "async function expressions are deferred");
+    }
+    if (this.functionExprBodyContainsThis(fn)) {
+      throw new CodegenError({ pos: fn.pos }, "function expression `this` is deferred");
+    }
+  }
+
+  private inferFunctionExprType(fn: FunctionExpr, expectedType: TopazType | undefined): TopazType {
+    this.ensureFunctionExprSupported(fn);
+    return this.inferArrowType(this.functionExprAsArrow(fn), expectedType);
+  }
+
+  private emitFunctionExpr(fn: FunctionExpr, expectedType?: TopazType): string {
+    this.ensureFunctionExprSupported(fn);
+    return this.emitArrowFunction(this.functionExprAsArrow(fn), expectedType);
+  }
+
+  private functionExprBodyContainsThis(fn: FunctionExpr): boolean {
+    for (const s of fn.body) {
+      if (this.stmtContainsThis(s)) return true;
+    }
+    return false;
+  }
+
+  private stmtContainsThis(stmt: Stmt): boolean {
+    switch (stmt.kind) {
+      case "expr_stmt":
+        return this.exprContainsThis(stmt.expr);
+      case "var_decl":
+        {
+          const init = stmt.init;
+          return init !== undefined && this.exprContainsThis(init);
+        }
+      case "var_destr_decl":
+        return this.exprContainsThis(stmt.init);
+      case "block_stmt":
+        for (const s of stmt.stmts) if (this.stmtContainsThis(s)) return true;
+        return false;
+      case "if_stmt":
+        if (this.exprContainsThis(stmt.cond)) return true;
+        if (this.stmtContainsThis(stmt.thenBranch)) return true;
+        {
+          const elseBranch = stmt.elseBranch;
+          return elseBranch !== undefined && this.stmtContainsThis(elseBranch);
+        }
+      case "while_stmt":
+        return this.exprContainsThis(stmt.cond) || this.stmtContainsThis(stmt.body);
+      case "do_while_stmt":
+        return this.stmtContainsThis(stmt.body) || this.exprContainsThis(stmt.cond);
+      case "for_stmt":
+        {
+          const init = stmt.init;
+          if (init !== undefined) {
+            if (init.kind === "for_init_decl") {
+              if (this.stmtContainsThis(init.decl)) return true;
+            } else if (this.exprContainsThis(init.expr)) {
+              return true;
+            }
+          }
+        }
+        {
+          const cond = stmt.cond;
+          if (cond !== undefined && this.exprContainsThis(cond)) return true;
+        }
+        {
+          const update = stmt.update;
+          if (update !== undefined && this.exprContainsThis(update)) return true;
+        }
+        return this.stmtContainsThis(stmt.body);
+      case "for_of_stmt":
+        return this.exprContainsThis(stmt.source) || this.stmtContainsThis(stmt.body);
+      case "switch_stmt":
+        if (this.exprContainsThis(stmt.discriminant)) return true;
+        for (const c of stmt.cases) {
+          const test = c.test;
+          if (test !== undefined && this.exprContainsThis(test)) return true;
+          for (const s of c.stmts) if (this.stmtContainsThis(s)) return true;
+        }
+        return false;
+      case "try_stmt":
+        for (const s of stmt.tryBlock.stmts) if (this.stmtContainsThis(s)) return true;
+        {
+          const catchClause = stmt.catchClause;
+          if (catchClause !== undefined) {
+            for (const s of catchClause.body.stmts) if (this.stmtContainsThis(s)) return true;
+          }
+        }
+        {
+          const finallyBlock = stmt.finallyBlock;
+          if (finallyBlock !== undefined) {
+            for (const s of finallyBlock.stmts) if (this.stmtContainsThis(s)) return true;
+          }
+        }
+        return false;
+      case "return_stmt":
+        {
+          const value = stmt.value;
+          return value !== undefined && this.exprContainsThis(value);
+        }
+      case "throw_stmt":
+        return this.exprContainsThis(stmt.value);
+      case "break_stmt":
+      case "continue_stmt":
+      case "empty_stmt":
+        return false;
+    }
+  }
+
+  private exprContainsThis(expr: Expr): boolean {
+    switch (expr.kind) {
+      case "this_expr":
+        return true;
+      case "ident":
+      case "num_lit":
+      case "bigint_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "import_meta_url":
+        return false;
+      case "template_lit":
+        for (const sub of expr.subs) if (this.exprContainsThis(sub.expr)) return true;
+        return false;
+      case "array_lit":
+        for (const el of expr.elems) if (this.exprContainsThis(el.expr)) return true;
+        return false;
+      case "object_lit":
+        for (const m of expr.props) {
+          if (m.kind === "prop_kv") {
+            if (this.exprContainsThis(m.value)) return true;
+          }
+          if (m.kind === "prop_spread") {
+            if (this.exprContainsThis(m.expr)) return true;
+          }
+        }
+        return false;
+      case "paren_expr":
+        return this.exprContainsThis(expr.inner);
+      case "call_expr":
+        if (this.exprContainsThis(expr.callee)) return true;
+        for (const a of expr.args) if (this.exprContainsThis(a)) return true;
+        return false;
+      case "new_expr":
+        if (this.exprContainsThis(expr.callee)) return true;
+        for (const a of expr.args) if (this.exprContainsThis(a)) return true;
+        return false;
+      case "prop_access":
+        return this.exprContainsThis(expr.receiver);
+      case "elem_access":
+        return this.exprContainsThis(expr.receiver) || this.exprContainsThis(expr.index);
+      case "prefix_op":
+        return this.exprContainsThis(expr.operand);
+      case "postfix_op":
+        return this.exprContainsThis(expr.operand);
+      case "typeof_expr":
+        return this.exprContainsThis(expr.operand);
+      case "await_expr":
+        return this.exprContainsThis(expr.operand);
+      case "non_null":
+        return this.exprContainsThis(expr.operand);
+      case "spread_expr":
+        return this.exprContainsThis(expr.operand);
+      case "bin_op":
+        return this.exprContainsThis(expr.lhs) || this.exprContainsThis(expr.rhs);
+      case "instanceof_expr":
+        return this.exprContainsThis(expr.lhs) || this.exprContainsThis(expr.rhs);
+      case "ternary_expr":
+        return this.exprContainsThis(expr.cond) || this.exprContainsThis(expr.thenBranch) || this.exprContainsThis(expr.elseBranch);
+      case "assign_expr":
+        return this.exprContainsThis(expr.target) || this.exprContainsThis(expr.value);
+      case "arrow_expr":
+        {
+          const body = expr.body;
+          switch (body.kind) {
+            case "arrow_expr_body":
+              return this.exprContainsThis(body.expr);
+            case "arrow_block_body":
+              for (const s of body.stmts) if (this.stmtContainsThis(s)) return true;
+              return false;
+          }
+        }
+        return false;
+      case "function_expr":
+        return this.functionExprBodyContainsThis(expr);
+    }
   }
 
   private inferArrowExpressionBodyType(
@@ -5979,6 +6186,9 @@ class Emitter {
         return;
       case "arrow_expr":
         onArrow(e);
+        return;
+      case "function_expr":
+        onArrow(this.functionExprAsArrow(e));
         return;
     }
   }
@@ -7737,6 +7947,7 @@ class Emitter {
         this.checkTryBodyNoEscapeExpr(e.operand);
         return;
       case "arrow_expr":
+      case "function_expr":
         return;
     }
   }
@@ -8116,7 +8327,8 @@ class Emitter {
       const initBareTypeable =
         init.kind !== "object_lit" &&
         init.kind !== "array_lit" &&
-        init.kind !== "arrow_expr";
+        init.kind !== "arrow_expr" &&
+        init.kind !== "function_expr";
       if (isConst && varType.kind === "dunion" && initBareTypeable) {
         const initType = this.inferType(init);
         if (isClassType(initType)) {
@@ -9090,6 +9302,9 @@ class Emitter {
     // fn type for the four assignment sites.
     if (expr.kind === "arrow_expr") {
       return this.emitArrowFunction(expr, undefined);
+    }
+    if (expr.kind === "function_expr") {
+      return this.emitFunctionExpr(expr, undefined);
     }
     if (expr.kind === "prop_access" && expr.optional) {
       return this.emitOptionalPropertyAccess(expr);
@@ -12609,6 +12824,9 @@ class Emitter {
     if (expr.kind === "arrow_expr") {
       return this.inferArrowType(expr, undefined);
     }
+    if (expr.kind === "function_expr") {
+      return this.inferFunctionExprType(expr, undefined);
+    }
     if (expr.kind === "template_lit") {
       // Phase 1.5-3.5 / 2.4c: each ${} substitution must be number / boolean /
       // string / bigint
@@ -13686,10 +13904,17 @@ class Emitter {
     // type to type-check (the unannotated `inferType` would throw). Mirror the
     // contextual path in emitWithExpected so `=` / `[i] = ` / `.push(arrow)`
     // see the same validation rules.
-    if (expr.kind === "arrow_expr" && expected.kind === "fn") {
-      const actual = this.inferArrowType(expr, expected);
-      if (typeEq(actual, expected)) return;
-      throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+    if (expected.kind === "fn") {
+      if (expr.kind === "arrow_expr") {
+        const actual = this.inferArrowType(expr, expected);
+        if (typeEq(actual, expected)) return;
+        throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+      }
+      if (expr.kind === "function_expr") {
+        const actual = this.inferFunctionExprType(expr, expected);
+        if (typeEq(actual, expected)) return;
+        throw new CodegenError({ pos: expr.pos }, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+      }
     }
     const actual = this.inferType(expr);
     if (typeEq(actual, expected)) return;
@@ -13792,6 +14017,14 @@ class Emitter {
       }
       const actual = this.inferArrowType(expr, undefined);
       const raw = this.emitArrowFunction(expr, undefined);
+      return this.applyCoercion(raw, actual, expected, exprAnchor);
+    }
+    if (expr.kind === "function_expr") {
+      if (expected.kind === "fn") {
+        return this.emitFunctionExpr(expr, expected);
+      }
+      const actual = this.inferFunctionExprType(expr, undefined);
+      const raw = this.emitFunctionExpr(expr, undefined);
       return this.applyCoercion(raw, actual, expected, exprAnchor);
     }
     // Phase 1.5-3e: an expected string_literal accepts the matching literal

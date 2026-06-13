@@ -90,6 +90,7 @@ import type {
   ArrowExpr,
   ArrowParam,
   ArrowBody,
+  FunctionExpr,
   NonNullExpr,
   SpreadExpr,
   TypeNode,
@@ -962,6 +963,7 @@ class Converter {
     if (ts.isPostfixUnaryExpression(e)) return this.convertPostfixOp(e);
     if (ts.isBinaryExpression(e)) return this.convertBinary(e);
     if (ts.isArrowFunction(e)) return this.convertArrow(e);
+    if (ts.isFunctionExpression(e)) return this.convertFunctionExpr(e);
     if (ts.isNonNullExpression(e)) return this.convertNonNull(e);
     if (ts.isAwaitExpression(e)) {
       return {
@@ -1344,6 +1346,35 @@ class Converter {
       params,
       returnType,
       body,
+      ...this.span(e),
+    };
+  }
+
+  convertFunctionExpr(e: ts.FunctionExpression): FunctionExpr {
+    const isAsync = this.hasAsyncModifier(e);
+    this.rejectStar(e);
+    if (e.typeParameters && e.typeParameters.length > 0) {
+      throw this.err(e, "generic function expression is unsupported");
+    }
+    const params: ArrowParam[] = [];
+    for (const p of e.parameters) {
+      if (p.dotDotDotToken) throw this.err(p, "rest parameter in function expression is unsupported");
+      if (p.initializer) throw this.err(p, "default parameter in function expression is unsupported");
+      if (p.questionToken) throw this.err(p, "optional parameter in function expression is unsupported");
+      if (!ts.isIdentifier(p.name)) throw this.err(p, "function expression parameter must be an identifier");
+      params.push({
+        name: p.name.text,
+        type: p.type ? this.convertType(p.type) : undefined,
+        ...this.span(p),
+      });
+    }
+    return {
+      kind: "function_expr",
+      name: e.name ? e.name.text : undefined,
+      isAsync,
+      params,
+      returnType: e.type ? this.convertType(e.type) : undefined,
+      body: e.body.statements.map((s) => this.convertStmt(s)),
       ...this.span(e),
     };
   }

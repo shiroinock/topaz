@@ -1492,11 +1492,17 @@ export class Parser {
       if (t.word === "async") {
         const save: number = this.pos;
         this.pos += 1;
+        if (this.isKeyword(this.current(), "function")) {
+          return this.parseFunctionExpr(true, t.pos);
+        }
         if (this.isPunct(this.current(), "(") && this.looksLikeArrow()) {
           return this.parseArrow(true, t.pos);
         }
         this.pos = save;
         throw this.error(t, "async expressions are unsupported (only async arrow functions are supported)");
+      }
+      if (t.word === "function") {
+        return this.parseFunctionExpr(false, t.pos);
       }
     }
     if (this.isPunct(t, "(")) {
@@ -1807,6 +1813,67 @@ export class Parser {
     }
     const e: Expr = this.parseAssign();
     return { kind: "arrow_expr_body", expr: e };
+  }
+
+  parseFunctionExpr(isAsync: boolean, startPos: number): Expr {
+    this.expectKeyword("function");
+    if (this.matchPunct("*")) {
+      throw this.error(this.peek(-1), "generator function expressions are unsupported");
+    }
+    let name: string | undefined = undefined;
+    const t: Token = this.current();
+    if (t.kind === "ident") {
+      this.pos += 1;
+      name = t.text;
+    }
+    if (this.isPunct(this.current(), "<")) {
+      throw this.error(this.current(), "generic function expression is unsupported");
+    }
+    this.expectPunct("(");
+    const params: Array<ArrowParam> = this.parseFunctionExprParams();
+    let returnType: TypeNode | undefined = undefined;
+    if (this.matchPunct(":")) {
+      returnType = this.parseType();
+    }
+    const body: BlockStmt = this.parseBlock();
+    return {
+      kind: "function_expr",
+      name: name,
+      isAsync: isAsync,
+      params: params,
+      returnType: returnType,
+      body: body.stmts,
+      pos: startPos,
+      end: body.end,
+    };
+  }
+
+  parseFunctionExprParams(): Array<ArrowParam> {
+    const out: Array<ArrowParam> = [];
+    while (!this.matchPunct(")")) {
+      this.skipNewlines();
+      if (this.matchPunct("...")) {
+        throw this.error(this.peek(-1), "rest parameter in function expression is unsupported");
+      }
+      const name: Token = this.expectIdent();
+      if (this.matchPunct("?")) {
+        throw this.error(this.peek(-1), "optional parameter in function expression is unsupported");
+      }
+      let pty: TypeNode | undefined = undefined;
+      if (this.matchPunct(":")) {
+        pty = this.parseType();
+      }
+      if (this.matchPunct("=")) {
+        throw this.error(this.peek(-1), "default parameter in function expression is unsupported");
+      }
+      const lastEnd: number = pty !== undefined ? pty.end : name.end;
+      out.push({ name: name.text, type: pty, pos: name.pos, end: lastEnd });
+      if (!this.matchPunct(",")) {
+        this.expectPunct(")");
+        break;
+      }
+    }
+    return out;
   }
 
   // ============================================================

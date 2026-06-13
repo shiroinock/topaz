@@ -389,6 +389,7 @@ MVP 境界は **Topaz-subset TypeScript の source graph を、設定ファイ�
 - [x] **5.8 async arrow await-frame lowering** — block-bodied `async (...) => Promise<T>` arrow 内の top-level `const` / `let` await binding を 5.6 の async frame machinery に接続し、frame が arrow params / await payload locals / capture env pointer を保持して suspension 後も既存 capture-by-value env を読む。prefix は同期 turn で実行し、複数 suspension と final `.then` は FIFO microtask queue で再開する。async method、function expression、top-level await、arbitrary await、`return await`、try/catch/finally 内 await、await 間をまたぐ通常 local capture、Promise rejection handler、`PromiseLike`、thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0475-async-arrow-await-frame-lowering.md`。
 - [x] **5.9 no-await async method lowering** — `await` を含まない class `async method(): Promise<T>` を通常 method ABI の `Promise<T>` return として受理し、method body は payload `T` として検査して同期実行、`return T` / `Promise<void>` fallthrough / throw class instance を fulfilled / rejected Promise に包む。interface 実装は既存 exact method signature check に委ね、async method await-frame lowering、async function expression、rejection handler、`PromiseLike`、thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0476-no-await-async-method-lowering.md`。
 - [x] **5.10 async method await-frame lowering** — block-bodied class `async method(...): Promise<T>` 内の top-level `const` / `let` await binding を 5.6/5.8 の async frame machinery に接続し、frame が concrete `this` pointer / method params / await payload locals を保持して Promise continuation から再開する。method/vtable ABI は `Promise<T>` を返す通常 method のまま、interface dispatch も同じ wrapper 経由で Promise を受け取る。async function expression、async constructor、top-level await、arbitrary/return await、try/catch/finally 内 await、Promise rejection handler、`PromiseLike`、thenable assimilation、scheduler mode は引き続き deferred。決定ログは `docs/adr/0477-async-method-await-frame-lowering.md`。
+- [x] **5.11 anonymous function expression frontier** — `function (...) { ... }` expression を `function_expr` AST として受理し、anonymous synchronous block-bodied function expression を既存 fn fat pointer / closure env ABI へ lowering する。named function expression、async function expression、generic/generator/rest/default/optional/destructured params、`arguments`、`new.target`、function-expression `this`、named self-binding recursion、arbitrary/return await は引き続き deferred。決定ログは `docs/adr/0478-anonymous-function-expression-frontier.md`。
 
 Release/version allocation:
 
@@ -413,8 +414,9 @@ Post-MVP ecosystem items:
   fulfillment-only `Promise.then` continuations, and no-await top-level async
   function lowering, one top-level await binding, and multi-suspension await
   frames, no-await async arrow lowering, async arrow frame lowering,
-  no-await async method lowering, and async method frame lowering are complete;
-  next stages are async function expressions, arbitrary/return await, rejection
+  no-await async method lowering, async method frame lowering, and anonymous
+  synchronous function expression lowering are complete; next stages are async
+  function expressions, arbitrary/return await, rejection
   handler Promise method surface, explicit `PromiseLike` bridge, controlled
   static thenable assimilation, Node-compatible scheduler mode, and future
   Topaz-owned parallel scheduler mode
