@@ -89,6 +89,7 @@ type TopazType =
   | { kind: "map"; key: TopazType; value: TopazType }
   | { kind: "set"; elem: TopazType }
   | { kind: "promise"; value: TopazType }
+  | { kind: "brand"; base: TopazType; key: string }
   | { kind: "class"; name: string }
   | { kind: "iface"; name: string }
   | DunionType
@@ -378,6 +379,15 @@ function isScalarType(t: TopazType): boolean {
   return t.kind === "number" || t.kind === "boolean" || t.kind === "string";
 }
 
+function brandBase(t: TopazType): TopazType {
+  if (t.kind === "brand") return brandBase(t.base);
+  return t;
+}
+
+function isBrandType(t: TopazType): boolean {
+  return t.kind === "brand";
+}
+
 function isArrayType(t: TopazType): boolean { return t.kind === "array"; }
 function isMapType(t: TopazType): boolean { return t.kind === "map"; }
 function isSetType(t: TopazType): boolean { return t.kind === "set"; }
@@ -403,6 +413,7 @@ function stringLiteralUnionContains(t: TopazType, value: string): boolean {
 }
 
 function hasStringValueRepresentation(t: TopazType): boolean {
+  if (t.kind === "brand") return hasStringValueRepresentation(t.base);
   return t.kind === "string" || t.kind === "string_literal" || isStringLiteralUnion(t);
 }
 
@@ -478,6 +489,9 @@ function withoutUndefined(t: TopazType): TopazType | undefined {
 // `Point | undefined` and `Circle` do not.
 function typesOverlap(a: TopazType, b: TopazType): boolean {
   if (typeEq(a, b)) return true;
+  if (a.kind === "brand" && b.kind === "brand") return false;
+  if (a.kind === "brand") return typesOverlap(a.base, b);
+  if (b.kind === "brand") return typesOverlap(a, b.base);
   if (
     (a.kind === "string" && b.kind === "string_literal") ||
     (a.kind === "string_literal" && b.kind === "string")
@@ -512,7 +526,7 @@ function arrayOf(elem: TopazType): TopazType | undefined {
   // variants are guaranteed to be concrete classes.
   if (
     !isScalarType(elem) && !isClassType(elem) && !isInterfaceType(elem)
-    && elem.kind !== "fn" && elem.kind !== "dunion" && elem.kind !== "array"
+    && elem.kind !== "fn" && elem.kind !== "dunion" && elem.kind !== "array" && !isBrandType(elem)
   ) return undefined;
   return { kind: "array", elem };
 }
@@ -614,6 +628,10 @@ function typeEq(a: TopazType, b: TopazType): boolean {
     if (b.kind !== "promise") return false;
     return typeEq(a.value, b.value);
   }
+  if (a.kind === "brand") {
+    if (b.kind !== "brand") return false;
+    return a.key === b.key && typeEq(a.base, b.base);
+  }
   if (a.kind === "class") {
     if (b.kind !== "class") return false;
     return a.name === b.name;
@@ -706,6 +724,7 @@ function elemTag(t: TopazType): string {
   }
   if (t.kind === "boolean") return "boolean";
   if (t.kind === "string") return "string";
+  if (t.kind === "brand") return typeIdent(t).slice("topaz_".length);
   if (t.kind === "class") return `class_${t.name}`;
   if (t.kind === "iface") return `iface_${t.name}`;
   if (t.kind === "dunion") {
@@ -789,6 +808,10 @@ function typeIdent(t: TopazType): string {
   if (t.kind === "map") return `topaz_map_${mapShortName(t)}`;
   if (t.kind === "set") return `topaz_set_${setShortName(t)}`;
   if (t.kind === "promise") return `topaz_promise_${typeIdent(t.value).slice("topaz_".length)}`;
+  if (t.kind === "brand") {
+    const base = typeIdent(t.base).slice("topaz_".length);
+    return `topaz_brand_${cIdentFragment(t.key)}__${base}`;
+  }
   if (t.kind === "class") return `topaz_class_${t.name}`;
   if (t.kind === "iface") return `topaz_iface_${t.name}`;
   if (t.kind === "dunion") {
@@ -913,6 +936,9 @@ function isBuiltinName(name: string): boolean {
 // `.value` carries the scalar; identifier emission appends `.value` after
 // narrowing strips the undefined variant.
 function cTypeName(t: TopazType): string {
+  if (t.kind === "brand") {
+    return cTypeName(t.base);
+  }
   if (t.kind === "undefined") {
     throwInternalCodegenError("cTypeName: bare `undefined` has no C representation (only `T | undefined` does)");
   }
@@ -2021,6 +2047,10 @@ class Emitter {
   // graph is faithful to what typeFromAnnotation would actually traverse.
   private collectAliasRefs(node: TypeNode, out: Set<string>): void {
     if (node.kind === "type_union") {
+      for (const t of node.variants) this.collectAliasRefs(t, out);
+      return;
+    }
+    if (node.kind === "type_intersection") {
       for (const t of node.variants) this.collectAliasRefs(t, out);
       return;
     }
@@ -3337,12 +3367,13 @@ class Emitter {
     const elem = arrayElem(t)!;
     if (
       !isClassType(elem) && !isInterfaceType(elem) && elem.kind !== "dunion"
-      && elem.kind !== "array"
+      && elem.kind !== "array" && elem.kind !== "brand"
     ) {
       throwInternalCodegenError(`unexpected array element type ${typeIdent(elem)} for monomorph emission`);
     }
     // Array<dunion> stores the fat `{ kind, void *data }` value directly;
-    // Array<Array<T>> stores the inner array pointer.
+    // Array<Array<T>> stores the inner array pointer. Array<brand> stores the
+    // brand base representation under a nominal helper name.
     const cElem = this.cElemTypeForContainer(elem);
     return `TOPAZ_ARRAY_DEFINE(${tag}, ${cElem})`;
   }
@@ -3476,6 +3507,7 @@ class Emitter {
     if (isClassType(elem)) return `topaz_class_${classNameOf(elem)!} *`;
     if (isInterfaceType(elem)) return `topaz_iface_${interfaceNameOf(elem)!}`;
     if (isScalarType(elem)) return typeIdent(elem);
+    if (elem.kind === "brand") return cTypeName(elem);
     // Phase 1.5-6 prep #8: dunion stores the fat `{ kind, void *data }` struct
     // value directly. The typedef is already emitted (emitDunionTypedef) ahead
     // of the container macros (see emit() containerMonomorphSlot order).
@@ -4229,6 +4261,73 @@ class Emitter {
     return out;
   }
 
+  private tryMakeBrandAlias(
+    aliasName: string,
+    node: TypeNode,
+    anchor: { pos: number },
+    sf: SourceModule,
+  ): TopazType | undefined {
+    if (node.kind !== "type_intersection") return undefined;
+    if (node.variants.length !== 2) {
+      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & readonly phantom object");
+    }
+    let hasBase = false;
+    let baseNode: TypeNode = node;
+    let hasPhantom = false;
+    let phantomNode: TypeNode = node;
+    for (const part of node.variants) {
+      if (part.kind === "type_literal") {
+        if (hasPhantom) {
+          throw this.typeErr({ pos: part.pos }, "unsupported brand intersection shape: multiple phantom object parts");
+        }
+        hasPhantom = true;
+        phantomNode = part;
+      } else {
+        if (hasBase) {
+          throw this.typeErr({ pos: part.pos }, "unsupported brand intersection shape: multiple base parts");
+        }
+        hasBase = true;
+        baseNode = part;
+      }
+    }
+    if (!hasBase || !hasPhantom || phantomNode.kind !== "type_literal") {
+      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & readonly phantom object");
+    }
+    const base = this.typeFromAnnotation(baseNode, { pos: baseNode.pos }, sf);
+    const baseKind = brandBase(base).kind;
+    if (baseKind !== "string" && baseKind !== "number" && baseKind !== "boolean" && baseKind !== "bigint") {
+      throw this.typeErr(
+        { pos: baseNode.pos },
+        `unsupported brand base type ${typeIdent(base)} (expected string / number / boolean / bigint)`,
+      );
+    }
+    if (phantomNode.members.length !== 1) {
+      throw this.typeErr(
+        { pos: phantomNode.pos },
+        "unsupported brand intersection shape: phantom object must have exactly one readonly required field",
+      );
+    }
+    const member = phantomNode.members[0];
+    if (member.kind !== "type_lit_field") {
+      throw this.typeErr({ pos: member.pos }, "unsupported brand intersection shape: phantom member must be a field");
+    }
+    if (!member.isReadonly || member.isOptional) {
+      throw this.typeErr(
+        { pos: member.pos },
+        "unsupported brand intersection shape: phantom field must be readonly and required",
+      );
+    }
+    const payloadType = member.type;
+    if (payloadType.kind !== "type_str_lit") {
+      throw this.typeErr(
+        { pos: payloadType.pos },
+        "unsupported brand intersection shape: phantom field type must be a string literal",
+      );
+    }
+    const key = `${aliasName}:${member.name}:${payloadType.value}`;
+    return { kind: "brand", base, key };
+  }
+
   private typeFromAnnotationCore(
     node: TypeNode | undefined,
     anchor: { pos: number },
@@ -4265,6 +4364,12 @@ class Emitter {
       const dunion = this.tryMakeDiscriminatedUnion(variants, nodeAnchor);
       if (dunion !== undefined) return dunion;
       return makeUnion(variants);
+    }
+    if (node.kind === "type_intersection") {
+      throw this.typeErr(
+        nodeAnchor,
+        "unsupported brand intersection shape: branded intersections are only supported through a non-generic type alias",
+      );
     }
     if (node.kind === "type_array") {
       const elem = this.typeFromAnnotation(node.elem, nodeAnchor, sf);
@@ -4335,7 +4440,10 @@ class Emitter {
           }
           alias.resolving = true;
           const aliasAnchor: { pos: number } = { pos: alias.body.pos };
-          const resolvedAliasType = this.typeFromAnnotation(alias.body, aliasAnchor, alias.sf);
+          const brandAliasType = this.tryMakeBrandAlias(refName, alias.body, aliasAnchor, alias.sf);
+          const resolvedAliasType = brandAliasType !== undefined
+            ? brandAliasType
+            : this.typeFromAnnotation(alias.body, aliasAnchor, alias.sf);
           alias.resolved = resolvedAliasType;
           alias.resolving = false;
           return resolvedAliasType;
@@ -5514,6 +5622,8 @@ class Emitter {
         return this.simpleAwaitReplacementSupported(expr.inner, target);
       case "non_null":
         return this.simpleAwaitReplacementSupported(expr.operand, target);
+      case "type_assert":
+        return this.simpleAwaitReplacementSupported(expr.expr, target);
       case "prefix_op":
         return this.simpleAwaitReplacementSupported(expr.operand, target);
       case "typeof_expr":
@@ -5535,6 +5645,8 @@ class Emitter {
         return this.simpleCallArgumentAwaitReplacementSupported(expr.inner, target);
       case "non_null":
         return this.simpleCallArgumentAwaitReplacementSupported(expr.operand, target);
+      case "type_assert":
+        return this.simpleCallArgumentAwaitReplacementSupported(expr.expr, target);
       case "prefix_op":
         if (expr.op === "++" || expr.op === "--") return false;
         return this.simpleCallArgumentAwaitReplacementSupported(expr.operand, target);
@@ -5578,6 +5690,8 @@ class Emitter {
         return this.isSideEffectFreeCallArgumentAwaitPart(expr.inner);
       case "non_null":
         return this.isSideEffectFreeCallArgumentAwaitPart(expr.operand);
+      case "type_assert":
+        return this.isSideEffectFreeCallArgumentAwaitPart(expr.expr);
       case "prefix_op":
         if (expr.op === "++" || expr.op === "--") return false;
         return this.isSideEffectFreeCallArgumentAwaitPart(expr.operand);
@@ -5605,6 +5719,8 @@ class Emitter {
         return { kind: "typeof_expr", operand: this.replaceAwaitExprInExpr(expr.operand, target, replacement), pos: expr.pos, end: expr.end };
       case "non_null":
         return { kind: "non_null", operand: this.replaceAwaitExprInExpr(expr.operand, target, replacement), pos: expr.pos, end: expr.end };
+      case "type_assert":
+        return { kind: "type_assert", expr: this.replaceAwaitExprInExpr(expr.expr, target, replacement), type: expr.type, pos: expr.pos, end: expr.end };
       case "bin_op":
         return {
           kind: "bin_op",
@@ -6246,6 +6362,9 @@ class Emitter {
       case "non_null":
         this.collectAwaitExprsInExprInto(expr.operand, out);
         return;
+      case "type_assert":
+        this.collectAwaitExprsInExprInto(expr.expr, out);
+        return;
       case "spread_expr":
         this.collectAwaitExprsInExprInto(expr.operand, out);
         return;
@@ -6635,6 +6754,8 @@ class Emitter {
         return this.exprContainsThis(expr.operand);
       case "non_null":
         return this.exprContainsThis(expr.operand);
+      case "type_assert":
+        return this.exprContainsThis(expr.expr);
       case "spread_expr":
         return this.exprContainsThis(expr.operand);
       case "bin_op":
@@ -7593,6 +7714,9 @@ class Emitter {
         return;
       case "non_null":
         this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onThis, onArrow);
+        return;
+      case "type_assert":
+        this.collectCapturesWalkExpr(e.expr, localSet, onIdent, onThis, onArrow);
         return;
       case "spread_expr":
         this.collectCapturesWalkExpr(e.operand, localSet, onIdent, onThis, onArrow);
@@ -9356,6 +9480,9 @@ class Emitter {
       case "non_null":
         this.checkTryBodyNoEscapeExpr(e.operand);
         return;
+      case "type_assert":
+        this.checkTryBodyNoEscapeExpr(e.expr);
+        return;
       case "spread_expr":
         this.checkTryBodyNoEscapeExpr(e.operand);
         return;
@@ -10776,6 +10903,13 @@ class Emitter {
     }
     if (expr.kind === "paren_expr") {
       return `(${this.emitExpression(expr.inner)})`;
+    }
+    if (expr.kind === "type_assert") {
+      const target = this.inferType(expr);
+      if (target.kind !== "brand") {
+        throwInternalCodegenError("emitExpression: type_assert inference returned non-brand");
+      }
+      return this.emitWithExpected(expr.expr, target.base);
     }
     // Phase 1.5-3.5e: arrow expressions in non-contextual positions need
     // explicit param + return annotations (no expected type to source them
@@ -15268,6 +15402,26 @@ class Emitter {
       return T_STRING;
     }
     if (expr.kind === "paren_expr") return this.inferType(expr.inner);
+    if (expr.kind === "type_assert") {
+      const target = this.typeFromAnnotation(expr.type, { pos: expr.type.pos }, g_currentModule!);
+      if (target.kind !== "brand") {
+        throw new CodegenError({ pos: expr.pos }, "only brand assertions are supported (`expr as BrandAlias`)");
+      }
+      const actual = this.inferType(expr.expr);
+      if (actual.kind === "brand" && !typeEq(actual, target)) {
+        throw new CodegenError(
+          { pos: expr.pos },
+          `brand assertion cannot convert ${typeIdent(actual)} to ${typeIdent(target)}`,
+        );
+      }
+      if (!this.isAssignableTo(actual, target.base)) {
+        throw new CodegenError(
+          { pos: expr.pos },
+          `brand assertion requires ${typeIdent(actual)} to be assignable to base ${typeIdent(target.base)}`,
+        );
+      }
+      return target;
+    }
     // Phase 1.5-6 prep #25: a ternary's type is the common type of its two
     // branches, each inferred under the narrowing the condition implies.
     if (expr.kind === "ternary_expr") {
@@ -16257,6 +16411,9 @@ class Emitter {
   // used mainly to reject `T | undefined` flowing into a non-optional sink).
   private isAssignableTo(actual: TopazType, expected: TopazType): boolean {
     if (typeEq(actual, expected)) return true;
+    if (actual.kind === "brand") {
+      if (this.isAssignableTo(actual.base, expected)) return true;
+    }
     if (expected.kind === "union") {
       for (const v of expected.variants) {
         if (this.isAssignableTo(actual, v)) return true;
@@ -16664,6 +16821,9 @@ class Emitter {
 
   private applyCoercion(raw: string, actual: TopazType, expected: TopazType, anchor: { pos: number }): string {
     if (typeEq(actual, expected)) return raw;
+    if (actual.kind === "brand" && this.isAssignableTo(actual.base, expected)) {
+      return this.applyCoercion(raw, actual.base, expected, anchor);
+    }
     // Phase 1.5-3b: widening T -> `T | undefined`. For reference / interface
     // representations the C value is identical (a pointer or a fat pointer),
     // so coercion is a no-op once the inner type matches.

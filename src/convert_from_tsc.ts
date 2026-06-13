@@ -87,6 +87,7 @@ import type {
   TypeofExpr,
   TernaryExpr,
   AssignExpr,
+  TypeAssertExpr,
   ArrowExpr,
   ArrowParam,
   ArrowBody,
@@ -96,6 +97,7 @@ import type {
   TypeNode,
   TypeRef,
   TypeUnion,
+  TypeIntersection,
   TypeArrayShorthand,
   TypeLiteralNode,
   TypeLiteralMember,
@@ -962,6 +964,15 @@ class Converter {
     if (ts.isPrefixUnaryExpression(e)) return this.convertPrefixOp(e);
     if (ts.isPostfixUnaryExpression(e)) return this.convertPostfixOp(e);
     if (ts.isBinaryExpression(e)) return this.convertBinary(e);
+    if (ts.isAsExpression(e)) {
+      const a: TypeAssertExpr = {
+        kind: "type_assert",
+        expr: this.convertExpr(e.expression),
+        type: this.convertType(e.type),
+        ...this.span(e),
+      };
+      return a;
+    }
     if (ts.isArrowFunction(e)) return this.convertArrow(e);
     if (ts.isFunctionExpression(e)) return this.convertFunctionExpr(e);
     if (ts.isNonNullExpression(e)) return this.convertNonNull(e);
@@ -1434,6 +1445,14 @@ class Converter {
         ...this.span(t),
       };
       return u;
+    }
+    if (ts.isIntersectionTypeNode(t)) {
+      const i: TypeIntersection = {
+        kind: "type_intersection",
+        variants: t.types.map((x) => this.convertType(x)),
+        ...this.span(t),
+      };
+      return i;
     }
     if (ts.isArrayTypeNode(t)) {
       const a: TypeArrayShorthand = {

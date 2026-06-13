@@ -3421,6 +3421,12 @@ run_fail_case dunion_optional_unnarrowed_fail examples/dunion_optional_unnarrowe
 run_fail_case dunion_optional_non_optional_bang_fail examples/dunion_optional_non_optional_bang_fail.ts "non-null assertion"
 run_fail_case dunion_optional_non_optional_coalesce_fail examples/dunion_optional_non_optional_coalesce_fail.ts "left operand to be"
 
+run_case brand_string_phantom $'u1\nu1\no1\ntrue\ntrue\nu1'
+run_fail_case brand_string_phantom_implicit_fail examples/brand_string_phantom_implicit_fail.ts "type mismatch"
+run_fail_case brand_string_phantom_cross_assign_fail examples/brand_string_phantom_cross_assign_fail.ts "topaz_brand_OrderId"
+run_fail_case brand_string_phantom_non_brand_as_fail examples/brand_string_phantom_non_brand_as_fail.ts "only brand assertions are supported"
+run_fail_case brand_string_phantom_bad_shape_fail examples/brand_string_phantom_bad_shape_fail.ts "unsupported brand intersection shape"
+
 run_case cond_equality $'if-eq\nif-ne\nand\nor\nmixed\ndiffer\n3\n6\n2'
 run_cc_warnfree_case cond_equality
 run_cc_warnfree_case dunion_optional

@@ -1372,6 +1372,12 @@ export class Parser {
         lhs = { kind: "non_null", operand: lhs, pos: lhs.pos, end: t.end };
         continue;
       }
+      if (this.isKeyword(t, "as")) {
+        this.pos += 1;
+        const ty: TypeNode = this.parseType();
+        lhs = { kind: "type_assert", expr: lhs, type: ty, pos: lhs.pos, end: ty.end };
+        continue;
+      }
       if (t.kind === "punct" && (t.op === "++" || t.op === "--")) {
         const op: string = t.op;
         this.pos += 1;
@@ -1888,12 +1894,36 @@ export class Parser {
     // Accept a leading `|` as syntactic sugar (`type X = | A | B;`).
     this.skipNewlines();
     this.matchPunct("|");
-    const first: TypeNode = this.parsePrimaryType();
+    const first: TypeNode = this.parseIntersectionType();
     const variants: Array<TypeNode> = [first];
     while (true) {
       this.skipNewlines();
       const t: Token = this.current();
       if (this.isPunct(t, "|")) {
+        this.pos += 1;
+        const next: TypeNode = this.parseIntersectionType();
+        variants.push(next);
+        continue;
+      }
+      break;
+    }
+    if (variants.length === 1) return first;
+    const last: TypeNode = variants[variants.length - 1];
+    return {
+      kind: "type_union",
+      variants: variants,
+      pos: first.pos,
+      end: last.end,
+    };
+  }
+
+  parseIntersectionType(): TypeNode {
+    const first: TypeNode = this.parsePrimaryType();
+    const variants: Array<TypeNode> = [first];
+    while (true) {
+      this.skipNewlines();
+      const t: Token = this.current();
+      if (this.isPunct(t, "&")) {
         this.pos += 1;
         const next: TypeNode = this.parsePrimaryType();
         variants.push(next);
@@ -1904,7 +1934,7 @@ export class Parser {
     if (variants.length === 1) return first;
     const last: TypeNode = variants[variants.length - 1];
     return {
-      kind: "type_union",
+      kind: "type_intersection",
       variants: variants,
       pos: first.pos,
       end: last.end,

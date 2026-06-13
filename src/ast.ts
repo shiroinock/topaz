@@ -15,6 +15,7 @@
 export type TypeNode =
   | TypeRef
   | TypeUnion
+  | TypeIntersection
   | TypeArrayShorthand
   | TypeLiteralNode
   | TypeFn
@@ -33,6 +34,13 @@ export type TypeRef = {
 
 export type TypeUnion = {
   kind: "type_union";
+  variants: Array<TypeNode>;
+  pos: number;
+  end: number;
+};
+
+export type TypeIntersection = {
+  kind: "type_intersection";
   variants: Array<TypeNode>;
   pos: number;
   end: number;
@@ -147,6 +155,7 @@ export type Expr =
   | TypeofExpr
   | TernaryExpr
   | AssignExpr
+  | TypeAssertExpr
   | AwaitExpr
   | ArrowExpr
   | FunctionExpr
@@ -314,6 +323,14 @@ export type AssignExpr = {
   op: string;
   target: Expr;
   value: Expr;
+  pos: number;
+  end: number;
+};
+
+export type TypeAssertExpr = {
+  kind: "type_assert";
+  expr: Expr;
+  type: TypeNode;
   pos: number;
   end: number;
 };
