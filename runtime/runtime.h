@@ -87,39 +87,162 @@ typedef struct {
 } topaz_string_buffer;
 
 typedef enum {
+  TOPAZ_PROMISE_PENDING,
   TOPAZ_PROMISE_FULFILLED,
   TOPAZ_PROMISE_REJECTED,
 } topaz_promise_state;
 
-typedef struct {
+typedef struct topaz_promise topaz_promise;
+typedef void (*topaz_promise_continuation_fn)(void *ctx, topaz_promise *source, topaz_promise *target);
+
+typedef struct topaz_promise_continuation {
+  topaz_promise_continuation_fn fn;
+  void *ctx;
+  topaz_promise *target;
+  struct topaz_promise_continuation *next;
+} topaz_promise_continuation;
+
+struct topaz_promise {
   topaz_promise_state state;
   void *fulfilled_payload;
   size_t fulfilled_payload_size;
   void *rejected_error;
-} topaz_promise;
+  topaz_promise_continuation *continuations_head;
+  topaz_promise_continuation *continuations_tail;
+};
 
-static inline void *topaz_promise_resolve_copy(const void *value, size_t size) {
+typedef struct topaz_microtask {
+  topaz_promise_continuation_fn fn;
+  void *ctx;
+  topaz_promise *source;
+  topaz_promise *target;
+  struct topaz_microtask *next;
+} topaz_microtask;
+
+static topaz_microtask *topaz_microtask_head = NULL;
+static topaz_microtask *topaz_microtask_tail = NULL;
+
+static inline topaz_promise *topaz_promise_new_pending(void) {
   topaz_promise *promise = (topaz_promise *)topaz_arena_calloc(1, sizeof(*promise));
+  promise->state = TOPAZ_PROMISE_PENDING;
+  return promise;
+}
+
+static inline void topaz_microtask_enqueue(
+  topaz_promise_continuation_fn fn,
+  void *ctx,
+  topaz_promise *source,
+  topaz_promise *target
+) {
+  topaz_microtask *task = (topaz_microtask *)topaz_arena_calloc(1, sizeof(*task));
+  task->fn = fn;
+  task->ctx = ctx;
+  task->source = source;
+  task->target = target;
+  if (topaz_microtask_tail) {
+    topaz_microtask_tail->next = task;
+  } else {
+    topaz_microtask_head = task;
+  }
+  topaz_microtask_tail = task;
+}
+
+static inline void topaz_promise_reject_with(topaz_promise *promise, void *error);
+
+static inline void topaz_promise_settle_continuations(topaz_promise *promise) {
+  topaz_promise_continuation *cont = promise->continuations_head;
+  promise->continuations_head = NULL;
+  promise->continuations_tail = NULL;
+  while (cont) {
+    topaz_promise_continuation *next = cont->next;
+    cont->next = NULL;
+    if (promise->state == TOPAZ_PROMISE_FULFILLED) {
+      topaz_microtask_enqueue(cont->fn, cont->ctx, promise, cont->target);
+    } else if (promise->state == TOPAZ_PROMISE_REJECTED) {
+      topaz_promise_reject_with(cont->target, promise->rejected_error);
+    }
+    cont = next;
+  }
+}
+
+static inline void topaz_promise_fulfill_copy(topaz_promise *promise, const void *value, size_t size) {
   promise->state = TOPAZ_PROMISE_FULFILLED;
   promise->fulfilled_payload_size = size;
   if (size > 0) {
     promise->fulfilled_payload = topaz_arena_alloc(size);
     memcpy(promise->fulfilled_payload, value, size);
   }
+  topaz_promise_settle_continuations(promise);
+}
+
+static inline void topaz_promise_fulfill_void(topaz_promise *promise) {
+  promise->state = TOPAZ_PROMISE_FULFILLED;
+  promise->fulfilled_payload = NULL;
+  promise->fulfilled_payload_size = 0;
+  topaz_promise_settle_continuations(promise);
+}
+
+static inline void topaz_promise_reject_with(topaz_promise *promise, void *error) {
+  promise->state = TOPAZ_PROMISE_REJECTED;
+  promise->rejected_error = error;
+  topaz_promise_settle_continuations(promise);
+}
+
+static inline void *topaz_promise_resolve_copy(const void *value, size_t size) {
+  topaz_promise *promise = topaz_promise_new_pending();
+  topaz_promise_fulfill_copy(promise, value, size);
   return promise;
 }
 
 static inline void *topaz_promise_resolve_void(void) {
-  topaz_promise *promise = (topaz_promise *)topaz_arena_calloc(1, sizeof(*promise));
-  promise->state = TOPAZ_PROMISE_FULFILLED;
+  topaz_promise *promise = topaz_promise_new_pending();
+  topaz_promise_fulfill_void(promise);
   return promise;
 }
 
 static inline void *topaz_promise_reject(void *error) {
-  topaz_promise *promise = (topaz_promise *)topaz_arena_calloc(1, sizeof(*promise));
-  promise->state = TOPAZ_PROMISE_REJECTED;
-  promise->rejected_error = error;
+  topaz_promise *promise = topaz_promise_new_pending();
+  topaz_promise_reject_with(promise, error);
   return promise;
+}
+
+static inline const void *topaz_promise_fulfilled_payload(topaz_promise *promise) {
+  return promise->fulfilled_payload;
+}
+
+static inline void *topaz_promise_then(
+  void *source_value,
+  topaz_promise_continuation_fn fn,
+  void *ctx
+) {
+  topaz_promise *source = (topaz_promise *)source_value;
+  topaz_promise *target = topaz_promise_new_pending();
+  topaz_promise_continuation *cont = (topaz_promise_continuation *)topaz_arena_calloc(1, sizeof(*cont));
+  cont->fn = fn;
+  cont->ctx = ctx;
+  cont->target = target;
+  if (source->state == TOPAZ_PROMISE_PENDING) {
+    if (source->continuations_tail) {
+      source->continuations_tail->next = cont;
+    } else {
+      source->continuations_head = cont;
+    }
+    source->continuations_tail = cont;
+  } else if (source->state == TOPAZ_PROMISE_FULFILLED) {
+    topaz_microtask_enqueue(fn, ctx, source, target);
+  } else {
+    topaz_promise_reject_with(target, source->rejected_error);
+  }
+  return target;
+}
+
+static inline void topaz_promise_drain_microtasks(void) {
+  while (topaz_microtask_head) {
+    topaz_microtask *task = topaz_microtask_head;
+    topaz_microtask_head = task->next;
+    if (!topaz_microtask_head) topaz_microtask_tail = NULL;
+    task->fn(task->ctx, task->source, task->target);
+  }
 }
 
 // Phase 2.4c: immutable arbitrary-precision bigint. Generated code only sees

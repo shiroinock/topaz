@@ -971,6 +971,11 @@ if [[ "${substrate_out}" != *"promise-value-boundary: 3"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
+if [[ "${substrate_out}" != *"promise-continuation-boundary: 9"* ]]; then
+  echo "FAIL [runtime_substrate_inventory]: Promise continuation substrate lane count changed" >&2
+  printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
+  exit 1
+fi
 if [[ "${substrate_out}" != *"bigint-limb-intrinsic-family: 8"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: active bigint intrinsic-family lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
@@ -1015,6 +1020,8 @@ for fragment in \
   'migration=host-abi-boundary' \
   'topaz_promise_resolve_copy (helper,' \
   'migration=promise-value-boundary' \
+  'topaz_promise_then (helper,' \
+  'migration=promise-continuation-boundary' \
   'topaz_try_push (helper,' \
   'migration=exception-boundary' \
   'topaz_string_buffer_new (helper,' \
@@ -1028,13 +1035,14 @@ for fragment in \
   fi
 done
 for fragment in \
-  'runtime substrate inventory ok: 59 symbols classified' \
+  'runtime substrate inventory ok: 68 symbols classified' \
   'bigint-limb-intrinsic-family: 8' \
   'c-abi-type-boundary: 8' \
   'container-monomorph-boundary: 13' \
   'exception-boundary: 4' \
   'host-abi-boundary: 12' \
   'libc-libm-boundary: 3' \
+  'promise-continuation-boundary: 9' \
   'promise-value-boundary: 3' \
   'raw-memory-boundary: 3' \
   'string-buffer-intrinsic-family: 5' \
@@ -2926,9 +2934,14 @@ run_fail_case regexp_string_test_deferred_fail examples/regexp_string_test_defer
 run_case promise_type_annotation $'promise annotations\nready'
 run_case promise_resolve_value $'number promise\nstring promise\nnumber promise\nstring promise\nresolve values\n42'
 run_case promise_reject_value $'void rejection\nnumber rejection\nstring rejection\nreject values'
+run_case promise_then_fulfilled $'sync\npromise returned\nthen number\n42\nthen string\nready'
 run_tsc_bridge_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "async functions are unsupported"
 run_tsc_bridge_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "unsupported expression AwaitExpression"
-run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise method '.then' is deferred until the Promise runtime/scheduler surface is implemented"
+run_fail_case promise_resolve_deferred_fail examples/promise_resolve_deferred_fail.ts "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented"
+run_fail_case promise_then_on_rejected_deferred_fail examples/promise_then_on_rejected_deferred_fail.ts "Promise.then expects exactly one argument, got 2"
+run_fail_case promise_then_non_fn_fail examples/promise_then_non_fn_fail.ts "Promise.then callback must be a function value"
+run_fail_case promise_catch_deferred_fail examples/promise_catch_deferred_fail.ts "Promise method '.catch' is deferred until the Promise runtime/scheduler surface is implemented"
+run_fail_case promise_finally_deferred_fail examples/promise_finally_deferred_fail.ts "Promise method '.finally' is deferred until the Promise runtime/scheduler surface is implemented"
 run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"
 run_fail_case promise_reject_no_context_fail examples/promise_reject_no_context_fail.ts "Promise.reject requires a contextual Promise<T> target"

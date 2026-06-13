@@ -1427,6 +1427,9 @@ class Emitter {
   private arrowCounter: number = 0;
   private arrowFwdLines: Array<string> = [];
   private arrowDefLines: Array<string> = [];
+  private promiseThenFwdLines: Array<string> = [];
+  private promiseThenDefLines: Array<string> = [];
+  private promiseThenRunners: Set<string> = new Set<string>();
   private fnValueWrappers: Set<string> = new Set<string>();
   private captureContext:
     | { envType: string; envIsEmpty: boolean; captures: Map<string, TopazType> }
@@ -2702,6 +2705,7 @@ class Emitter {
       out.push(this.emitStatementBoundary(stmt, sf));
     }
     this.scope.pop();
+    out.push("  topaz_promise_drain_microtasks();");
     out.push("  return 0;");
     out.push("}");
 
@@ -2802,16 +2806,16 @@ class Emitter {
       }
       out[fnTypedefSlot] = lines.join("\n") + "\n";
     }
-    if (this.arrowFwdLines.length > 0) {
+    if (this.arrowFwdLines.length > 0 || this.promiseThenFwdLines.length > 0) {
       // Env struct typedefs sit alongside the arrow fwd decls; no `-Wunused`
       // concerns since these are just declarations.
-      out[arrowFwdSlot] = this.arrowFwdLines.join("\n") + "\n";
+      out[arrowFwdSlot] = [...this.arrowFwdLines, ...this.promiseThenFwdLines].join("\n") + "\n";
     }
-    if (this.arrowDefLines.length > 0) {
+    if (this.arrowDefLines.length > 0 || this.promiseThenDefLines.length > 0) {
       out[arrowDefSlot] = [
         '#pragma GCC diagnostic push',
         '#pragma GCC diagnostic ignored "-Wunused-parameter"',
-        this.arrowDefLines.join("\n"),
+        [...this.arrowDefLines, ...this.promiseThenDefLines].join("\n"),
         '#pragma GCC diagnostic pop',
       ].join("\n");
     }
@@ -9352,6 +9356,123 @@ class Emitter {
     return `topaz_promise_reject((void *)(${errorExpr}))`;
   }
 
+  private checkPromiseMethodTypeArgs(expr: CallExpr, name: string): void {
+    if (expr.typeArgs.length > 0) {
+      throw new CodegenError(
+        { pos: expr.pos },
+        `Promise.${name} type arguments are unsupported (use callback return inference)`,
+      );
+    }
+  }
+
+  private inferPromiseThenCallbackFn(cb: Expr, payloadType: TopazType): FnType {
+    const params: Array<TopazType> = [];
+    if (payloadType.kind !== "void") params.push(payloadType);
+    return this.inferCallbackFn(cb, params, "Promise.then");
+  }
+
+  private inferPromiseThenCall(expr: CallExpr, baseType: TopazType): TopazType {
+    if (baseType.kind !== "promise") {
+      throwInternalCodegenError("inferPromiseThenCall: base is not Promise<T>");
+    }
+    this.checkPromiseMethodTypeArgs(expr, "then");
+    if (expr.args.length !== 1) {
+      throw new CodegenError({ pos: expr.pos }, `Promise.then expects exactly one argument, got ${expr.args.length}`);
+    }
+    const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
+    const resultType = fnType.returnType;
+    if (resultType.kind === "promise") {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        "Promise.then callback returning Promise<T> is deferred until explicit thenable assimilation is implemented",
+      );
+    }
+    const promiseType = promiseOf(resultType);
+    if (promiseType === undefined) {
+      throw new CodegenError(
+        { pos: expr.args[0].pos },
+        `Promise.then callback return type ${typeIdent(resultType)} is unsupported (must be value-representable or void)`,
+      );
+    }
+    return promiseType;
+  }
+
+  private promiseThenRunnerName(payloadType: TopazType, resultType: TopazType): string {
+    return `__topaz_promise_then_${cIdentFragment(typeKey(payloadType))}__to__${cIdentFragment(typeKey(resultType))}`;
+  }
+
+  private promiseThenContextName(payloadType: TopazType, resultType: TopazType): string {
+    return `${this.promiseThenRunnerName(payloadType, resultType)}_ctx`;
+  }
+
+  private recordPromiseThenRunner(payloadType: TopazType, resultType: TopazType, fnType: FnType): string {
+    const runnerName = this.promiseThenRunnerName(payloadType, resultType);
+    if (this.promiseThenRunners.has(runnerName)) return runnerName;
+    this.promiseThenRunners.add(runnerName);
+    this.recordFnMonomorph(fnType);
+
+    const ctxName = this.promiseThenContextName(payloadType, resultType);
+    const fnTypeName = typeIdent(fnType);
+    this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n  ${fnTypeName} cb;\n} ${ctxName};`);
+    this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
+
+    const lines: string[] = [];
+    lines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target) {`);
+    lines.push(`  ${ctxName} *ctx = (${ctxName} *)__topaz_ctx;`);
+    lines.push("  topaz_try_frame __topaz_promise_frame;");
+    lines.push("  topaz_try_push(&__topaz_promise_frame);");
+    lines.push("  if (setjmp(__topaz_promise_frame.env) == 0) {");
+    let callArgs = "ctx->cb.env";
+    if (payloadType.kind === "void") {
+      lines.push("    (void)source;");
+    } else {
+      const payloadC = cTypeName(payloadType);
+      lines.push(`    ${payloadC} __topaz_promise_value = *(const ${payloadC} *)topaz_promise_fulfilled_payload(source);`);
+      callArgs = `${callArgs}, __topaz_promise_value`;
+    }
+    if (resultType.kind === "void") {
+      lines.push(`    ctx->cb.fn(${callArgs});`);
+      lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_fulfill_void(target);");
+    } else {
+      const resultC = cTypeName(resultType);
+      lines.push(`    ${resultC} __topaz_promise_result = ctx->cb.fn(${callArgs});`);
+      lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_fulfill_copy(target, &__topaz_promise_result, sizeof(__topaz_promise_result));");
+    }
+    lines.push("  } else {");
+    lines.push("    topaz_promise_reject_with(target, topaz_throw_value);");
+    lines.push("  }");
+    lines.push("}");
+    this.promiseThenDefLines.push(lines.join("\n"));
+    return runnerName;
+  }
+
+  private emitPromiseThenCall(expr: CallExpr, callee: PropAccessExpr, baseType: TopazType): string {
+    const promiseType = this.inferPromiseThenCall(expr, baseType);
+    if (baseType.kind !== "promise" || promiseType.kind !== "promise") {
+      throwInternalCodegenError("emitPromiseThenCall: invalid Promise<T> types");
+    }
+    const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
+    const resultType = fnType.returnType;
+    const runnerName = this.recordPromiseThenRunner(baseType.value, resultType, fnType);
+    const ctxName = this.promiseThenContextName(baseType.value, resultType);
+    const fnTypeName = typeIdent(fnType);
+    const id = this.tmpCounter++;
+    const sourceVar = `__topaz_then_src_${id}`;
+    const cbVar = `__topaz_then_cb_${id}`;
+    const ctxVar = `__topaz_then_ctx_${id}`;
+    const sourceExpr = this.emitExpression(callee.receiver);
+    const cbExpr = this.emitWithExpected(expr.args[0], fnType);
+    return (
+      `({ void *${sourceVar} = ${sourceExpr}; ` +
+      `${fnTypeName} ${cbVar} = ${cbExpr}; ` +
+      `${ctxName} *${ctxVar} = (${ctxName} *)topaz_arena_alloc(sizeof(${ctxName})); ` +
+      `*${ctxVar} = (${ctxName}){ .cb = ${cbVar} }; ` +
+      `topaz_promise_then(${sourceVar}, ${runnerName}, ${ctxVar}); })`
+    );
+  }
+
   private emitCall(expr: CallExpr): string {
     const callee = expr.callee;
 
@@ -9442,6 +9563,9 @@ class Emitter {
         return this.emitSetMethodCall(expr, prop, baseType);
       }
       if (isPromiseType(baseType)) {
+        if (prop.name === "then") {
+          return this.emitPromiseThenCall(expr, prop, baseType);
+        }
         throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
       }
       if (baseType.kind === "string") {
@@ -12341,6 +12465,9 @@ class Emitter {
           throw new CodegenError({ pos: prop.pos }, `unsupported method '.${m}' on ${typeIdent(baseType)}`);
         }
         if (isPromiseType(baseType)) {
+          if (prop.name === "then") {
+            return this.inferPromiseThenCall(expr, baseType);
+          }
           throw this.promiseRuntimeDeferredError({ pos: prop.pos }, `Promise method '.${prop.name}'`);
         }
         if (baseType.kind === "string") {

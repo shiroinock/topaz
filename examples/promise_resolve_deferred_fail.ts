@@ -1,2 +1,2 @@
 const value = Promise.resolve(42);
-value.then((n: number): number => n + 1);
+value.then((n: number): Promise<number> => Promise.resolve(n + 1));

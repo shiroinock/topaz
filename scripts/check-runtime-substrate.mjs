@@ -38,7 +38,7 @@ const CATEGORY = {
   NUMBER: "number/parse/libm formatting substrate",
   CONSOLE: "console IO helpers",
   CONTAINER: "container macro families / hash / key equality",
-  PROMISE: "promise value allocation substrate",
+  PROMISE: "promise value/continuation substrate",
   EXCEPTION: "exception setjmp/longjmp substrate",
 };
 
@@ -54,6 +54,7 @@ const MIGRATION = {
   BIGINT_LIMB_INTRINSIC_FAMILY: "bigint-limb-intrinsic-family",
   C_ABI_TYPE: "c-abi-type-boundary",
   PROMISE_VALUE: "promise-value-boundary",
+  PROMISE_CONTINUATION: "promise-continuation-boundary",
 };
 
 const NEXT = {
@@ -79,6 +80,8 @@ const NEXT = {
     "Pinned as the pre-v0.2 generated-C/runtime ABI type substrate for TOPAZ_RUNTIME_H, topaz_opt_wrap_number, topaz_opt_wrap_boolean, topaz_opt_wrap_string, topaz_opt_absent_number, topaz_opt_absent_boolean, topaz_opt_absent_string, and topaz_opt_passthrough because generated C, runtime container macros, optional narrowing, Map.get, optional chaining, nullish coalescing, and scalar T | undefined coercion share these optional wrapper, absent sentinel, passthrough, ABI, and layout shapes; moving them requires a future explicit generated-C ABI/type-layout/backend decision rather than helper-by-helper runtime prelude migration.",
   PROMISE_VALUE:
     "Pinned as the Phase 5.2 Topaz-owned Promise value allocation boundary for fulfilled/rejected state, copied fulfillment payload storage, and class-instance rejection payloads. Moving it requires the next scheduler continuation / async lowering design rather than fake synchronous Promise semantics.",
+  PROMISE_CONTINUATION:
+    "Pinned as the Phase 5.3 single-thread Promise continuation/microtask boundary for pending Promise state, continuation registration, FIFO microtask scheduling, fulfillment payload reads, and scheduler draining. Moving it requires the async function/await frame ABI design rather than synchronous Promise callbacks or a user-visible scheduler API.",
 };
 
 const CLOSED_MIGRATION_LANES = [
@@ -263,6 +266,60 @@ const inventory = {
     reason: "opaque rejected Promise allocation storing a class-instance rejection payload.",
     migration: MIGRATION.PROMISE_VALUE,
     next: NEXT.PROMISE_VALUE,
+  },
+  topaz_promise_new_pending: {
+    category: CATEGORY.PROMISE,
+    reason: "opaque pending Promise allocation used by continuation targets.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_microtask_enqueue: {
+    category: CATEGORY.PROMISE,
+    reason: "single-thread FIFO Promise continuation scheduling substrate.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_settle_continuations: {
+    category: CATEGORY.PROMISE,
+    reason: "settled Promise continuation dispatch / rejection propagation substrate.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_fulfill_copy: {
+    category: CATEGORY.PROMISE,
+    reason: "fulfill an existing pending Promise with copied payload storage and schedule continuations.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_fulfill_void: {
+    category: CATEGORY.PROMISE,
+    reason: "fulfill an existing pending Promise<void> and schedule continuations.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_reject_with: {
+    category: CATEGORY.PROMISE,
+    reason: "reject an existing pending Promise with a class-instance payload and propagate continuations.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_fulfilled_payload: {
+    category: CATEGORY.PROMISE,
+    reason: "typed continuation trampoline payload read boundary for fulfilled Promises.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_then: {
+    category: CATEGORY.PROMISE,
+    reason: "register a fulfillment continuation and return the chained pending Promise.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_drain_microtasks: {
+    category: CATEGORY.PROMISE,
+    reason: "single-thread Promise microtask queue drain called from generated main.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
   },
 
   topaz_fmod: {
