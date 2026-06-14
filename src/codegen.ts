@@ -5349,12 +5349,17 @@ class Emitter {
                   this.assertNotVoid(annotatedInitializerType, { pos: s.pos }, "await initializer binding type");
                   expectedInitializerType = annotatedInitializerType;
                 }
-                const multiAwait = this.tryBuildMultiAwaitCallArgExpression(
-                  initMaybe,
-                  `__topaz_init_await_${steps.length}`,
-                  steps.length,
-                  expectedInitializerType,
-                );
+                const multiAwait =
+                  this.tryBuildMultiAwaitBinaryInitializerExpression(
+                    initMaybe,
+                    `__topaz_init_await_${steps.length}`,
+                  ) ??
+                  this.tryBuildMultiAwaitCallArgExpression(
+                    initMaybe,
+                    `__topaz_init_await_${steps.length}`,
+                    steps.length,
+                    expectedInitializerType,
+                  );
                 if (multiAwait === undefined) {
                   throw new CodegenError(
                     { pos: initializerAwaits[1].pos },
@@ -6532,6 +6537,70 @@ class Emitter {
       },
       steps: plannedSteps,
     };
+  }
+
+  private tryBuildMultiAwaitBinaryInitializerExpression(
+    expr: Expr,
+    tempPrefix: string,
+  ): MultiAwaitCallArgPlan | undefined {
+    const rootMaybe = this.unwrapParenExpr(expr);
+    if (rootMaybe.kind !== "bin_op" || rootMaybe.op !== "+") return undefined;
+
+    const leftAwaits = this.collectAwaitExprsInExpr(rootMaybe.lhs);
+    const rightAwaits = this.collectAwaitExprsInExpr(rootMaybe.rhs);
+    const leftMaybe = this.unwrapParenExpr(rootMaybe.lhs);
+    const rightMaybe = this.unwrapParenExpr(rootMaybe.rhs);
+    if (leftAwaits.length !== 1) return undefined;
+    if (rightAwaits.length !== 1) return undefined;
+    if (leftMaybe.kind !== "await_expr") return undefined;
+    if (rightMaybe.kind !== "await_expr") return undefined;
+    if (leftAwaits[0].pos !== leftMaybe.pos || leftAwaits[0].end !== leftMaybe.end) return undefined;
+    if (rightAwaits[0].pos !== rightMaybe.pos || rightAwaits[0].end !== rightMaybe.end) return undefined;
+
+    const leftOperandInfo = this.resolveAwaitOperand(leftMaybe.operand, undefined);
+    if (leftOperandInfo.awaitedType.kind === "void") return undefined;
+    const rightOperandInfo = this.resolveAwaitOperand(rightMaybe.operand, undefined);
+    if (rightOperandInfo.awaitedType.kind === "void") return undefined;
+
+    let transformedExpr: Expr = expr;
+    const steps: Array<MultiAwaitCallArgStepPlan> = [];
+    const leftTempName = `${tempPrefix}_0`;
+    this.scope.declareBinding(leftTempName, leftOperandInfo.awaitedType, /* isConst */ true, { pos: leftMaybe.pos });
+    const leftTempExpr: IdentExpr = {
+      kind: "ident",
+      name: leftTempName,
+      pos: leftMaybe.pos,
+      end: leftMaybe.end,
+    };
+    transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, leftMaybe, leftTempExpr);
+    steps.push({
+      awaitExpr: leftMaybe,
+      operandInfo: leftOperandInfo,
+      awaitedType: leftOperandInfo.awaitedType,
+      tempName: leftTempName,
+      preAwaitReceiverTemps: [],
+      preAwaitArgTemps: [],
+    });
+
+    const rightTempName = `${tempPrefix}_1`;
+    this.scope.declareBinding(rightTempName, rightOperandInfo.awaitedType, /* isConst */ true, { pos: rightMaybe.pos });
+    const rightTempExpr: IdentExpr = {
+      kind: "ident",
+      name: rightTempName,
+      pos: rightMaybe.pos,
+      end: rightMaybe.end,
+    };
+    transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, rightMaybe, rightTempExpr);
+    steps.push({
+      awaitExpr: rightMaybe,
+      operandInfo: rightOperandInfo,
+      awaitedType: rightOperandInfo.awaitedType,
+      tempName: rightTempName,
+      preAwaitReceiverTemps: [],
+      preAwaitArgTemps: [],
+    });
+
+    return { transformedExpr, steps };
   }
 
   private tryBuildPostAwaitCallArgSiblingExpression(
