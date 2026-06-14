@@ -266,7 +266,8 @@ type MultiAwaitCallArgAwait = {
 type MultiAwaitLeafEvent =
   | { kind: "await"; awaitExpr: AwaitExpr }
   | { kind: "pure"; expr: Expr }
-  | { kind: "snapshot"; expr: Expr };
+  | { kind: "snapshot"; expr: Expr }
+  | { kind: "nested_call"; expr: CallExpr };
 
 type MultiAwaitCallArgEvent =
   | { kind: "await"; argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }
@@ -6592,12 +6593,13 @@ class Emitter {
         return undefined;
       }
       const events: Array<MultiAwaitLeafEvent> = [];
-      if (!this.collectMultiAwaitBinaryLeafEvents(unwrapped, events)) {
+      if (!this.collectMultiAwaitCallArgBinaryLeafEvents(unwrapped, events)) {
         return undefined;
       }
       let binaryAwaitCount = 0;
       for (const event of events) {
         if (event.kind === "await") binaryAwaitCount++;
+        else if (event.kind === "nested_call") binaryAwaitCount += this.collectAwaitExprsInExpr(event.expr).length;
       }
       if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) {
         return undefined;
@@ -6630,6 +6632,32 @@ class Emitter {
             nestedIndex,
             nestedArgIndex,
           });
+        } else if (event.kind === "nested_call") {
+          const childNestedIndex = nestedCallArgs.length;
+          const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+            event.expr,
+            outerArgIndex,
+            childNestedIndex,
+            tempPrefix,
+            awaitedArgs,
+            callArgEvents,
+            nestedCallArgs,
+          );
+          if (childPlan === undefined) {
+            return undefined;
+          }
+          const transformedBinaryArg = transformedBinaryArgs.get(nestedArgIndex);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          transformedBinaryArgs.set(
+            nestedArgIndex,
+            this.replaceExactExprInExpr(transformedBinaryArg, event.expr, childPlan.resultTempExpr),
+          );
+          const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
+          nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
+          nestedPlan.awaitedArgDependencies.push({ awaitIndex: firstChildAwaitIndex, argIndex: nestedArgIndex });
+          callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
         }
       }
     }
@@ -6711,7 +6739,7 @@ class Emitter {
 
     const awaitedArgs: Array<MultiAwaitCallArgAwait> = [];
     const callArgEvents: Array<MultiAwaitCallArgEvent> = [];
-    const binaryArgIndexes = new Set<number>();
+    const transformedBinaryArgs = new Map<number, Expr>();
     const nestedCallArgs: Array<MultiAwaitNestedCallArgPlan> = [];
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
@@ -6752,17 +6780,18 @@ class Emitter {
         return undefined;
       }
       const events: Array<MultiAwaitLeafEvent> = [];
-      if (!this.collectMultiAwaitBinaryLeafEvents(unwrapped, events)) {
+      if (!this.collectMultiAwaitCallArgBinaryLeafEvents(unwrapped, events)) {
         return undefined;
       }
       let binaryAwaitCount = 0;
       for (const event of events) {
         if (event.kind === "await") binaryAwaitCount++;
+        else if (event.kind === "nested_call") binaryAwaitCount += this.collectAwaitExprsInExpr(event.expr).length;
       }
       if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) {
         return undefined;
       }
-      binaryArgIndexes.add(i);
+      transformedBinaryArgs.set(i, arg);
       for (const event of events) {
         if (event.kind === "await") {
           const tempName = `${tempPrefix}_${awaitedArgs.length}`;
@@ -6776,6 +6805,29 @@ class Emitter {
           callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
         } else if (event.kind === "snapshot") {
           callArgEvents.push({ kind: "snapshot", argIndex: i, expr: event.expr, nestedIndex: -1, nestedArgIndex: -1 });
+        } else if (event.kind === "nested_call") {
+          const nestedIndex = nestedCallArgs.length;
+          const nestedPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+            event.expr,
+            i,
+            nestedIndex,
+            tempPrefix,
+            awaitedArgs,
+            callArgEvents,
+            nestedCallArgs,
+          );
+          if (nestedPlan === undefined) {
+            return undefined;
+          }
+          const transformedBinaryArg = transformedBinaryArgs.get(i);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          transformedBinaryArgs.set(
+            i,
+            this.replaceExactExprInExpr(transformedBinaryArg, event.expr, nestedPlan.resultTempExpr),
+          );
+          callArgEvents.push({ kind: "materialize", argIndex: i, nestedIndex });
         }
       }
     }
@@ -6789,10 +6841,6 @@ class Emitter {
     const plannedSteps: Array<MultiAwaitCallArgStepPlan> = [];
     if (receiverAwaitStep !== undefined) plannedSteps.push(receiverAwaitStep);
     const awaitedTempByArg = new Map<number, IdentExpr>();
-    const transformedBinaryArgs = new Map<number, Expr>();
-    for (const argIndex of binaryArgIndexes) {
-      transformedBinaryArgs.set(argIndex, root.args[argIndex]);
-    }
     const binarySnapshotsByAwait: Array<AwaitSnapshotsForAwait> = [];
     let hasCallArgSnapshotEvent = false;
     for (const event of callArgEvents) {
@@ -7767,6 +7815,33 @@ class Emitter {
     return (
       this.collectMultiAwaitBinaryLeafEvents(root.lhs, out) &&
       this.collectMultiAwaitBinaryLeafEvents(root.rhs, out)
+    );
+  }
+
+  private collectMultiAwaitCallArgBinaryLeafEvents(expr: Expr, out: Array<MultiAwaitLeafEvent>): boolean {
+    const root = this.unwrapParenExpr(expr);
+    if (root.kind === "await_expr") {
+      if (this.collectAwaitExprsInExpr(root.operand).length > 0) return false;
+      out.push({ kind: "await", awaitExpr: root });
+      return true;
+    }
+    if (this.isSideEffectFreeMultiAwaitLeaf(root)) {
+      out.push({ kind: "pure", expr: root });
+      return true;
+    }
+    if (root.kind === "call_expr" && this.collectAwaitExprsInExpr(root).length > 0) {
+      out.push({ kind: "nested_call", expr: root });
+      return true;
+    }
+    if (this.isSnapshotMultiAwaitLeaf(root)) {
+      out.push({ kind: "snapshot", expr: root });
+      return true;
+    }
+    if (root.kind !== "bin_op") return false;
+    if (root.op === "&&" || root.op === "||" || root.op === "??") return false;
+    return (
+      this.collectMultiAwaitCallArgBinaryLeafEvents(root.lhs, out) &&
+      this.collectMultiAwaitCallArgBinaryLeafEvents(root.rhs, out)
     );
   }
 
