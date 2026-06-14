@@ -6952,17 +6952,17 @@ class Emitter {
       }
       if (value.kind === "array_lit") {
         const arrayEvents: Array<MultiAwaitLeafEvent> = [];
-        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, /* allowSnapshots */ false)) return false;
+        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, allowSnapshots)) return false;
         for (const event of arrayEvents) {
-          if (event.kind === "await") out.push(event);
+          if (allowSnapshots || event.kind === "await") out.push(event);
         }
         continue;
       }
       if (value.kind === "object_lit") {
         const objectEvents: Array<MultiAwaitLeafEvent> = [];
-        if (!allowPureLeaves || !this.collectMultiAwaitObjectLiteralLeaves(value, allowPureLeaves, objectEvents, /* allowSnapshots */ false)) return false;
+        if (!allowPureLeaves || !this.collectMultiAwaitObjectLiteralLeaves(value, allowPureLeaves, objectEvents, allowSnapshots)) return false;
         for (const event of objectEvents) {
-          if (event.kind === "await") out.push(event);
+          if (allowSnapshots || event.kind === "await") out.push(event);
         }
         continue;
       }

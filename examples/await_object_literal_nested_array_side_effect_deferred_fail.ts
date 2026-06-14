@@ -2,16 +2,12 @@
 
 type Payload = { values: Array<number>; tail: number };
 
-function mark(label: string, value: number): number {
-  console.log(label);
-  return value;
-}
-
 async function answer(): Promise<number> {
+  let side = 0;
   const payload: Payload = {
     values: [
       await Promise.resolve(1),
-      mark("nested middle", 2),
+      (side = side + 2),
       await Promise.resolve(3),
     ],
     tail: 4,
