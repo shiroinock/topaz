@@ -5813,7 +5813,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, narrow multi-await binary/array literals in initializers/returns/expression statements, and narrow contextual multi-await object literals in initializers/returns are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, narrow multi-await binary/array literals in initializers/returns/expression statements, narrow contextual multi-await object literals in initializers/returns, and narrow multi-await binary call arguments are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -6385,15 +6385,29 @@ class Emitter {
       }
     }
 
-    const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr }> = [];
+    const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }> = [];
+    let binaryAwaitArgIndex = -1;
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
       const found = this.collectAwaitExprsInExpr(arg);
       if (found.length === 0) continue;
       const unwrapped = this.unwrapParenExpr(arg);
-      if (found.length !== 1 || unwrapped.kind !== "await_expr") return undefined;
-      if (found[0].pos !== unwrapped.pos || found[0].end !== unwrapped.end) return undefined;
-      awaitedArgs.push({ argIndex: i, awaitExpr: unwrapped });
+      if (found.length === 1 && unwrapped.kind === "await_expr") {
+        if (binaryAwaitArgIndex >= 0) return undefined;
+        if (found[0].pos !== unwrapped.pos || found[0].end !== unwrapped.end) return undefined;
+        awaitedArgs.push({ argIndex: i, awaitExpr: unwrapped, binaryArg: false });
+        continue;
+      }
+      if (unwrapped.kind !== "bin_op" || binaryAwaitArgIndex >= 0 || awaitedArgs.length > 0) {
+        return undefined;
+      }
+      const binaryAwaits: Array<AwaitExpr> = [];
+      if (!this.collectMultiAwaitBinaryTreeLeaves(unwrapped, binaryAwaits)) return undefined;
+      if (binaryAwaits.length !== found.length || binaryAwaits.length < 2) return undefined;
+      binaryAwaitArgIndex = i;
+      for (const awaitExpr of binaryAwaits) {
+        awaitedArgs.push({ argIndex: i, awaitExpr, binaryArg: true });
+      }
     }
     if (receiverAwaitStep === undefined && awaitedArgs.length < 2) return undefined;
     if (receiverAwaitStep !== undefined && awaitedArgs.length < 1) return undefined;
@@ -6401,19 +6415,30 @@ class Emitter {
     const plannedSteps: Array<MultiAwaitCallArgStepPlan> = [];
     if (receiverAwaitStep !== undefined) plannedSteps.push(receiverAwaitStep);
     const awaitedTempByArg = new Map<number, IdentExpr>();
+    let hasTransformedBinaryArg = false;
+    let transformedBinaryArg: Expr = root.args[awaitedArgs[0].argIndex];
+    if (binaryAwaitArgIndex >= 0) {
+      hasTransformedBinaryArg = true;
+      transformedBinaryArg = root.args[binaryAwaitArgIndex];
+    }
     for (let i = 0; i < awaitedArgs.length; i++) {
       const awaited = awaitedArgs[i];
       const operandInfo = this.resolveAwaitOperand(awaited.awaitExpr.operand, undefined);
+      if (awaited.binaryArg && operandInfo.awaitedType.kind === "void") return undefined;
       const tempName = `${tempPrefix}_${i}`;
       if (operandInfo.awaitedType.kind !== "void") {
         this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaited.awaitExpr.pos });
       }
-      awaitedTempByArg.set(awaited.argIndex, {
+      const tempExpr: IdentExpr = {
         kind: "ident",
         name: tempName,
         pos: awaited.awaitExpr.pos,
         end: awaited.awaitExpr.end,
-      });
+      };
+      if (!awaited.binaryArg) awaitedTempByArg.set(awaited.argIndex, tempExpr);
+      if (awaited.binaryArg) {
+        transformedBinaryArg = this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr);
+      }
       plannedSteps.push({
         awaitExpr: awaited.awaitExpr,
         operandInfo,
@@ -6428,6 +6453,7 @@ class Emitter {
     for (let i = 0; i < root.args.length; i++) {
       const awaitedTemp = awaitedTempByArg.get(i);
       if (awaitedTemp !== undefined) signatureArgs.push(awaitedTemp);
+      else if (binaryAwaitArgIndex === i && hasTransformedBinaryArg) signatureArgs.push(transformedBinaryArg);
       else signatureArgs.push(root.args[i]);
     }
     const signatureCall: CallExpr = {
@@ -6551,6 +6577,10 @@ class Emitter {
       const awaitedTemp = awaitedTempByArg.get(i);
       if (awaitedTemp !== undefined) {
         transformedArgs.push(awaitedTemp);
+        continue;
+      }
+      if (binaryAwaitArgIndex === i && hasTransformedBinaryArg) {
+        transformedArgs.push(transformedBinaryArg);
         continue;
       }
       const argTemp = argTempByArg.get(i);

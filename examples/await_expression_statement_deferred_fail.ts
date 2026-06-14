@@ -10,7 +10,7 @@ function mark(label: string, value: number): number {
 }
 
 async function answer(): Promise<number> {
-  foo(await Promise.resolve(2) + await Promise.resolve(mark("post", 1)));
+  foo(await Promise.resolve(1) + mark("middle", 2) + await Promise.resolve(3));
   return 0;
 }
 
