@@ -7,9 +7,8 @@ function mark(label: string, value: number): number {
   return value;
 }
 
-function wrap(label: string, value: number): number {
-  console.log(label);
-  return value;
+function items(value: number): Array<number> {
+  return [value];
 }
 
 function readBox(box: Box): number {
@@ -19,7 +18,7 @@ function readBox(box: Box): number {
 async function bad(): Promise<number> {
   return readBox({
     a: {
-      b: [...[wrap("nested", await Promise.resolve(mark("inner", 2)))]],
+      b: [...items(await Promise.resolve(mark("inner", 2)))],
     },
   });
 }

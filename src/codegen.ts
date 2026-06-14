@@ -6493,10 +6493,15 @@ class Emitter {
       }
     } else {
       for (const elem of literal.elems) {
-        if (elem.kind !== "elem") {
-          return undefined;
+        if (elem.kind === "elem") {
+          children.push(elem.expr);
+        } else {
+          const spreadSource = this.unwrapParenExpr(elem.expr);
+          if (spreadSource.kind !== "object_lit" && spreadSource.kind !== "array_lit") {
+            return undefined;
+          }
+          children.push(spreadSource);
         }
-        children.push(elem.expr);
       }
     }
     for (const child of children) {
