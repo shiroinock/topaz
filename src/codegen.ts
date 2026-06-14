@@ -5364,6 +5364,7 @@ class Emitter {
                   this.tryBuildMultiAwaitObjectLiteralExpression(
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
+                    expectedInitializerType !== undefined,
                   ) ??
                   this.tryBuildMultiAwaitCallArgExpression(
                     initMaybe,
@@ -5539,6 +5540,7 @@ class Emitter {
                 this.tryBuildMultiAwaitObjectLiteralExpression(
                   s.expr,
                   `__topaz_stmt_await_${steps.length}`,
+                  false,
                 ) ??
                 this.tryBuildMultiAwaitCallArgExpression(
                   s.expr,
@@ -5662,6 +5664,7 @@ class Emitter {
                 this.tryBuildMultiAwaitObjectLiteralExpression(
                   valueMaybe,
                   `__topaz_return_await_${steps.length}`,
+                  true,
                 ) ??
                 this.tryBuildMultiAwaitCallArgExpression(
                   valueMaybe,
@@ -6719,10 +6722,11 @@ class Emitter {
   private tryBuildMultiAwaitObjectLiteralExpression(
     expr: Expr,
     tempPrefix: string,
+    allowPureLeaves: boolean,
   ): MultiAwaitCallArgPlan | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "object_lit") return undefined;
-    const awaits = this.collectMultiAwaitObjectLiteralProperties(rootMaybe);
+    const awaits = this.collectMultiAwaitObjectLiteralProperties(rootMaybe, allowPureLeaves);
     if (awaits === undefined || awaits.length < 2) return undefined;
 
     let transformedExpr: Expr = expr;
@@ -6777,15 +6781,21 @@ class Emitter {
     return true;
   }
 
-  private collectMultiAwaitObjectLiteralProperties(expr: ObjectLitExpr): Array<AwaitExpr> | undefined {
+  private collectMultiAwaitObjectLiteralProperties(
+    expr: ObjectLitExpr,
+    allowPureLeaves: boolean,
+  ): Array<AwaitExpr> | undefined {
     if (expr.props.length < 2) return undefined;
     const awaits: Array<AwaitExpr> = [];
     for (const prop of expr.props) {
       if (prop.kind !== "prop_kv") return undefined;
       const value = this.unwrapParenExpr(prop.value);
-      if (value.kind !== "await_expr") return undefined;
-      if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
-      awaits.push(value);
+      if (value.kind === "await_expr") {
+        if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
+        awaits.push(value);
+        continue;
+      }
+      if (!allowPureLeaves || !this.isSideEffectFreeMultiAwaitLeaf(value)) return undefined;
     }
     return awaits;
   }
