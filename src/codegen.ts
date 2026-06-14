@@ -245,6 +245,10 @@ type MultiAwaitLeafEvent =
   | { kind: "pure"; expr: Expr }
   | { kind: "snapshot"; expr: Expr };
 
+type MultiAwaitCallArgEvent =
+  | { kind: "await"; argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }
+  | { kind: "snapshot"; expr: Expr };
+
 type AwaitOperandInfo = {
   operandType: TopazType;
   sourcePromiseType: TopazType;
@@ -6444,7 +6448,7 @@ class Emitter {
     }
 
     const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }> = [];
-    const binaryLeafEvents: Array<MultiAwaitLeafEvent> = [];
+    const callArgEvents: Array<MultiAwaitCallArgEvent> = [];
     let binaryAwaitArgIndex = -1;
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
@@ -6452,12 +6456,12 @@ class Emitter {
       if (found.length === 0) continue;
       const unwrapped = this.unwrapParenExpr(arg);
       if (found.length === 1 && unwrapped.kind === "await_expr") {
-        if (binaryAwaitArgIndex >= 0) return undefined;
         if (found[0].pos !== unwrapped.pos || found[0].end !== unwrapped.end) return undefined;
         awaitedArgs.push({ argIndex: i, awaitExpr: unwrapped, binaryArg: false });
+        callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: unwrapped, binaryArg: false });
         continue;
       }
-      if (unwrapped.kind !== "bin_op" || binaryAwaitArgIndex >= 0 || awaitedArgs.length > 0) {
+      if (unwrapped.kind !== "bin_op" || binaryAwaitArgIndex >= 0) {
         return undefined;
       }
       const events: Array<MultiAwaitLeafEvent> = [];
@@ -6466,12 +6470,14 @@ class Emitter {
       for (const event of events) {
         if (event.kind === "await") binaryAwaitCount++;
       }
-      if (binaryAwaitCount !== found.length || binaryAwaitCount < 2) return undefined;
+      if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) return undefined;
       binaryAwaitArgIndex = i;
       for (const event of events) {
-        binaryLeafEvents.push(event);
         if (event.kind === "await") {
           awaitedArgs.push({ argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
+          callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
+        } else if (event.kind === "snapshot") {
+          callArgEvents.push({ kind: "snapshot", expr: event.expr });
         }
       }
     }
@@ -6489,18 +6495,19 @@ class Emitter {
     }
     const binarySnapshotsByAwait: Array<AwaitSnapshotsForAwait> = [];
     if (binaryAwaitArgIndex >= 0) {
-      let pendingSnapshots: Array<AwaitSnapshotTemp> = [];
+      let pendingSnapshots: Array<Expr> = [];
       let snapshotIndex = 0;
-      let seenAwaits = 0;
-      for (const event of binaryLeafEvents) {
+      for (const event of callArgEvents) {
         switch (event.kind) {
-          case "pure":
-            break;
           case "snapshot": {
-            const snapshotExpr = event.expr;
-            const exprType = this.inferType(snapshotExpr);
-            this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await call-argument binary snapshot value");
-            if (seenAwaits < awaitedArgs.length) {
+            pendingSnapshots.push(event.expr);
+            break;
+          }
+          case "await": {
+            const preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
+            for (const snapshotExpr of pendingSnapshots) {
+              const exprType = this.inferType(snapshotExpr);
+              this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await call-argument binary snapshot value");
               const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
               snapshotIndex++;
               this.scope.declareBinding(tempName, exprType, /* isConst */ true, { pos: snapshotExpr.pos });
@@ -6511,18 +6518,13 @@ class Emitter {
                 end: snapshotExpr.end,
               };
               transformedBinaryArg = this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr);
-              pendingSnapshots.push({ tempName, expr: snapshotExpr, exprType });
+              preAwaitSnapshotTemps.push({ tempName, expr: snapshotExpr, exprType });
             }
-            break;
-          }
-          case "await": {
-            const preAwaitSnapshotTemps = pendingSnapshots;
-            const nextPendingSnapshots: Array<AwaitSnapshotTemp> = [];
-            pendingSnapshots = nextPendingSnapshots;
             if (preAwaitSnapshotTemps.length > 0) {
               binarySnapshotsByAwait.push({ awaitExpr: event.awaitExpr, temps: preAwaitSnapshotTemps });
             }
-            seenAwaits++;
+            const nextPendingSnapshots: Array<Expr> = [];
+            pendingSnapshots = nextPendingSnapshots;
             break;
           }
         }
@@ -7573,11 +7575,7 @@ class Emitter {
           const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
           lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
         }
-        for (const temp of step.preAwaitArgTemps) {
-          const expr = this.emitWithExpected(temp.arg, temp.argType);
-          lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
-        }
-        this.emitAwaitSnapshotTempStores(step.preAwaitSnapshotTemps, frameRef, lines, indent);
+        this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
       case "return": {
@@ -7585,11 +7583,7 @@ class Emitter {
           const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
           lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
         }
-        for (const temp of step.preAwaitArgTemps) {
-          const expr = this.emitWithExpected(temp.arg, temp.argType);
-          lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
-        }
-        this.emitAwaitSnapshotTempStores(step.preAwaitSnapshotTemps, frameRef, lines, indent);
+        this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
       case "statement": {
@@ -7601,11 +7595,7 @@ class Emitter {
           const indexExpr = this.emitWithExpected(indexTemp.index, indexTemp.indexType);
           lines.push(`${indent}${frameRef}->${indexTemp.tempName} = ${indexExpr};`);
         }
-        for (const temp of step.preAwaitArgTemps) {
-          const expr = this.emitWithExpected(temp.arg, temp.argType);
-          lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
-        }
-        this.emitAwaitSnapshotTempStores(step.preAwaitSnapshotTemps, frameRef, lines, indent);
+        this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
       case "binding":
@@ -7613,15 +7603,30 @@ class Emitter {
     }
   }
 
-  private emitAwaitSnapshotTempStores(
-    temps: Array<AwaitSnapshotTemp>,
+  private emitAwaitArgAndSnapshotTempStores(
+    argTemps: Array<AwaitCallArgTemp>,
+    snapshotTemps: Array<AwaitSnapshotTemp>,
     frameRef: string,
     lines: string[],
     indent: string,
   ): void {
-    for (const temp of temps) {
-      const expr = this.emitWithExpected(temp.expr, temp.exprType);
-      lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+    let argIndex = 0;
+    let snapshotIndex = 0;
+    while (argIndex < argTemps.length || snapshotIndex < snapshotTemps.length) {
+      if (
+        argIndex < argTemps.length &&
+        (snapshotIndex >= snapshotTemps.length || argTemps[argIndex].arg.pos <= snapshotTemps[snapshotIndex].expr.pos)
+      ) {
+        const temp = argTemps[argIndex];
+        const expr = this.emitWithExpected(temp.arg, temp.argType);
+        lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+        argIndex++;
+      } else {
+        const temp = snapshotTemps[snapshotIndex];
+        const expr = this.emitWithExpected(temp.expr, temp.exprType);
+        lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+        snapshotIndex++;
+      }
     }
   }
 
