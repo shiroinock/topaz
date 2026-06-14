@@ -235,7 +235,7 @@ type MultiAwaitCallArgPlan = {
   steps: Array<MultiAwaitCallArgStepPlan>;
 };
 
-type MultiAwaitBinaryLeafEvent =
+type MultiAwaitLeafEvent =
   | { kind: "await"; awaitExpr: AwaitExpr }
   | { kind: "pure"; expr: Expr }
   | { kind: "snapshot"; expr: Expr };
@@ -6677,7 +6677,7 @@ class Emitter {
   ): MultiAwaitCallArgPlan | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "bin_op") return undefined;
-    const events: Array<MultiAwaitBinaryLeafEvent> = [];
+    const events: Array<MultiAwaitLeafEvent> = [];
     if (!this.collectMultiAwaitBinaryLeafEvents(rootMaybe, events)) return undefined;
     const awaitCount = events.filter((event) => event.kind === "await").length;
     if (awaitCount < 2) return undefined;
@@ -6748,32 +6748,66 @@ class Emitter {
   ): MultiAwaitCallArgPlan | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "array_lit") return undefined;
-    const awaits = this.collectMultiAwaitArrayLiteralElements(rootMaybe);
-    if (awaits === undefined || awaits.length < 2) return undefined;
+    const events = this.collectMultiAwaitArrayLiteralElements(rootMaybe);
+    if (events === undefined) return undefined;
+    const awaitCount = events.filter((event) => event.kind === "await").length;
+    if (awaitCount < 2) return undefined;
 
     let transformedExpr: Expr = expr;
     const steps: Array<MultiAwaitCallArgStepPlan> = [];
-    for (const awaitExpr of awaits) {
-      const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
-      if (operandInfo.awaitedType.kind === "void") return undefined;
-      const tempName = `${tempPrefix}_${steps.length}`;
-      this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
-      const tempExpr: IdentExpr = {
-        kind: "ident",
-        name: tempName,
-        pos: awaitExpr.pos,
-        end: awaitExpr.end,
-      };
-      transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaitExpr, tempExpr);
-      steps.push({
-        awaitExpr,
-        operandInfo,
-        awaitedType: operandInfo.awaitedType,
-        tempName,
-        preAwaitReceiverTemps: [],
-        preAwaitArgTemps: [],
-        preAwaitSnapshotTemps: [],
-      });
+    let pendingSnapshots: Array<AwaitSnapshotTemp> = [];
+    let snapshotIndex = 0;
+    for (const event of events) {
+      switch (event.kind) {
+        case "pure":
+          break;
+        case "snapshot": {
+          const snapshotExpr = event.expr;
+          const exprType = this.inferType(snapshotExpr);
+          this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await array snapshot value");
+          if (steps.length < awaitCount) {
+            const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
+            snapshotIndex++;
+            this.scope.declareBinding(tempName, exprType, /* isConst */ true, { pos: snapshotExpr.pos });
+            const tempExpr: IdentExpr = {
+              kind: "ident",
+              name: tempName,
+              pos: snapshotExpr.pos,
+              end: snapshotExpr.end,
+            };
+            transformedExpr = this.replaceExactExprInExpr(transformedExpr, snapshotExpr, tempExpr);
+            pendingSnapshots.push({ tempName, expr: snapshotExpr, exprType });
+          }
+          break;
+        }
+        case "await": {
+          const awaitExpr = event.awaitExpr;
+          const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
+          if (operandInfo.awaitedType.kind === "void") return undefined;
+          const tempName = `${tempPrefix}_${steps.length}`;
+          this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
+          const tempExpr: IdentExpr = {
+            kind: "ident",
+            name: tempName,
+            pos: awaitExpr.pos,
+            end: awaitExpr.end,
+          };
+          transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaitExpr, tempExpr);
+          const preAwaitSnapshotTemps = pendingSnapshots;
+          const nextPendingSnapshots: Array<AwaitSnapshotTemp> = [];
+          pendingSnapshots = nextPendingSnapshots;
+          steps.push({
+            awaitExpr,
+            operandInfo,
+            awaitedType: operandInfo.awaitedType,
+            tempName,
+            preAwaitReceiverTemps: [],
+            preAwaitArgTemps: [],
+            preAwaitSnapshotTemps,
+          });
+          break;
+        }
+      }
     }
 
     return { transformedExpr, steps };
@@ -6817,27 +6851,39 @@ class Emitter {
     return { transformedExpr, steps };
   }
 
-  private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<AwaitExpr> | undefined {
-    const awaits: Array<AwaitExpr> = [];
-    if (!this.collectMultiAwaitArrayLiteralLeaves(expr, awaits)) return undefined;
-    return awaits;
+  private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<MultiAwaitLeafEvent> | undefined {
+    const events: Array<MultiAwaitLeafEvent> = [];
+    if (!this.collectMultiAwaitArrayLiteralLeaves(expr, events, /* allowSnapshots */ true)) return undefined;
+    return events;
   }
 
-  private collectMultiAwaitArrayLiteralLeaves(expr: ArrayLitExpr, awaits: Array<AwaitExpr>): boolean {
+  private collectMultiAwaitArrayLiteralLeaves(
+    expr: ArrayLitExpr,
+    out: Array<MultiAwaitLeafEvent>,
+    allowSnapshots: boolean,
+  ): boolean {
     if (expr.elems.length === 0) return false;
     for (const elem of expr.elems) {
       if (elem.kind !== "elem") return false;
       const value = this.unwrapParenExpr(elem.expr);
       if (value.kind === "array_lit") {
-        if (!this.collectMultiAwaitArrayLiteralLeaves(value, awaits)) return false;
+        if (!this.collectMultiAwaitArrayLiteralLeaves(value, out, allowSnapshots)) return false;
         continue;
       }
       if (value.kind === "await_expr") {
         if (this.collectAwaitExprsInExpr(value.operand).length > 0) return false;
-        awaits.push(value);
+        out.push({ kind: "await", awaitExpr: value });
         continue;
       }
-      if (!this.isSideEffectFreeMultiAwaitLeaf(value)) return false;
+      if (this.isSideEffectFreeMultiAwaitLeaf(value)) {
+        out.push({ kind: "pure", expr: value });
+        continue;
+      }
+      if (allowSnapshots && this.isSnapshotMultiAwaitLeaf(value)) {
+        out.push({ kind: "snapshot", expr: value });
+        continue;
+      }
+      return false;
     }
     return true;
   }
@@ -6870,7 +6916,11 @@ class Emitter {
         continue;
       }
       if (value.kind === "array_lit") {
-        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, awaits)) return false;
+        const arrayEvents: Array<MultiAwaitLeafEvent> = [];
+        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, /* allowSnapshots */ false)) return false;
+        for (const event of arrayEvents) {
+          if (event.kind === "await") awaits.push(event.awaitExpr);
+        }
         continue;
       }
       if (value.kind === "object_lit") {
@@ -6882,7 +6932,7 @@ class Emitter {
     return true;
   }
 
-  private collectMultiAwaitBinaryLeafEvents(expr: Expr, out: Array<MultiAwaitBinaryLeafEvent>): boolean {
+  private collectMultiAwaitBinaryLeafEvents(expr: Expr, out: Array<MultiAwaitLeafEvent>): boolean {
     const root = this.unwrapParenExpr(expr);
     if (root.kind === "await_expr") {
       if (this.collectAwaitExprsInExpr(root.operand).length > 0) return false;
@@ -6893,7 +6943,7 @@ class Emitter {
       out.push({ kind: "pure", expr: root });
       return true;
     }
-    if (this.isSnapshotMultiAwaitBinaryLeaf(root)) {
+    if (this.isSnapshotMultiAwaitLeaf(root)) {
       out.push({ kind: "snapshot", expr: root });
       return true;
     }
@@ -6921,7 +6971,7 @@ class Emitter {
     );
   }
 
-  private isSnapshotMultiAwaitBinaryLeaf(expr: Expr): boolean {
+  private isSnapshotMultiAwaitLeaf(expr: Expr): boolean {
     if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
@@ -7287,6 +7337,29 @@ class Emitter {
           pos: expr.pos,
           end: expr.end,
         };
+      case "array_lit":
+        {
+          const elems: Array<ArrayElem> = [];
+          for (const elem of expr.elems) {
+            if (elem.kind === "elem") {
+              elems.push({
+                kind: "elem",
+                expr: this.replaceExactExprInExpr(elem.expr, target, replacement),
+              });
+            } else {
+              elems.push({
+                kind: "spread",
+                expr: this.replaceExactExprInExpr(elem.expr, target, replacement),
+              });
+            }
+          }
+          return {
+            kind: "array_lit",
+            elems,
+            pos: expr.pos,
+            end: expr.end,
+          };
+        }
       default:
         return expr;
     }
