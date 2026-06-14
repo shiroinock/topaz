@@ -5350,7 +5350,7 @@ class Emitter {
                   expectedInitializerType = annotatedInitializerType;
                 }
                 const multiAwait =
-                  this.tryBuildMultiAwaitBinaryInitializerExpression(
+                  this.tryBuildMultiAwaitBinaryExpression(
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
                   ) ??
@@ -5604,12 +5604,17 @@ class Emitter {
           const returnAwaits = this.collectAwaitExprsInExpr(valueMaybe);
           if (returnAwaits.length > 0) {
             if (returnAwaits.length > 1) {
-              const multiAwait = this.tryBuildMultiAwaitCallArgExpression(
-                valueMaybe,
-                `__topaz_return_await_${steps.length}`,
-                steps.length,
-                payloadType,
-              );
+              const multiAwait =
+                this.tryBuildMultiAwaitBinaryExpression(
+                  valueMaybe,
+                  `__topaz_return_await_${steps.length}`,
+                ) ??
+                this.tryBuildMultiAwaitCallArgExpression(
+                  valueMaybe,
+                  `__topaz_return_await_${steps.length}`,
+                  steps.length,
+                  payloadType,
+                );
               if (multiAwait === undefined) {
                 throw new CodegenError(
                   { pos: returnAwaits[1].pos },
@@ -5780,7 +5785,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, and one terminal return expression await are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, and narrow multi-await binary + initializers/returns are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -6539,7 +6544,7 @@ class Emitter {
     };
   }
 
-  private tryBuildMultiAwaitBinaryInitializerExpression(
+  private tryBuildMultiAwaitBinaryExpression(
     expr: Expr,
     tempPrefix: string,
   ): MultiAwaitCallArgPlan | undefined {
