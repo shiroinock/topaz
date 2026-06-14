@@ -3028,6 +3028,7 @@ run_case async_binary_tree_multiple_await $'init left\nreturn left\nstmt left\ns
 run_case async_binary_mixed_pure_multiple_await $'init left\nreturn left\nstmt left\ncall left\nsync tail\ninit right\nreturn right\nstmt right\ncall right\ninit value\n15\nstmt done\nconsume\n42\ninit then\n15\nreturn then\n45\nstmt then\ncall then'
 run_case async_binary_side_effect_snapshot_multiple_await $'init left\nreturn left\nstmt left\nsync tail\ninit middle\ninit right\nreturn middle\nreturn right\nstmt middle\nstmt right\ninit value\n6\nstmt done\ninit then\n6\nreturn then\n60\nstmt then'
 run_case async_array_side_effect_snapshot_multiple_await $'init first\nreturn first\nstmt first\nsync tail\ninit middle\ninit second\nreturn middle\nreturn second\nstmt middle\nstmt second\ninit result\n6\nstmt done\ninit then\n6\nreturn then\n60\nstmt then'
+run_case async_object_side_effect_snapshot_multiple_await $'init left\nreturn left\nsync tail\ninit middle\ninit right\nreturn middle\nreturn right\ninit tail\ninit result\n10\nreturn tail\ninit then\n10\nreturn then\n100'
 run_case async_array_literal_multiple_await $'init first\nreturn first\nstmt first\nsync tail\ninit second\nreturn second\nstmt second\ninit third\nreturn third\nstmt done\ninit fourth\nstmt then\ninit result\n10\nreturn then\n60\ninit then\n10'
 run_case async_array_literal_mixed_pure_multiple_await $'init first\nreturn first\nstmt first\nsync tail\ninit second\nreturn second\nstmt second\ninit result\n21\nstmt done\ninit then\n21\nreturn then\n91\nstmt then'
 run_case async_object_literal_multiple_await $'init left\nreturn left\nstmt left\nsync tail\ninit right\nreturn right\nstmt right\ninit result\n3\nstmt done\ninit then\n3\nreturn then\n30\nstmt then'
@@ -3078,6 +3079,8 @@ run_case async_await_interface_field_compound_assignment $'sync pre\n3.5\ntop sy
 run_case async_await_array_element_compound_assignment $'sync pre\n15\n1\ntop\ndecl pre\narrow pre\nmethod pre\nexpr pre\nsync tail\nmethod post\nexpr post\nfifo marker\narrow post\nmethod then\n25\nexpr then\n34\narrow then\ntopaz ok\ndecl post\ndecl then\n2'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_mixed_side_effect_deferred_fail examples/await_object_literal_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_object_literal_nested_array_side_effect_deferred_fail examples/await_object_literal_nested_array_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_object_literal_nested_object_side_effect_deferred_fail examples/await_object_literal_nested_object_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_statement_mixed_pure_deferred_fail examples/await_object_literal_statement_mixed_pure_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_statement_shorthand_deferred_fail examples/await_object_literal_statement_shorthand_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_statement_nested_array_deferred_fail examples/await_object_literal_statement_nested_array_deferred_fail.ts "await expression lowering is deferred"
