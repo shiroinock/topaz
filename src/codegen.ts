@@ -5516,12 +5516,17 @@ class Emitter {
           const statementAwaits = this.collectAwaitExprsInExpr(s.expr);
           if (statementAwaits.length > 0) {
             if (statementAwaits.length > 1) {
-              const multiAwait = this.tryBuildMultiAwaitCallArgExpression(
-                s.expr,
-                `__topaz_stmt_await_${steps.length}`,
-                steps.length,
-                undefined,
-              );
+              const multiAwait =
+                this.tryBuildMultiAwaitBinaryExpression(
+                  s.expr,
+                  `__topaz_stmt_await_${steps.length}`,
+                ) ??
+                this.tryBuildMultiAwaitCallArgExpression(
+                  s.expr,
+                  `__topaz_stmt_await_${steps.length}`,
+                  steps.length,
+                  undefined,
+                );
               if (multiAwait === undefined) {
                 throw new CodegenError(
                   { pos: statementAwaits[1].pos },
