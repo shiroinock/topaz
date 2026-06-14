@@ -6304,6 +6304,49 @@ class Emitter {
     if (rootCallee.kind !== "ident" && rootCallee.kind !== "prop_access") return undefined;
     if (rootCallee.kind === "prop_access" && rootCallee.optional) return undefined;
 
+    let receiverAwaitStep: MultiAwaitCallArgStepPlan | undefined = undefined;
+    let signatureCallee: Expr = rootCallee;
+    if (rootCallee.kind === "prop_access") {
+      const receiverAwaits = this.collectAwaitExprsInExpr(rootCallee.receiver);
+      if (receiverAwaits.length > 0) {
+        const receiverMaybe = this.unwrapParenExpr(rootCallee.receiver);
+        if (
+          receiverAwaits.length !== 1 ||
+          receiverMaybe.kind !== "await_expr" ||
+          receiverAwaits[0].pos !== receiverMaybe.pos ||
+          receiverAwaits[0].end !== receiverMaybe.end
+        ) {
+          return undefined;
+        }
+        const operandInfo = this.resolveAwaitOperand(receiverMaybe.operand, undefined);
+        this.assertNotVoid(operandInfo.awaitedType, { pos: receiverMaybe.pos }, "await method receiver");
+        const tempName = `${tempPrefix}_recv`;
+        this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: receiverMaybe.pos });
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: tempName,
+          pos: receiverMaybe.pos,
+          end: receiverMaybe.end,
+        };
+        signatureCallee = {
+          kind: "prop_access",
+          receiver: receiverTempExpr,
+          name: rootCallee.name,
+          optional: false,
+          pos: rootCallee.pos,
+          end: rootCallee.end,
+        };
+        receiverAwaitStep = {
+          awaitExpr: receiverMaybe,
+          operandInfo,
+          awaitedType: operandInfo.awaitedType,
+          tempName,
+          preAwaitReceiverTemps: [],
+          preAwaitArgTemps: [],
+        };
+      }
+    }
+
     const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr }> = [];
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
@@ -6314,9 +6357,11 @@ class Emitter {
       if (found[0].pos !== unwrapped.pos || found[0].end !== unwrapped.end) return undefined;
       awaitedArgs.push({ argIndex: i, awaitExpr: unwrapped });
     }
-    if (awaitedArgs.length < 2) return undefined;
+    if (receiverAwaitStep === undefined && awaitedArgs.length < 2) return undefined;
+    if (receiverAwaitStep !== undefined && awaitedArgs.length < 1) return undefined;
 
     const plannedSteps: Array<MultiAwaitCallArgStepPlan> = [];
+    if (receiverAwaitStep !== undefined) plannedSteps.push(receiverAwaitStep);
     const awaitedTempByArg = new Map<number, IdentExpr>();
     for (let i = 0; i < awaitedArgs.length; i++) {
       const awaited = awaitedArgs[i];
@@ -6349,32 +6394,37 @@ class Emitter {
     }
     const signatureCall: CallExpr = {
       kind: "call_expr",
-      callee: rootCallee,
+      callee: signatureCallee,
       typeArgs: root.typeArgs,
       args: signatureArgs,
       optional: root.optional,
       pos: root.pos,
       end: root.end,
     };
-    const firstAwait = awaitedArgs[0].awaitExpr;
+    const firstAwait = receiverAwaitStep?.awaitExpr ?? awaitedArgs[0].awaitExpr;
     const plan = this.resolveOrdinaryCallPlan(signatureCall, firstAwait, false, expectedReturnType);
     if (plan === undefined) return undefined;
-    if (
-      !(
-        plan.kind === "top_level" ||
-        plan.kind === "generic" ||
-        plan.kind === "fn_value" ||
-        plan.kind === "class_method" ||
-        plan.kind === "interface_method"
-      )
-    ) {
-      return undefined;
+    if (receiverAwaitStep !== undefined) {
+      if (plan.kind !== "class_method" && plan.kind !== "interface_method") return undefined;
+    } else {
+      if (
+        !(
+          plan.kind === "top_level" ||
+          plan.kind === "generic" ||
+          plan.kind === "fn_value" ||
+          plan.kind === "class_method" ||
+          plan.kind === "interface_method"
+        )
+      ) {
+        return undefined;
+      }
     }
     this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
 
-    let transformedCallee: Expr = rootCallee;
+    let transformedCallee: Expr = signatureCallee;
     switch (plan.kind) {
       case "interface_method": {
+        if (receiverAwaitStep !== undefined) break;
         const receiverTempName = `__topaz_call_recv_${stepOrdinalStart}`;
         this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
         plannedSteps[0].preAwaitReceiverTemps.push({
@@ -6399,6 +6449,7 @@ class Emitter {
         break;
       }
       case "class_method": {
+        if (receiverAwaitStep !== undefined) break;
         const receiverTempName = `__topaz_call_recv_${stepOrdinalStart}`;
         this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
         plannedSteps[0].preAwaitReceiverTemps.push({
@@ -6428,9 +6479,10 @@ class Emitter {
 
     const argTempByArg = new Map<number, IdentExpr>();
     let nextPreArgStart = 0;
+    const argStepOffset = receiverAwaitStep === undefined ? 0 : 1;
     for (let i = 0; i < awaitedArgs.length; i++) {
       const awaited = awaitedArgs[i];
-      const stepPlan = plannedSteps[i];
+      const stepPlan = plannedSteps[i + argStepOffset];
       for (let argIndex = nextPreArgStart; argIndex < awaited.argIndex; argIndex++) {
         const arg = root.args[argIndex];
         if (argIndex >= plan.params.length) return undefined;
