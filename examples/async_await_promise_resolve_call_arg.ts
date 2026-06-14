@@ -10,11 +10,6 @@ function keepNumberPromise(p: Promise<number>): Promise<number> {
   return q;
 }
 
-function keepNestedPromise(p: Promise<Promise<number>>): Promise<Promise<number>> {
-  const q: Promise<Promise<number>> = p;
-  return q;
-}
-
 async function declared(): Promise<Promise<number>> {
   const p = Promise.resolve(await numberPromise("declared pre", 11));
   console.log("declared after");
@@ -33,13 +28,12 @@ class Resolver {
   }
 
   async method(): Promise<void> {
-    // @ts-expect-error Topaz keeps Promise<T> opaque here; TypeScript flattens this Promise.resolve call.
-    const nested: Promise<Promise<number>> = Promise.resolve(
+    const flattened: Promise<number> = Promise.resolve(
       await Promise.resolve(numberPromise("method pre", 33)),
     );
-    const same: Promise<Promise<number>> = keepNestedPromise(nested);
-    if (same === nested) {
-      console.log("method nested");
+    const same: Promise<number> = keepNumberPromise(flattened);
+    if (same === flattened) {
+      console.log("method flattened");
     }
     console.log("method after");
   }

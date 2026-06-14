@@ -12736,6 +12736,9 @@ class Emitter {
       throw new CodegenError({ pos: expr.pos }, `Promise.resolve expects 0..1 argument(s), got ${expr.args.length}`);
     }
     const payloadType = this.inferType(expr.args[0]);
+    if (payloadType.kind === "promise") {
+      return { argType: payloadType, returnType: payloadType };
+    }
     if (payloadType.kind === "promise_like") {
       const promiseType = promiseOf(payloadType.value);
       if (promiseType === undefined) {
@@ -12856,6 +12859,9 @@ class Emitter {
     }
     const argType = info.argType;
     if (argType !== undefined) {
+      if (argType.kind === "promise") {
+        return this.emitWithExpected(expr.args[0], promiseType);
+      }
       if (argType.kind === "promise_like") {
         const promiseLikeExpr = this.emitWithExpected(expr.args[0], argType);
         return `topaz_promise_like_to_promise(${promiseLikeExpr})`;
