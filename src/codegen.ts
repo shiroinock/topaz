@@ -6554,7 +6554,8 @@ class Emitter {
     tempPrefix: string,
   ): MultiAwaitCallArgPlan | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
-    if (rootMaybe.kind !== "bin_op" || rootMaybe.op !== "+") return undefined;
+    if (rootMaybe.kind !== "bin_op") return undefined;
+    if (rootMaybe.op === "&&" || rootMaybe.op === "||" || rootMaybe.op === "??") return undefined;
 
     const leftAwaits = this.collectAwaitExprsInExpr(rootMaybe.lhs);
     const rightAwaits = this.collectAwaitExprsInExpr(rootMaybe.rhs);
