@@ -397,6 +397,7 @@ pre_v0_2_checkpoint="docs/releases/pre-v0.2.0-checkpoint.md"
 release_readiness_v0_2_0="docs/releases/v0.2.0-rc-readiness.md"
 runtime_migration_doc="docs/runtime-ts-migration.md"
 phase_5_0_adr="docs/adr/0467-post-v0-2-typescript-compatibility-priorities.md"
+phase_5_82_adr="docs/adr/0549-promise-like-bridge-boundary.md"
 for fragment in \
   'pnpm run check:runtime-header' \
   'pnpm run check:runtime-prelude' \
@@ -887,6 +888,24 @@ for fragment in \
   fi
 done
 echo "PASS [phase_5_0_typescript_compatibility_priority_contract]"
+if [[ ! -f "${phase_5_82_adr}" ]]; then
+  echo "FAIL [promise_like_bridge_boundary_contract]: missing ${phase_5_82_adr}" >&2
+  exit 1
+fi
+for fragment in \
+  'PromiseLike<T>' \
+  'explicit bridge' \
+  'Promise.resolve' \
+  'controlled static thenable assimilation' \
+  'Node-compatible single-thread' \
+  'Topaz-owned parallel scheduler' \
+  'storage-only'; do
+  if ! grep -Fq "${fragment}" "${phase_5_82_adr}" MEMO.md; then
+    echo "FAIL [promise_like_bridge_boundary_contract]: missing ${fragment}" >&2
+    exit 1
+  fi
+done
+echo "PASS [promise_like_bridge_boundary_contract]"
 mvp_doc="docs/mvp.md"
 for fragment in \
   './topaz-darwin-arm64 --help' \
