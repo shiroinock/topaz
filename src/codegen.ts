@@ -6625,6 +6625,51 @@ class Emitter {
                         continue;
                       }
                       if (deepValue.kind !== "call_expr") {
+                        if (deepValue.kind === "object_lit") {
+                          for (const deeperProp of deepValue.props) {
+                            if (deeperProp.kind !== "prop_kv") {
+                              return undefined;
+                            }
+                            const deeperValue = this.unwrapParenExpr(deeperProp.value);
+                            const deeperValueAwaits = this.collectAwaitExprsInExpr(deeperValue);
+                            if (deeperValueAwaits.length === 0) {
+                              continue;
+                            }
+                            if (deeperValue.kind !== "call_expr") {
+                              return undefined;
+                            }
+                            const childNestedIndex = nestedCallArgs.length;
+                            const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+                              deeperValue,
+                              outerArgIndex,
+                              childNestedIndex,
+                              tempPrefix,
+                              awaitedArgs,
+                              callArgEvents,
+                              nestedCallArgs,
+                            );
+                            if (childPlan === undefined) {
+                              return undefined;
+                            }
+                            transformedObjectArg = this.replaceExactExprInExpr(
+                              transformedObjectArg,
+                              deeperValue,
+                              childPlan.resultTempExpr,
+                            );
+                            const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
+                            nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
+                            nestedPlan.awaitedArgDependencies.push({
+                              awaitIndex: firstChildAwaitIndex,
+                              argIndex: nestedArgIndex,
+                            });
+                            callArgEvents.push({
+                              kind: "materialize",
+                              argIndex: outerArgIndex,
+                              nestedIndex: childNestedIndex,
+                            });
+                          }
+                          continue;
+                        }
                         return undefined;
                       }
                       const childNestedIndex = nestedCallArgs.length;

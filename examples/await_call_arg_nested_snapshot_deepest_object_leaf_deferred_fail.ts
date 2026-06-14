@@ -1,6 +1,6 @@
 /// <reference lib="es2015.promise" />
 
-type Box = { a: { b: { c: { value: number } } } };
+type Box = { a: { b: { c: { d: { value: number } } } } };
 
 function mark(label: string, value: number): number {
   console.log(label);
@@ -13,7 +13,7 @@ function wrap(label: string, value: number): number {
 }
 
 function readBox(box: Box): number {
-  return box.a.b.c.value;
+  return box.a.b.c.d.value;
 }
 
 function combine(a: number, b: number): number {
@@ -25,7 +25,7 @@ async function bad(): Promise<number> {
     await Promise.resolve(mark("left", 1)) +
       wrap(
         "snapshot",
-        readBox({ a: { b: { c: { value: wrap("nested", await Promise.resolve(mark("inner", 2))) } } } }),
+        readBox({ a: { b: { c: { d: { value: wrap("nested", await Promise.resolve(mark("inner", 2))) } } } } }),
       ),
     await Promise.resolve(mark("right", 3)),
   );
