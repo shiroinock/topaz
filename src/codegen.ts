@@ -13003,6 +13003,15 @@ class Emitter {
       }
       return resultType;
     }
+    if (resultType.kind === "promise_like") {
+      if (!typeEq(resultType.value, baseType.value)) {
+        throw new CodegenError(
+          { pos: expr.args[0].pos },
+          `Promise.catch callback return type ${typeIdent(resultType)} does not match expected ${typeIdent({ kind: "promise_like", value: baseType.value })}`,
+        );
+      }
+      return { kind: "promise", value: resultType.value };
+    }
     if (!typeEq(resultType, baseType.value)) {
       throw new CodegenError(
         { pos: expr.args[0].pos },
@@ -13135,6 +13144,11 @@ class Emitter {
     if (resultType.kind === "promise") {
       lines.push("    void *__topaz_promise_result = ctx->cb.fn(ctx->cb.env, __topaz_promise_error);");
       lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_forward_into(__topaz_promise_result, target);");
+    } else if (resultType.kind === "promise_like") {
+      lines.push("    topaz_promise_like *__topaz_promise_like_result = ctx->cb.fn(ctx->cb.env, __topaz_promise_error);");
+      lines.push("    topaz_try_pop();");
+      lines.push("    void *__topaz_promise_result = topaz_promise_like_to_promise(__topaz_promise_like_result);");
       lines.push("    topaz_promise_forward_into(__topaz_promise_result, target);");
     } else if (payloadType.kind === "void") {
       lines.push("    ctx->cb.fn(ctx->cb.env, __topaz_promise_error);");
