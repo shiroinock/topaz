@@ -12869,6 +12869,7 @@ class Emitter {
 
   private normalizePromiseThenResultPayload(cb: Expr, resultType: TopazType, label: string): TopazType {
     if (resultType.kind === "promise") return resultType.value;
+    if (resultType.kind === "promise_like") return resultType.value;
     const promiseType = promiseOf(resultType);
     if (promiseType === undefined) {
       throw new CodegenError(
@@ -12951,12 +12952,12 @@ class Emitter {
     }
     const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
     const resultType = fnType.returnType;
-    const allowPromiseLikeReturn = expr.args.length === 1;
+    const allowPromiseLikeReturn = true;
     this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true, allowPromiseLikeReturn);
     if (expr.args.length === 2 && !this.isExplicitPromiseHandlerSentinel(expr.args[1])) {
       const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
       const rejectedResultType = rejectedFnType.returnType;
-      this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true, false);
+      this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true, true);
       const fulfilledPayload = this.normalizePromiseThenResultPayload(expr.args[0], resultType, "Promise.then");
       const rejectedPayload = this.normalizePromiseThenResultPayload(
         expr.args[1],
@@ -12964,7 +12965,8 @@ class Emitter {
         "Promise.then onRejected",
       );
       if (!typeEq(fulfilledPayload, rejectedPayload)) {
-        if ((resultType.kind === "promise") === (rejectedResultType.kind === "promise")) {
+        const hasPromiseLikeBranch = resultType.kind === "promise_like" || rejectedResultType.kind === "promise_like";
+        if (!hasPromiseLikeBranch && (resultType.kind === "promise") === (rejectedResultType.kind === "promise")) {
           throw new CodegenError(
             { pos: expr.args[1].pos },
             `Promise.then onRejected callback return type ${typeIdent(rejectedResultType)} does not match fulfilled callback return type ${typeIdent(resultType)}`,
