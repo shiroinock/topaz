@@ -15,12 +15,12 @@ function readBox(box: Box): number {
   return box.a.b[0];
 }
 
-async function bad(): Promise<number> {
+async function bad(flag: boolean): Promise<number> {
   return readBox({
     a: {
-      b: [...items(await Promise.resolve(mark("inner", 2)))],
+      b: [...(flag ? items(await Promise.resolve(mark("inner", 2))) : [0])],
     },
   });
 }
 
-bad();
+bad(true);

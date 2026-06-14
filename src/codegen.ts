@@ -6506,7 +6506,11 @@ class Emitter {
           children.push(elem.expr);
         } else {
           const spreadSource = this.unwrapParenExpr(elem.expr);
-          if (spreadSource.kind !== "object_lit" && spreadSource.kind !== "array_lit") {
+          if (
+            spreadSource.kind !== "object_lit" &&
+            spreadSource.kind !== "array_lit" &&
+            !(spreadSource.kind === "call_expr" && this.collectAwaitExprsInExpr(spreadSource).length > 0)
+          ) {
             return undefined;
           }
           children.push(spreadSource);
