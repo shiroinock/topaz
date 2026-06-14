@@ -1,7 +1,11 @@
 /// <reference lib="es2015.promise" />
 
 async function answer(): Promise<number> {
-  return (await Promise.resolve("abc")).indexOf(await Promise.resolve("b"));
+  return (await Promise.resolve("abc")).indexOf(wrap(await Promise.resolve("b")));
+}
+
+function wrap(value: string): string {
+  return value;
 }
 
 answer();

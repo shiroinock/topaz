@@ -6405,14 +6405,12 @@ class Emitter {
     const plan = this.resolveOrdinaryCallPlan(signatureCall, firstAwait, false, expectedReturnType);
     if (plan === undefined) return undefined;
     if (receiverAwaitStep !== undefined) {
-      if (
-        plan.kind !== "class_method" &&
-        plan.kind !== "interface_method" &&
-        !(
-          plan.kind === "array_method" &&
-          (plan.methodName === "map" || plan.methodName === "filter")
-        )
-      ) {
+      const receiverAwaitPlanSupported =
+        plan.kind === "class_method" ||
+        plan.kind === "interface_method" ||
+        (plan.kind === "array_method" && (plan.methodName === "map" || plan.methodName === "filter")) ||
+        (plan.kind === "string_method" && plan.methodName === "indexOf");
+      if (!receiverAwaitPlanSupported) {
         return undefined;
       }
     } else {
