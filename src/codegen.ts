@@ -132,6 +132,7 @@ type AwaitBindingInfo = {
   index: number;
   pc: number;
   operandType: TopazType;
+  sourcePromiseType: TopazType;
   bindingType: TopazType;
 };
 
@@ -145,6 +146,7 @@ type AwaitReturnInfo = {
   index: number;
   pc: number;
   operandType: TopazType;
+  sourcePromiseType: TopazType;
   awaitedType: TopazType;
   returnType: TopazType;
   tempName: string;
@@ -179,6 +181,7 @@ type AwaitInitializerInfo = {
   index: number;
   pc: number;
   operandType: TopazType;
+  sourcePromiseType: TopazType;
   awaitedType: TopazType;
   bindingType: TopazType;
   tempName: string;
@@ -195,11 +198,18 @@ type AwaitStatementInfo = {
   index: number;
   pc: number;
   operandType: TopazType;
+  sourcePromiseType: TopazType;
   awaitedType: TopazType;
   tempName: string;
 };
 
 type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo | AwaitInitializerInfo | AwaitStatementInfo;
+
+type AwaitOperandInfo = {
+  operandType: TopazType;
+  sourcePromiseType: TopazType;
+  awaitedType: TopazType;
+};
 
 type AsyncLocalCapture = {
   stmt: VarDeclStmt;
@@ -5199,11 +5209,8 @@ class Emitter {
               this.assertNotVoid(annotated, { pos: s.pos }, "await binding type");
               expectedPayload = annotated;
             }
-            const operandType = this.inferAwaitOperandTypeWithExpectedPayload(init.operand, expectedPayload);
-            if (operandType.kind !== "promise") {
-              throw this.awaitOperandMustBePromiseError({ pos: init.operand.pos }, operandType);
-            }
-            let bindingType = operandType.value;
+            const operandInfo = this.resolveAwaitOperand(init.operand, expectedPayload);
+            let bindingType = operandInfo.awaitedType;
             if (expectedPayload !== undefined) {
               if (!typeEq(bindingType, expectedPayload) && !this.isAssignableTo(bindingType, expectedPayload)) {
                 throw new CodegenError(
@@ -5219,7 +5226,8 @@ class Emitter {
               awaitExpr: init,
               index: i,
               pc: steps.length,
-              operandType,
+              operandType: operandInfo.operandType,
+              sourcePromiseType: operandInfo.sourcePromiseType,
               bindingType,
             });
             supportedAwaitExprs.add(init);
@@ -5237,11 +5245,8 @@ class Emitter {
                 );
               }
               const awaitExpr = initializerAwaits[0];
-              const operandType = this.inferType(awaitExpr.operand);
-              if (operandType.kind !== "promise") {
-                throw this.awaitOperandMustBePromiseError({ pos: awaitExpr.operand.pos }, operandType);
-              }
-              const awaitedPayload = operandType.value;
+              const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
+              const awaitedPayload = operandInfo.awaitedType;
               let expectedInitializerType: TopazType | undefined = undefined;
               const typeMaybe = s.type;
               if (typeMaybe !== undefined) {
@@ -5301,7 +5306,8 @@ class Emitter {
                 preAwaitArgTemps,
                 index: i,
                 pc: steps.length,
-                operandType,
+                operandType: operandInfo.operandType,
+                sourcePromiseType: operandInfo.sourcePromiseType,
                 awaitedType: awaitedPayload,
                 bindingType,
                 tempName,
@@ -5325,11 +5331,8 @@ class Emitter {
       } else if (s.kind === "expr_stmt") {
         const expr = this.unwrapParenExpr(s.expr);
         if (expr.kind === "await_expr") {
-          const operandType = this.inferType(expr.operand);
-          if (operandType.kind !== "promise") {
-            throw this.awaitOperandMustBePromiseError({ pos: expr.operand.pos }, operandType);
-          }
-          const awaitedPayload = operandType.value;
+          const operandInfo = this.resolveAwaitOperand(expr.operand, undefined);
+          const awaitedPayload = operandInfo.awaitedType;
           steps.push({
             kind: "statement",
             stmt: s,
@@ -5339,7 +5342,8 @@ class Emitter {
             preAwaitArgTemps: [],
             index: i,
             pc: steps.length,
-            operandType,
+            operandType: operandInfo.operandType,
+            sourcePromiseType: operandInfo.sourcePromiseType,
             awaitedType: awaitedPayload,
             tempName: `__topaz_stmt_await_${steps.length}`,
           });
@@ -5354,11 +5358,8 @@ class Emitter {
               );
             }
             const awaitExpr = statementAwaits[0];
-            const operandType = this.inferType(awaitExpr.operand);
-            if (operandType.kind !== "promise") {
-              throw this.awaitOperandMustBePromiseError({ pos: awaitExpr.operand.pos }, operandType);
-            }
-            const awaitedPayload = operandType.value;
+            const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
+            const awaitedPayload = operandInfo.awaitedType;
             const tempName = `__topaz_stmt_await_${steps.length}`;
             let transformedExpr: Expr = s.expr;
             let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
@@ -5392,7 +5393,8 @@ class Emitter {
               preAwaitArgTemps,
               index: i,
               pc: steps.length,
-              operandType,
+              operandType: operandInfo.operandType,
+              sourcePromiseType: operandInfo.sourcePromiseType,
               awaitedType: awaitedPayload,
               tempName,
             });
@@ -5414,11 +5416,8 @@ class Emitter {
             const awaitExpr = returnAwaits[0];
             const isDirectReturnAwait = value.kind === "await_expr";
             const expectedAwaitPayload = isDirectReturnAwait ? payloadType : undefined;
-            const operandType = this.inferAwaitOperandTypeWithExpectedPayload(awaitExpr.operand, expectedAwaitPayload);
-            if (operandType.kind !== "promise") {
-              throw this.awaitOperandMustBePromiseError({ pos: awaitExpr.operand.pos }, operandType);
-            }
-            const awaitedPayload = operandType.value;
+            const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, expectedAwaitPayload);
+            const awaitedPayload = operandInfo.awaitedType;
             let returnExpr: Expr | undefined = undefined;
             let returnType = awaitedPayload;
             let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
@@ -5465,7 +5464,8 @@ class Emitter {
               preAwaitArgTemps,
               index: i,
               pc: steps.length,
-              operandType,
+              operandType: operandInfo.operandType,
+              sourcePromiseType: operandInfo.sourcePromiseType,
               awaitedType: awaitedPayload,
               returnType,
               tempName,
@@ -5474,6 +5474,7 @@ class Emitter {
           }
         }
       }
+      this.applyCarryNarrowing(s);
     }
     this.scope.pop();
     if (steps.length === 0) {
@@ -6223,7 +6224,11 @@ class Emitter {
     }
     this.emitAsyncLocalCaptureStores(frame, firstAwaitIndex, frameVar, lines, "    ");
     this.emitAwaitStepPreArgStores(firstStep, frameVar, lines, "    ");
-    const operandExpr = this.emitWithExpected(firstStep.awaitExpr.operand, firstStep.operandType);
+    const operandExpr = this.emitAwaitSourceExpression(
+      firstStep.awaitExpr.operand,
+      firstStep.operandType,
+      firstStep.sourcePromiseType,
+    );
     lines.push(`    void *${sourceVar} = ${operandExpr};`);
     for (const p of params) {
       lines.push(`    ${frameVar}->${p.name} = ${p.name};`);
@@ -6630,7 +6635,11 @@ class Emitter {
           const nextSourceVar = `__topaz_await_next_${i}`;
           this.emitAsyncLocalCaptureStores(frame, next.index, "ctx", lines, "        ");
           this.emitAwaitStepPreArgStores(next, "ctx", lines, "        ");
-          const operandExpr = this.emitWithExpected(next.awaitExpr.operand, next.operandType);
+          const operandExpr = this.emitAwaitSourceExpression(
+            next.awaitExpr.operand,
+            next.operandType,
+            next.sourcePromiseType,
+          );
           lines.push(`        void *${nextSourceVar} = ${operandExpr};`);
           lines.push(`        ctx->__topaz_pc = ${next.pc};`);
           lines.push("        topaz_try_pop();");
@@ -6907,12 +6916,6 @@ class Emitter {
   }
 
   private awaitOperandMustBePromiseError(anchor: { pos: number }, operandType: TopazType): CodegenError {
-    if (operandType.kind === "promise_like") {
-      return new CodegenError(
-        anchor,
-        "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred",
-      );
-    }
     return new CodegenError(
       anchor,
       `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
@@ -12694,6 +12697,47 @@ class Emitter {
       }
     }
     return this.inferType(operand);
+  }
+
+  private resolveAwaitOperand(
+    operand: Expr,
+    expectedPayload: TopazType | undefined,
+  ): AwaitOperandInfo {
+    const operandType = this.inferAwaitOperandTypeWithExpectedPayload(operand, expectedPayload);
+    if (operandType.kind === "promise") {
+      return {
+        operandType,
+        sourcePromiseType: operandType,
+        awaitedType: operandType.value,
+      };
+    }
+    if (operandType.kind === "promise_like") {
+      const sourcePromiseType = promiseOf(operandType.value);
+      if (sourcePromiseType === undefined) {
+        throw new CodegenError(
+          { pos: operand.pos },
+          `await operand must be Promise<T>, got ${typeIdent(operandType)}`,
+        );
+      }
+      return {
+        operandType,
+        sourcePromiseType,
+        awaitedType: operandType.value,
+      };
+    }
+    throw this.awaitOperandMustBePromiseError({ pos: operand.pos }, operandType);
+  }
+
+  private emitAwaitSourceExpression(
+    operand: Expr,
+    operandType: TopazType,
+    sourcePromiseType: TopazType,
+  ): string {
+    if (operandType.kind === "promise_like") {
+      const promiseLikeExpr = this.emitWithExpected(operand, operandType);
+      return `topaz_promise_like_to_promise(${promiseLikeExpr})`;
+    }
+    return this.emitWithExpected(operand, sourcePromiseType);
   }
 
   private emitPromiseResolveCall(expr: CallExpr): string {

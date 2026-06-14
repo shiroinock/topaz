@@ -3098,10 +3098,10 @@ run_fail_case promise_finally_return_promise_fail examples/promise_finally_retur
 run_fail_case promise_finally_non_fn_fail examples/promise_finally_non_fn_fail.ts "Promise.finally callback must be a function value"
 run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"
-run_fail_case promise_like_await_deferred_fail examples/promise_like_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
-run_fail_case promise_like_optional_await_deferred_fail examples/promise_like_optional_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
-run_fail_case promise_like_array_await_deferred_fail examples/promise_like_array_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
-run_fail_case promise_like_field_await_deferred_fail examples/promise_like_field_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
+run_case promise_like_await_deferred_fail $'direct before\nsync tail\ndirect after\ndirect then\n11\nterminal then\n20'
+run_case promise_like_optional_await_deferred_fail $'sync tail\noptional missing\n0\noptional present\n32'
+run_case promise_like_array_await_deferred_fail $'sync tail\narray then\n43'
+run_case promise_like_field_await_deferred_fail $'sync tail\nfield then\n50'
 run_fail_case promise_like_async_return_fail examples/promise_like_async_return_fail.ts "async function return annotation must be Promise<T>; PromiseLike<T> bridge is deferred"
 run_fail_case promise_like_resolve_deferred_fail examples/promise_like_resolve_deferred_fail.ts "Promise.resolve payload type topaz_promise_like_number is unsupported"
 run_fail_case promise_like_structural_adapter_fail examples/promise_like_structural_adapter_fail.ts "expected identifier"

@@ -12,6 +12,14 @@ class LikeBox {
 
 async function read(box: LikeBox): Promise<number> {
   const current: NumberLike = box.current;
-  const value = await current;
-  return value;
+  return await current;
 }
+
+const box = new LikeBox(Promise.resolve(50));
+
+read(box).then((n: number): void => {
+  console.log("field then");
+  console.log(n);
+});
+
+console.log("sync tail");
