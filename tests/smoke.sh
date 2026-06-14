@@ -3006,6 +3006,7 @@ run_case promise_array_extraction $'2\n2\n1\n2\n0'
 run_case promise_field_extraction $'sync tail\nbox before\n10\nbox after\n20\nslot before\n30\nslot after\n40'
 run_fail_case promise_iterator_nested_container_deferred_fail examples/promise_iterator_nested_container_deferred_fail.ts "Iterator<T>: element type topaz_array_promise_number is unsupported"
 run_case promise_finally_return_promise $'sync tail\ncleanup fulfilled preserve\ncleanup rejected preserve\ncleanup fulfilled override\ncleanup rejected override\nnested cleanup start\nfifo marker\ncleanup throw before promise\nnested cleanup inner\nthrow override\n66\nfulfilled value\n1\npreserved rejection\nsource\nfulfilled override\nfulfilled cleanup\nrejected override\nrejected cleanup\nnested result\n5'
+run_case promise_finally_return_promise_like $'sync tail\ncleanup like fulfilled preserve\ncleanup like rejected preserve\ncleanup like fulfilled override\ncleanup like rejected override\nnested like cleanup start\ncleanup like number\nfifo like marker\ncleanup like throw before promise\nnested like cleanup inner\nthrow like override\n77\nfulfilled like value\n1\npreserved like rejection\nsource like\nfulfilled like override\nfulfilled cleanup like\nrejected like override\nrejected cleanup like\nnumber like result\n6\nnested like result\n5'
 run_case promise_finally_ignored_return $'sync tail\ncleanup number\ncleanup string\ncleanup boolean\ncleanup literal\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n10\nrejected string preserved\nsource string\nrejected bool preserved\nsource bool\nliteral result\n5\nfifo final then\n7\noverride catch\n88\nstring recovery\n2\nbool recovery\n3'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
@@ -3100,8 +3101,8 @@ run_fail_case promise_catch_return_promise_like_fail examples/promise_catch_retu
 run_fail_case promise_catch_wrong_arity_fail examples/promise_catch_wrong_arity_fail.ts "Promise.catch expects exactly one argument, got 0"
 run_fail_case promise_finally_wrong_arity_fail examples/promise_finally_wrong_arity_fail.ts "Promise.finally expects exactly one argument, got 0"
 run_fail_case promise_finally_parameter_fail examples/promise_finally_parameter_fail.ts "Promise.finally callback arity 1 does not match expected 0"
-run_fail_case promise_finally_non_void_return_fail examples/promise_finally_non_void_return_fail.ts "Promise.finally callback must return void, Promise<T>, or an ignored primitive value, got topaz_class_PlainCleanup"
-run_fail_case promise_finally_return_promise_fail examples/promise_finally_return_promise_fail.ts "Promise.finally callback must return void, Promise<T>, or an ignored primitive value, got topaz_class_ThenableCleanup"
+run_fail_case promise_finally_non_void_return_fail examples/promise_finally_non_void_return_fail.ts "Promise.finally callback must return void, Promise<T>, PromiseLike<T>, or an ignored primitive value, got topaz_class_PlainCleanup"
+run_fail_case promise_finally_return_promise_fail examples/promise_finally_return_promise_fail.ts "Promise.finally callback must return void, Promise<T>, PromiseLike<T>, or an ignored primitive value, got topaz_class_ThenableCleanup"
 run_fail_case promise_finally_non_fn_fail examples/promise_finally_non_fn_fail.ts "Promise.finally callback must be a function value"
 run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_arity_fail.ts "Promise.resolve expects 0..1 argument(s), got 2"
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"

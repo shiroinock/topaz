@@ -13056,11 +13056,12 @@ class Emitter {
     if (
       resultType.kind !== "void" &&
       resultType.kind !== "promise" &&
+      resultType.kind !== "promise_like" &&
       !isPrimitivePromiseFinallyIgnoredReturn(resultType)
     ) {
       throw new CodegenError(
         { pos: expr.args[0].pos },
-        `Promise.finally callback must return void, Promise<T>, or an ignored primitive value, got ${typeIdent(resultType)}`,
+        `Promise.finally callback must return void, Promise<T>, PromiseLike<T>, or an ignored primitive value, got ${typeIdent(resultType)}`,
       );
     }
     return baseType;
@@ -13209,6 +13210,11 @@ class Emitter {
     if (cleanupType.kind === "promise") {
       lines.push("    void *__topaz_promise_cleanup = ctx->cb.fn(ctx->cb.env);");
       lines.push("    topaz_try_pop();");
+      lines.push("    topaz_promise_finally_cleanup_into(__topaz_promise_cleanup, source, target);");
+    } else if (cleanupType.kind === "promise_like") {
+      lines.push("    topaz_promise_like *__topaz_promise_like_cleanup = ctx->cb.fn(ctx->cb.env);");
+      lines.push("    topaz_try_pop();");
+      lines.push("    void *__topaz_promise_cleanup = topaz_promise_like_to_promise(__topaz_promise_like_cleanup);");
       lines.push("    topaz_promise_finally_cleanup_into(__topaz_promise_cleanup, source, target);");
     } else if (cleanupType.kind === "void") {
       lines.push("    ctx->cb.fn(ctx->cb.env);");
