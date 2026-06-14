@@ -6439,6 +6439,99 @@ class Emitter {
     };
   }
 
+  private tryPlanNestedMultiAwaitObjectCallLeaf(
+    callLeaf: CallExpr,
+    outerArgIndex: number,
+    nestedArgIndex: number,
+    tempPrefix: string,
+    nestedPlan: MultiAwaitNestedCallArgPlan,
+    transformedObjectArg: Expr,
+    awaitedArgs: Array<MultiAwaitCallArgAwait>,
+    callArgEvents: Array<MultiAwaitCallArgEvent>,
+    nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
+  ): Expr | undefined {
+    const childNestedIndex = nestedCallArgs.length;
+    const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+      callLeaf,
+      outerArgIndex,
+      childNestedIndex,
+      tempPrefix,
+      awaitedArgs,
+      callArgEvents,
+      nestedCallArgs,
+    );
+    if (childPlan === undefined) {
+      return undefined;
+    }
+    const transformed = this.replaceExactExprInExpr(transformedObjectArg, callLeaf, childPlan.resultTempExpr);
+    const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
+    nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
+    nestedPlan.awaitedArgDependencies.push({ awaitIndex: firstChildAwaitIndex, argIndex: nestedArgIndex });
+    callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
+    return transformed;
+  }
+
+  private tryWalkNestedMultiAwaitObjectCallLeaves(
+    outerArgIndex: number,
+    nestedArgIndex: number,
+    tempPrefix: string,
+    nestedPlan: MultiAwaitNestedCallArgPlan,
+    transformedObjectArg: Expr,
+    objectLit: ObjectLitExpr,
+    awaitedArgs: Array<MultiAwaitCallArgAwait>,
+    callArgEvents: Array<MultiAwaitCallArgEvent>,
+    nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
+  ): Expr | undefined {
+    let transformed = transformedObjectArg;
+    for (const prop of objectLit.props) {
+      if (prop.kind !== "prop_kv") {
+        return undefined;
+      }
+      const value = this.unwrapParenExpr(prop.value);
+      const valueAwaits = this.collectAwaitExprsInExpr(value);
+      if (valueAwaits.length === 0) {
+        continue;
+      }
+      if (value.kind === "call_expr") {
+        const planned = this.tryPlanNestedMultiAwaitObjectCallLeaf(
+          value,
+          outerArgIndex,
+          nestedArgIndex,
+          tempPrefix,
+          nestedPlan,
+          transformed,
+          awaitedArgs,
+          callArgEvents,
+          nestedCallArgs,
+        );
+        if (planned === undefined) {
+          return undefined;
+        }
+        transformed = planned;
+        continue;
+      }
+      if (value.kind !== "object_lit") {
+        return undefined;
+      }
+      const planned = this.tryWalkNestedMultiAwaitObjectCallLeaves(
+        outerArgIndex,
+        nestedArgIndex,
+        tempPrefix,
+        nestedPlan,
+        transformed,
+        value,
+        awaitedArgs,
+        callArgEvents,
+        nestedCallArgs,
+      );
+      if (planned === undefined) {
+        return undefined;
+      }
+      transformed = planned;
+    }
+    return transformed;
+  }
+
   private tryBuildNestedMultiAwaitCallArgPlan(
     nestedRoot: CallExpr,
     outerArgIndex: number,
@@ -6602,134 +6695,7 @@ class Emitter {
           if (valueAwaits.length === 0) {
             continue;
           }
-          if (value.kind !== "call_expr") {
-            if (value.kind === "object_lit") {
-              for (const nestedProp of value.props) {
-                if (nestedProp.kind !== "prop_kv") {
-                  return undefined;
-                }
-                const nestedValue = this.unwrapParenExpr(nestedProp.value);
-                const nestedValueAwaits = this.collectAwaitExprsInExpr(nestedValue);
-                if (nestedValueAwaits.length === 0) {
-                  continue;
-                }
-                if (nestedValue.kind !== "call_expr") {
-                  if (nestedValue.kind === "object_lit") {
-                    for (const deepProp of nestedValue.props) {
-                      if (deepProp.kind !== "prop_kv") {
-                        return undefined;
-                      }
-                      const deepValue = this.unwrapParenExpr(deepProp.value);
-                      const deepValueAwaits = this.collectAwaitExprsInExpr(deepValue);
-                      if (deepValueAwaits.length === 0) {
-                        continue;
-                      }
-                      if (deepValue.kind !== "call_expr") {
-                        if (deepValue.kind === "object_lit") {
-                          for (const deeperProp of deepValue.props) {
-                            if (deeperProp.kind !== "prop_kv") {
-                              return undefined;
-                            }
-                            const deeperValue = this.unwrapParenExpr(deeperProp.value);
-                            const deeperValueAwaits = this.collectAwaitExprsInExpr(deeperValue);
-                            if (deeperValueAwaits.length === 0) {
-                              continue;
-                            }
-                            if (deeperValue.kind !== "call_expr") {
-                              return undefined;
-                            }
-                            const childNestedIndex = nestedCallArgs.length;
-                            const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
-                              deeperValue,
-                              outerArgIndex,
-                              childNestedIndex,
-                              tempPrefix,
-                              awaitedArgs,
-                              callArgEvents,
-                              nestedCallArgs,
-                            );
-                            if (childPlan === undefined) {
-                              return undefined;
-                            }
-                            transformedObjectArg = this.replaceExactExprInExpr(
-                              transformedObjectArg,
-                              deeperValue,
-                              childPlan.resultTempExpr,
-                            );
-                            const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
-                            nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
-                            nestedPlan.awaitedArgDependencies.push({
-                              awaitIndex: firstChildAwaitIndex,
-                              argIndex: nestedArgIndex,
-                            });
-                            callArgEvents.push({
-                              kind: "materialize",
-                              argIndex: outerArgIndex,
-                              nestedIndex: childNestedIndex,
-                            });
-                          }
-                          continue;
-                        }
-                        return undefined;
-                      }
-                      const childNestedIndex = nestedCallArgs.length;
-                      const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
-                        deepValue,
-                        outerArgIndex,
-                        childNestedIndex,
-                        tempPrefix,
-                        awaitedArgs,
-                        callArgEvents,
-                        nestedCallArgs,
-                      );
-                      if (childPlan === undefined) {
-                        return undefined;
-                      }
-                      transformedObjectArg = this.replaceExactExprInExpr(
-                        transformedObjectArg,
-                        deepValue,
-                        childPlan.resultTempExpr,
-                      );
-                      const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
-                      nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
-                      nestedPlan.awaitedArgDependencies.push({
-                        awaitIndex: firstChildAwaitIndex,
-                        argIndex: nestedArgIndex,
-                      });
-                      callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
-                    }
-                    continue;
-                  }
-                  return undefined;
-                }
-                const childNestedIndex = nestedCallArgs.length;
-                const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
-                  nestedValue,
-                  outerArgIndex,
-                  childNestedIndex,
-                  tempPrefix,
-                  awaitedArgs,
-                  callArgEvents,
-                  nestedCallArgs,
-                );
-                if (childPlan === undefined) {
-                  return undefined;
-                }
-                transformedObjectArg = this.replaceExactExprInExpr(
-                  transformedObjectArg,
-                  nestedValue,
-                  childPlan.resultTempExpr,
-                );
-                const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
-                nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
-                nestedPlan.awaitedArgDependencies.push({ awaitIndex: firstChildAwaitIndex, argIndex: nestedArgIndex });
-                callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
-              }
-              continue;
-            }
-            if (value.kind !== "array_lit") {
-              return undefined;
-            }
+          if (value.kind === "array_lit") {
             for (const elem of value.elems) {
               if (elem.kind !== "elem") {
                 return undefined;
@@ -6767,24 +6733,42 @@ class Emitter {
             }
             continue;
           }
-          const childNestedIndex = nestedCallArgs.length;
-          const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
-            value,
+          if (value.kind === "call_expr") {
+            const planned = this.tryPlanNestedMultiAwaitObjectCallLeaf(
+              value,
+              outerArgIndex,
+              nestedArgIndex,
+              tempPrefix,
+              nestedPlan,
+              transformedObjectArg,
+              awaitedArgs,
+              callArgEvents,
+              nestedCallArgs,
+            );
+            if (planned === undefined) {
+              return undefined;
+            }
+            transformedObjectArg = planned;
+            continue;
+          }
+          if (value.kind !== "object_lit") {
+            return undefined;
+          }
+          const planned = this.tryWalkNestedMultiAwaitObjectCallLeaves(
             outerArgIndex,
-            childNestedIndex,
+            nestedArgIndex,
             tempPrefix,
+            nestedPlan,
+            transformedObjectArg,
+            value,
             awaitedArgs,
             callArgEvents,
             nestedCallArgs,
           );
-          if (childPlan === undefined) {
+          if (planned === undefined) {
             return undefined;
           }
-          transformedObjectArg = this.replaceExactExprInExpr(transformedObjectArg, value, childPlan.resultTempExpr);
-          const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
-          nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
-          nestedPlan.awaitedArgDependencies.push({ awaitIndex: firstChildAwaitIndex, argIndex: nestedArgIndex });
-          callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
+          transformedObjectArg = planned;
         }
         nestedPlan.transformedObjectArgs.set(nestedArgIndex, transformedObjectArg);
         continue;
