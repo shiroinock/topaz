@@ -3027,6 +3027,7 @@ run_case async_binary_operator_multiple_await $'init left\nreturn left\nstmt lef
 run_case async_binary_tree_multiple_await $'init left\nreturn left\nstmt left\nsync tail\ninit middle\nreturn middle\nstmt middle\ninit right\nreturn right\nstmt right\ninit result\n6\nstmt done\ninit then\n6\nreturn then\n38\nstmt then'
 run_case async_binary_mixed_pure_multiple_await $'init left\nreturn left\nstmt left\ncall left\nsync tail\ninit right\nreturn right\nstmt right\ncall right\ninit value\n15\nstmt done\nconsume\n42\ninit then\n15\nreturn then\n45\nstmt then\ncall then'
 run_case async_array_literal_multiple_await $'init first\nreturn first\nstmt first\nsync tail\ninit second\nreturn second\nstmt second\ninit third\nreturn third\nstmt done\ninit fourth\nstmt then\ninit result\n10\nreturn then\n60\ninit then\n10'
+run_case async_array_literal_mixed_pure_multiple_await $'init first\nreturn first\nstmt first\nsync tail\ninit second\nreturn second\nstmt second\ninit result\n21\nstmt done\ninit then\n21\nreturn then\n91\nstmt then'
 run_case async_object_literal_multiple_await $'init left\nreturn left\nstmt left\nsync tail\ninit right\nreturn right\nstmt right\ninit result\n3\nstmt done\ninit then\n3\nreturn then\n30\nstmt then'
 run_case async_await_call_arg_binary_multiple $'stmt left\ninit left\nreturn left\nsync tail\nstmt post\ninit right\nreturn right\nstmt call\n3\ninit result\n7\nreturn call\n30\nstmt then\ninit then\n7\nreturn then\n30'
 run_case async_await_synthetic_binary_call_arg $'char left\nparse left\njoin left\nsync tail\nchar right\nparse right\njoin right\nchar value\nA\njoin discarded\nchar then\nA\nparse then\n12\njoin then'
@@ -3082,6 +3083,7 @@ run_fail_case await_expression_deferred_fail examples/await_expression_deferred_
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
 run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_binary_mixed_side_effect_deferred_fail examples/await_binary_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_array_literal_mixed_side_effect_deferred_fail examples/await_array_literal_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_statement_deferred_fail examples/await_object_literal_statement_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_multiple_deferred_fail examples/await_call_arg_multiple_deferred_fail.ts "await expression lowering is deferred"

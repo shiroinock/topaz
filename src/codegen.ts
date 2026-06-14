@@ -6767,9 +6767,12 @@ class Emitter {
         if (!this.collectMultiAwaitArrayLiteralLeaves(value, awaits)) return false;
         continue;
       }
-      if (value.kind !== "await_expr") return false;
-      if (this.collectAwaitExprsInExpr(value.operand).length > 0) return false;
-      awaits.push(value);
+      if (value.kind === "await_expr") {
+        if (this.collectAwaitExprsInExpr(value.operand).length > 0) return false;
+        awaits.push(value);
+        continue;
+      }
+      if (!this.isSideEffectFreeMultiAwaitLeaf(value)) return false;
     }
     return true;
   }
@@ -6794,7 +6797,7 @@ class Emitter {
       out.push(root);
       return true;
     }
-    if (this.isSideEffectFreeMultiAwaitBinaryLeaf(root)) return true;
+    if (this.isSideEffectFreeMultiAwaitLeaf(root)) return true;
     if (root.kind !== "bin_op") return false;
     if (root.op === "&&" || root.op === "||" || root.op === "??") return false;
     return (
@@ -6803,7 +6806,7 @@ class Emitter {
     );
   }
 
-  private isSideEffectFreeMultiAwaitBinaryLeaf(expr: Expr): boolean {
+  private isSideEffectFreeMultiAwaitLeaf(expr: Expr): boolean {
     if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
     switch (expr.kind) {
       case "ident":
@@ -6816,24 +6819,24 @@ class Emitter {
       case "this_expr":
         return true;
       case "paren_expr":
-        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.inner);
+        return this.isSideEffectFreeMultiAwaitLeaf(expr.inner);
       case "non_null":
-        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.operand);
+        return this.isSideEffectFreeMultiAwaitLeaf(expr.operand);
       case "type_assert":
-        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.expr);
+        return this.isSideEffectFreeMultiAwaitLeaf(expr.expr);
       case "prefix_op":
         if (expr.op === "++" || expr.op === "--") return false;
-        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.operand);
+        return this.isSideEffectFreeMultiAwaitLeaf(expr.operand);
       case "typeof_expr":
-        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.operand);
+        return this.isSideEffectFreeMultiAwaitLeaf(expr.operand);
       case "bin_op":
         if (expr.op === "&&" || expr.op === "||" || expr.op === "??") return false;
         return (
-          this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.lhs) &&
-          this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.rhs)
+          this.isSideEffectFreeMultiAwaitLeaf(expr.lhs) &&
+          this.isSideEffectFreeMultiAwaitLeaf(expr.rhs)
         );
       case "prop_access":
-        return !expr.optional && this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.receiver);
+        return !expr.optional && this.isSideEffectFreeMultiAwaitLeaf(expr.receiver);
       default:
         return false;
     }
