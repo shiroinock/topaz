@@ -5818,6 +5818,7 @@ class Emitter {
     };
     let awaitArgIndex = -1;
     let transformedAwaitArg: Expr | undefined = undefined;
+    let awaitArgSiblingTemp: AwaitCallArgTemp | undefined = undefined;
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
       const found = this.collectAwaitExprsInExpr(arg);
@@ -5836,7 +5837,12 @@ class Emitter {
       } else if (this.simpleCallArgumentAwaitReplacementSupported(arg, awaitExpr)) {
         transformedAwaitArg = this.replaceAwaitExprInExpr(arg, awaitExpr, awaitedTempExpr);
       } else {
-        throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+        const siblingAwait = this.tryBuildPreAwaitCallArgSiblingTemp(arg, awaitExpr, awaitedTempExpr, stepOrdinal, i);
+        if (siblingAwait === undefined) {
+          throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+        }
+        transformedAwaitArg = siblingAwait.transformedArg;
+        awaitArgSiblingTemp = siblingAwait.temp;
       }
       awaitArgIndex = i;
     }
@@ -6025,6 +6031,9 @@ class Emitter {
         preAwaitArgTemps.push({ tempName, arg, argType });
         transformedArgs.push({ kind: "ident", name: tempName, pos: arg.pos, end: arg.end });
       } else if (i === awaitArgIndex) {
+        if (awaitArgSiblingTemp !== undefined) {
+          preAwaitArgTemps.push(awaitArgSiblingTemp);
+        }
         transformedArgs.push(transformedAwaitArg);
       } else {
         transformedArgs.push(root.args[i]);
@@ -6044,6 +6053,88 @@ class Emitter {
       preAwaitReceiverTemps,
       preAwaitArgTemps,
     };
+  }
+
+  private tryBuildPreAwaitCallArgSiblingTemp(
+    arg: Expr,
+    awaitExpr: AwaitExpr,
+    awaitedTempExpr: IdentExpr,
+    stepOrdinal: number,
+    argIndex: number,
+  ): { transformedArg: Expr; temp: AwaitCallArgTemp } | undefined {
+    const root = this.unwrapParenExpr(arg);
+    if (root.kind !== "bin_op") return undefined;
+    if (root.op === "&&" || root.op === "||" || root.op === "??") return undefined;
+    if (this.collectAwaitExprsInExpr(root.lhs).length > 0) return undefined;
+    const rhsAwaits = this.collectAwaitExprsInExpr(root.rhs);
+    if (
+      rhsAwaits.length !== 1 ||
+      rhsAwaits[0].pos !== awaitExpr.pos ||
+      rhsAwaits[0].end !== awaitExpr.end ||
+      !this.simpleCallArgumentAwaitReplacementSupported(root.rhs, awaitExpr) ||
+      !this.preAwaitCallArgumentSiblingTempSupported(root.lhs)
+    ) {
+      return undefined;
+    }
+
+    const argType = this.inferType(root.lhs);
+    this.assertNotVoid(argType, { pos: root.lhs.pos }, "await call pre-argument sibling temporary");
+    const tempName = `__topaz_call_arg_${stepOrdinal}_${argIndex}_pre`;
+    this.scope.declareBinding(tempName, argType, /* isConst */ true, { pos: root.lhs.pos });
+    const tempExpr: IdentExpr = {
+      kind: "ident",
+      name: tempName,
+      pos: root.lhs.pos,
+      end: root.lhs.end,
+    };
+    return {
+      transformedArg: {
+        kind: "bin_op",
+        op: root.op,
+        lhs: tempExpr,
+        rhs: this.replaceAwaitExprInExpr(root.rhs, awaitExpr, awaitedTempExpr),
+        pos: root.pos,
+        end: root.end,
+      },
+      temp: { tempName, arg: root.lhs, argType },
+    };
+  }
+
+  private preAwaitCallArgumentSiblingTempSupported(expr: Expr): boolean {
+    if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
+    switch (expr.kind) {
+      case "ident":
+      case "num_lit":
+      case "bigint_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "this_expr":
+      case "import_meta_url":
+        return true;
+      case "paren_expr":
+        return this.preAwaitCallArgumentSiblingTempSupported(expr.inner);
+      case "non_null":
+        return this.preAwaitCallArgumentSiblingTempSupported(expr.operand);
+      case "type_assert":
+        return this.preAwaitCallArgumentSiblingTempSupported(expr.expr);
+      case "prefix_op":
+        if (expr.op === "++" || expr.op === "--") return false;
+        return this.preAwaitCallArgumentSiblingTempSupported(expr.operand);
+      case "typeof_expr":
+        return this.preAwaitCallArgumentSiblingTempSupported(expr.operand);
+      case "bin_op":
+        if (expr.op === "&&" || expr.op === "||" || expr.op === "??") return false;
+        return (
+          this.preAwaitCallArgumentSiblingTempSupported(expr.lhs) &&
+          this.preAwaitCallArgumentSiblingTempSupported(expr.rhs)
+        );
+      case "call_expr":
+        return !expr.optional && this.firstSpreadArg(expr.args) === undefined;
+      default:
+        return false;
+    }
   }
 
   private checkCallArgCount(

@@ -8,7 +8,7 @@ function mark(label: string, value: string): string {
 }
 
 async function bad(): Promise<string> {
-  return join("/tmp", mark("pre", "x") + await Promise.resolve("y"));
+  return join("/tmp", await Promise.resolve("x") + mark("post", "y"));
 }
 
 bad();
