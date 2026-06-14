@@ -3130,7 +3130,8 @@ run_fail_case await_call_arg_process_write_deferred_fail examples/await_call_arg
 run_case await_call_arg_method_deferred_fail $'map receiver\nfilter receiver\nsync tail\nmap arg\nfilter arg\nmap materialize\nmap callback\nmap callback\nmap callback\nmap callback\nmap after\n4\n12\nfilter materialize\nfilter callback\nfilter callback\nfilter callback\nfilter callback\nfilter after\n2\n3\nmap then\n12\nfilter then\n2'
 run_fail_case await_call_arg_array_includes_nested_callback_deferred_fail examples/await_call_arg_array_includes_nested_callback_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_collection_void_deferred_fail examples/await_call_arg_collection_void_deferred_fail.ts "Map.set returns void in this dialect and cannot be used as a value"
-run_fail_case await_collection_receiver_arg_nested_deferred_fail examples/await_collection_receiver_arg_nested_deferred_fail.ts "await expression lowering is deferred"
+run_case await_collection_receiver_arg_nested_deferred_fail $'decl recv\nreturn recv\nsync tail\ndecl box\nreturn box\nidentity call\ndecl key\nidentity call\nreturn key\nnested key call\ndecl result\n1\nnested key call\ndecl then\n1\nreturn then\ntrue'
+run_fail_case await_collection_receiver_arg_conditional_deferred_fail examples/await_collection_receiver_arg_conditional_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_array_push_deferred_fail examples/await_call_arg_array_push_deferred_fail.ts "Array.push returns void in this dialect and cannot be used as a value"
 run_fail_case await_promise_reject_no_context_fail examples/await_promise_reject_no_context_fail.ts "Promise.reject requires a contextual Promise<T> target"
 run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"

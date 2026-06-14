@@ -296,6 +296,7 @@ type MultiAwaitNestedCallArgPlan = {
   transformedNestedCallArgs: Map<number, IdentExpr>;
   transformedCallee: Expr;
   awaitedReceiverIndex?: number;
+  materializedReceiverNestedIndex?: number;
   transformedCall?: CallExpr;
   plan?: OrdinaryCallPlan;
   resultType?: TopazType;
@@ -6458,6 +6459,7 @@ class Emitter {
     awaitedArgs: Array<MultiAwaitCallArgAwait>,
     callArgEvents: Array<MultiAwaitCallArgEvent>,
     nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
+    allowMaterializedReceiverCall: boolean,
   ): Expr | undefined {
     const childNestedIndex = nestedCallArgs.length;
     const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
@@ -6468,6 +6470,7 @@ class Emitter {
       awaitedArgs,
       callArgEvents,
       nestedCallArgs,
+      allowMaterializedReceiverCall,
     );
     if (childPlan === undefined) {
       return undefined;
@@ -6533,6 +6536,7 @@ class Emitter {
           awaitedArgs,
           callArgEvents,
           nestedCallArgs,
+          false,
         );
         if (planned === undefined) {
           return undefined;
@@ -6589,6 +6593,7 @@ class Emitter {
     awaitedArgs: Array<MultiAwaitCallArgAwait>,
     callArgEvents: Array<MultiAwaitCallArgEvent>,
     nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
+    allowMaterializedReceiverCall: boolean,
   ): MultiAwaitNestedCallArgPlan | undefined {
     if (nestedRoot.optional) {
       return undefined;
@@ -6608,10 +6613,13 @@ class Emitter {
       if (receiverAwaits.length > 0) {
         const receiverMaybe = this.unwrapParenExpr(callee.receiver);
         if (
-          receiverAwaits.length !== 1 ||
-          receiverMaybe.kind !== "await_expr" ||
-          receiverAwaits[0].pos !== receiverMaybe.pos ||
-          receiverAwaits[0].end !== receiverMaybe.end
+          !(
+            receiverAwaits.length === 1 &&
+            receiverMaybe.kind === "await_expr" &&
+            receiverAwaits[0].pos === receiverMaybe.pos &&
+            receiverAwaits[0].end === receiverMaybe.end
+          ) &&
+          !(allowMaterializedReceiverCall && receiverMaybe.kind === "call_expr")
         ) {
           return undefined;
         }
@@ -6644,42 +6652,70 @@ class Emitter {
       const receiverAwaits = this.collectAwaitExprsInExpr(callee.receiver);
       if (receiverAwaits.length > 0) {
         const receiverMaybe = this.unwrapParenExpr(callee.receiver);
-        if (receiverMaybe.kind !== "await_expr") {
+        if (receiverMaybe.kind === "await_expr") {
+          const operandInfo = this.resolveAwaitOperand(receiverMaybe.operand, undefined);
+          this.assertNotVoid(operandInfo.awaitedType, { pos: receiverMaybe.pos }, "await nested method receiver");
+          const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+          const awaitIndex = awaitedArgs.length;
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: tempName,
+            pos: receiverMaybe.pos,
+            end: receiverMaybe.end,
+          };
+          awaitedArgs.push({
+            argIndex: outerArgIndex,
+            awaitExpr: receiverMaybe,
+            binaryArg: false,
+            tempName,
+            owner: { kind: "nested_receiver", nestedIndex },
+          });
+          nestedPlan.awaitedArgIndexes.push(awaitIndex);
+          nestedPlan.awaitedReceiverIndex = awaitIndex;
+          nestedPlan.transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: callee.name,
+            optional: false,
+            pos: callee.pos,
+            end: callee.end,
+          };
+          callArgEvents.push({
+            kind: "await",
+            argIndex: outerArgIndex,
+            awaitExpr: receiverMaybe,
+            binaryArg: false,
+          });
+        } else if (allowMaterializedReceiverCall && receiverMaybe.kind === "call_expr") {
+          const childNestedIndex = nestedCallArgs.length;
+          const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+            receiverMaybe,
+            outerArgIndex,
+            childNestedIndex,
+            tempPrefix,
+            awaitedArgs,
+            callArgEvents,
+            nestedCallArgs,
+            allowMaterializedReceiverCall,
+          );
+          if (childPlan === undefined) {
+            return undefined;
+          }
+          const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
+          nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
+          nestedPlan.materializedReceiverNestedIndex = childNestedIndex;
+          nestedPlan.transformedCallee = {
+            kind: "prop_access",
+            receiver: childPlan.resultTempExpr,
+            name: callee.name,
+            optional: false,
+            pos: callee.pos,
+            end: callee.end,
+          };
+          callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
+        } else {
           return undefined;
         }
-        const operandInfo = this.resolveAwaitOperand(receiverMaybe.operand, undefined);
-        this.assertNotVoid(operandInfo.awaitedType, { pos: receiverMaybe.pos }, "await nested method receiver");
-        const tempName = `${tempPrefix}_${awaitedArgs.length}`;
-        const awaitIndex = awaitedArgs.length;
-        const receiverTempExpr: IdentExpr = {
-          kind: "ident",
-          name: tempName,
-          pos: receiverMaybe.pos,
-          end: receiverMaybe.end,
-        };
-        awaitedArgs.push({
-          argIndex: outerArgIndex,
-          awaitExpr: receiverMaybe,
-          binaryArg: false,
-          tempName,
-          owner: { kind: "nested_receiver", nestedIndex },
-        });
-        nestedPlan.awaitedArgIndexes.push(awaitIndex);
-        nestedPlan.awaitedReceiverIndex = awaitIndex;
-        nestedPlan.transformedCallee = {
-          kind: "prop_access",
-          receiver: receiverTempExpr,
-          name: callee.name,
-          optional: false,
-          pos: callee.pos,
-          end: callee.end,
-        };
-        callArgEvents.push({
-          kind: "await",
-          argIndex: outerArgIndex,
-          awaitExpr: receiverMaybe,
-          binaryArg: false,
-        });
       }
     }
 
@@ -6722,6 +6758,7 @@ class Emitter {
           awaitedArgs,
           callArgEvents,
           nestedCallArgs,
+          allowMaterializedReceiverCall,
         );
         if (childPlan === undefined) {
           return undefined;
@@ -6804,6 +6841,7 @@ class Emitter {
             awaitedArgs,
             callArgEvents,
             nestedCallArgs,
+            allowMaterializedReceiverCall,
           );
           if (childPlan === undefined) {
             return undefined;
@@ -6923,6 +6961,22 @@ class Emitter {
       }
     }
 
+    let rootCollectionReceiverNestedCallAllowed = false;
+    if (receiverAwaitStep !== undefined) {
+      if (rootCallee.kind === "prop_access") {
+        const rootMethodName = rootCallee.name;
+        if (receiverAwaitStep.awaitedType.kind === "map") {
+          if (rootMethodName === "get" || rootMethodName === "has" || rootMethodName === "delete") {
+            rootCollectionReceiverNestedCallAllowed = true;
+          }
+        } else if (receiverAwaitStep.awaitedType.kind === "set") {
+          if (rootMethodName === "has" || rootMethodName === "delete") {
+            rootCollectionReceiverNestedCallAllowed = true;
+          }
+        }
+      }
+    }
+
     const awaitedArgs: Array<MultiAwaitCallArgAwait> = [];
     const callArgEvents: Array<MultiAwaitCallArgEvent> = [];
     const transformedBinaryArgs = new Map<number, Expr>();
@@ -6955,6 +7009,7 @@ class Emitter {
           awaitedArgs,
           callArgEvents,
           nestedCallArgs,
+          rootCollectionReceiverNestedCallAllowed,
         );
         if (nestedPlan === undefined) {
           return undefined;
@@ -7001,6 +7056,7 @@ class Emitter {
             awaitedArgs,
             callArgEvents,
             nestedCallArgs,
+            rootCollectionReceiverNestedCallAllowed,
           );
           if (nestedPlan === undefined) {
             return undefined;
@@ -7222,7 +7278,7 @@ class Emitter {
 
       let transformedCallee: Expr = signatureNestedCall.callee;
       const firstNestedStep = stepForAwaitIndex(firstNestedAwaitIndex);
-      if (nestedPlan.awaitedReceiverIndex === undefined) {
+      if (nestedPlan.awaitedReceiverIndex === undefined && nestedPlan.materializedReceiverNestedIndex === undefined) {
         switch (plan.kind) {
           case "class_method": {
             const receiverTempName = `${nestedPlan.resultTempName}_recv`;
