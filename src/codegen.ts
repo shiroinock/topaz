@@ -6788,6 +6788,10 @@ class Emitter {
     if (expr.props.length < 2) return undefined;
     const awaits: Array<AwaitExpr> = [];
     for (const prop of expr.props) {
+      if (prop.kind === "prop_shorthand") {
+        if (!allowPureLeaves) return undefined;
+        continue;
+      }
       if (prop.kind !== "prop_kv") return undefined;
       const value = this.unwrapParenExpr(prop.value);
       if (value.kind === "await_expr") {

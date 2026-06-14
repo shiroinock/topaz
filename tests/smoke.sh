@@ -3030,6 +3030,7 @@ run_case async_array_literal_multiple_await $'init first\nreturn first\nstmt fir
 run_case async_array_literal_mixed_pure_multiple_await $'init first\nreturn first\nstmt first\nsync tail\ninit second\nreturn second\nstmt second\ninit result\n21\nstmt done\ninit then\n21\nreturn then\n91\nstmt then'
 run_case async_object_literal_multiple_await $'init left\nreturn left\nstmt left\nsync tail\ninit right\nreturn right\nstmt right\ninit result\n3\nstmt done\ninit then\n3\nreturn then\n30\nstmt then'
 run_case async_object_literal_mixed_pure_multiple_await $'init left\nreturn middle\nsync tail\ninit right\nreturn tail\ninit result\n16\ninit then\n16\nreturn then\n111'
+run_case async_object_literal_shorthand_multiple_await $'init left\nreturn head\nsync tail\ninit right\nreturn tail\ninit result\n8\ninit then\n8\nreturn then\n110'
 run_case async_await_call_arg_binary_multiple $'stmt left\ninit left\nreturn left\nsync tail\nstmt post\ninit right\nreturn right\nstmt call\n3\ninit result\n7\nreturn call\n30\nstmt then\ninit then\n7\nreturn then\n30'
 run_case async_await_synthetic_binary_call_arg $'char left\nparse left\njoin left\nsync tail\nchar right\nparse right\njoin right\nchar value\nA\njoin discarded\nchar then\nA\nparse then\n12\njoin then'
 run_case async_await_call_arg_initializer $'declared pre\narrow pre\nmethod pre\nexpr pre\nsync tail\ndeclared post\ndeclared call\ndeclared read\n123\narrow post\narrow call\narrow read\n456\nmethod post\nmethod call\nmethod read\n789\nexpr post\nexpr call\nexpr read\n234\ndeclared then\n123\narrow then\n456\nmethod then\n789\nexpr then\n234'
@@ -3074,6 +3075,7 @@ run_case async_await_array_element_compound_assignment $'sync pre\n15\n1\ntop\nd
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_mixed_side_effect_deferred_fail examples/await_object_literal_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_statement_mixed_pure_deferred_fail examples/await_object_literal_statement_mixed_pure_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_object_literal_statement_shorthand_deferred_fail examples/await_object_literal_statement_shorthand_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case async_await_class_field_compound_assignment_side_effect_receiver_fail examples/async_await_class_field_compound_assignment_side_effect_receiver_fail.ts "property assignment requires a simple base"
 run_fail_case async_await_interface_field_compound_assignment_side_effect_receiver_fail examples/async_await_interface_field_compound_assignment_side_effect_receiver_fail.ts "property assignment requires a simple base"
 run_fail_case async_await_interface_field_compound_assignment_multiple_fail examples/async_await_interface_field_compound_assignment_multiple_fail.ts "await expression lowering is deferred"
