@@ -3127,7 +3127,8 @@ run_fail_case await_call_arg_path_variadic_deferred_fail examples/await_call_arg
 run_fail_case await_call_arg_pre_sibling_mirror_deferred_fail examples/await_call_arg_pre_sibling_mirror_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_child_process_deferred_fail examples/await_call_arg_child_process_deferred_fail.ts "execFileSync returns void and cannot be used as a value"
 run_fail_case await_call_arg_process_write_deferred_fail examples/await_call_arg_process_write_deferred_fail.ts "process.stdout.write returns void and cannot be used as a value"
-run_fail_case await_call_arg_method_deferred_fail examples/await_call_arg_method_deferred_fail.ts "await expression lowering is deferred"
+run_case await_call_arg_method_deferred_fail $'map receiver\nfilter receiver\nsync tail\nmap arg\nfilter arg\nmap materialize\nmap callback\nmap callback\nmap callback\nmap callback\nmap after\n4\n12\nfilter materialize\nfilter callback\nfilter callback\nfilter callback\nfilter callback\nfilter after\n2\n3\nmap then\n12\nfilter then\n2'
+run_fail_case await_call_arg_array_includes_nested_callback_deferred_fail examples/await_call_arg_array_includes_nested_callback_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_collection_void_deferred_fail examples/await_call_arg_collection_void_deferred_fail.ts "Map.set returns void in this dialect and cannot be used as a value"
 run_fail_case await_collection_receiver_arg_nested_deferred_fail examples/await_collection_receiver_arg_nested_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_array_push_deferred_fail examples/await_call_arg_array_push_deferred_fail.ts "Array.push returns void in this dialect and cannot be used as a value"

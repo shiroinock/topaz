@@ -6831,6 +6831,30 @@ class Emitter {
     return nestedPlan;
   }
 
+  private hasDescriptorBackedNestedCallbackArgPlan(
+    nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
+    callbackArgIndex: number,
+  ): boolean {
+    for (const nestedPlan of nestedCallArgs) {
+      if (nestedPlan.argIndex !== callbackArgIndex) continue;
+      const plan = nestedPlan.plan;
+      if (plan === undefined) continue;
+      switch (plan.kind) {
+        case "class_method":
+        case "interface_method":
+        case "map_method":
+        case "set_method":
+        case "array_method":
+        case "string_method":
+        case "number_method":
+          return true;
+        default:
+          break;
+      }
+    }
+    return false;
+  }
+
   private tryBuildMultiAwaitCallArgExpression(
     expr: Expr,
     tempPrefix: string,
@@ -7515,6 +7539,10 @@ class Emitter {
         return undefined;
       }
     } else {
+      const arrayCallbackNestedPlanSupported =
+        plan.kind === "array_method" &&
+        (plan.methodName === "map" || plan.methodName === "filter") &&
+        this.hasDescriptorBackedNestedCallbackArgPlan(nestedCallArgs, 0);
       if (
         !(
           plan.kind === "top_level" ||
@@ -7522,7 +7550,8 @@ class Emitter {
           plan.kind === "fn_value" ||
           (plan.kind === "synthetic_call" && this.isMultiAwaitBinarySyntheticCallArgKind(plan.syntheticKind)) ||
           plan.kind === "class_method" ||
-          plan.kind === "interface_method"
+          plan.kind === "interface_method" ||
+          arrayCallbackNestedPlanSupported
         )
       ) {
         return undefined;
