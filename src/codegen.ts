@@ -6726,16 +6726,25 @@ class Emitter {
   }
 
   private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<AwaitExpr> | undefined {
-    if (expr.elems.length === 0) return undefined;
     const awaits: Array<AwaitExpr> = [];
+    if (!this.collectMultiAwaitArrayLiteralLeaves(expr, awaits)) return undefined;
+    return awaits;
+  }
+
+  private collectMultiAwaitArrayLiteralLeaves(expr: ArrayLitExpr, awaits: Array<AwaitExpr>): boolean {
+    if (expr.elems.length === 0) return false;
     for (const elem of expr.elems) {
-      if (elem.kind !== "elem") return undefined;
+      if (elem.kind !== "elem") return false;
       const value = this.unwrapParenExpr(elem.expr);
-      if (value.kind !== "await_expr") return undefined;
-      if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
+      if (value.kind === "array_lit") {
+        if (!this.collectMultiAwaitArrayLiteralLeaves(value, awaits)) return false;
+        continue;
+      }
+      if (value.kind !== "await_expr") return false;
+      if (this.collectAwaitExprsInExpr(value.operand).length > 0) return false;
       awaits.push(value);
     }
-    return awaits;
+    return true;
   }
 
   private collectMultiAwaitObjectLiteralProperties(expr: ObjectLitExpr): Array<AwaitExpr> | undefined {
