@@ -3009,6 +3009,7 @@ run_case promise_finally_return_promise $'sync tail\ncleanup fulfilled preserve\
 run_case promise_finally_return_promise_like $'sync tail\ncleanup like fulfilled preserve\ncleanup like rejected preserve\ncleanup like fulfilled override\ncleanup like rejected override\nnested like cleanup start\ncleanup like number\nfifo like marker\ncleanup like throw before promise\nnested like cleanup inner\nthrow like override\n77\nfulfilled like value\n1\npreserved like rejection\nsource like\nfulfilled like override\nfulfilled cleanup like\nrejected like override\nrejected cleanup like\nnumber like result\n6\nnested like result\n5'
 run_case promise_finally_ignored_return $'sync tail\ncleanup number\ncleanup string\ncleanup boolean\ncleanup literal\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n10\nrejected string preserved\nsource string\nrejected bool preserved\nsource bool\nliteral result\n5\nfifo final then\n7\noverride catch\n88\nstring recovery\n2\nbool recovery\n3'
 run_case async_function_no_await $'async body\nasync void body\nsync after calls\nthen answer\n42\nthen void'
+run_case async_generic_no_await $'id body\nid body\nid body\nid body\npick body\npick body\nsync tail\nthen number\n42\nthen string\nready\nthen boolean\ntrue\nthen box\n7\nthen explicit second\n99\nthen inferred second\ninferred'
 run_case async_arrow_no_await $'arrow body\nsync tail\nthen block\n42\nthen expr\n42'
 run_case async_await_basic $'before await\nsync tail\nafter await\nthen answer\n42'
 run_case async_await_two_bindings $'before a\nsync tail\nbetween\nafter b\nthen sum\n42'
@@ -3084,7 +3085,7 @@ run_fail_case async_function_wrong_return_fail examples/async_function_wrong_ret
 run_fail_case async_function_return_promise_fail examples/async_function_return_promise_fail.ts "type mismatch: expected topaz_number, got topaz_promise_number"
 run_fail_case async_arrow_deferred_fail examples/async_arrow_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case async_method_deferred_fail examples/async_method_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case async_generic_deferred_fail examples/async_generic_deferred_fail.ts "async generic functions are unsupported"
+run_fail_case async_generic_deferred_fail examples/async_generic_deferred_fail.ts "async generic function with await is deferred"
 run_fail_case promise_then_on_rejected_param_fail examples/promise_then_on_rejected_param_fail.ts "Promise.then onRejected callback parameter type"
 run_fail_case promise_then_on_rejected_return_mismatch_fail examples/promise_then_on_rejected_return_mismatch_fail.ts "Promise.then onRejected callback return type topaz_string does not match fulfilled callback return type topaz_number"
 run_fail_case promise_then_on_rejected_return_promise_fail examples/promise_then_on_rejected_return_promise_fail.ts "Promise.then onRejected callback normalized return payload topaz_string does not match fulfilled callback payload topaz_number"

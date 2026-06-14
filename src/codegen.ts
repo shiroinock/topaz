@@ -2754,9 +2754,6 @@ class Emitter {
         throw new CodegenError(fnAnchor, `redeclaration of function '${fname}'`);
       }
       if (fn.typeParams.length > 0) {
-        if (fn.isAsync) {
-          throw new CodegenError(fnAnchor, "async generic functions are unsupported");
-        }
         // Generic function: defer signature resolution until call sites
         // supply concrete type arguments. Defaults and constraints remain
         // unsupported outside brand aliases.
@@ -2776,6 +2773,19 @@ class Emitter {
             throw new CodegenError(tpAnchor, `duplicate type parameter '${tp.name}'`);
           }
           typeParams.push(tp.name);
+        }
+        if (fn.isAsync) {
+          const fnReturnType = fn.returnType;
+          if (fnReturnType === undefined) {
+            throw new CodegenError(fnAnchor, "async generic function return annotation must be Promise<T>");
+          }
+          this.validateGenericAsyncReturnAnnotation(fnReturnType);
+          for (const s of fn.body.stmts) {
+            const foundAwait = this.collectAwaitExprsInStmt(s);
+            if (foundAwait.length > 0) {
+              throw new CodegenError({ pos: foundAwait[0].pos }, "async generic function with await is deferred");
+            }
+          }
         }
         this.genericFunctions.set(fname, { name: fname, typeParams, decl: fn, sf });
         return;
@@ -7062,6 +7072,22 @@ class Emitter {
     );
   }
 
+  private validateGenericAsyncReturnAnnotation(returnType: TypeNode): void {
+    const anchor: { pos: number } = { pos: returnType.pos };
+    if (returnType.kind === "type_ref" && returnType.name === "PromiseLike") {
+      throw new CodegenError(
+        anchor,
+        "async generic function return annotation must be Promise<T>; PromiseLike<T> bridge is deferred",
+      );
+    }
+    if (returnType.kind !== "type_ref" || returnType.name !== "Promise") {
+      throw new CodegenError(anchor, "async generic function return annotation must be Promise<T>");
+    }
+    if (returnType.typeArgs.length !== 1) {
+      throw new CodegenError(anchor, "Promise<T> requires exactly one type argument");
+    }
+  }
+
   // Phase 1.4c-2: format a monomorph's C signature from its resolved
   // FunctionSig. Distinct from formatSignature(fn) which re-resolves via
   // typeFromAnnotation; here the substitution has already been applied and we
@@ -7078,9 +7104,22 @@ class Emitter {
     const prevScope = this.typeParamScope;
     this.typeParamScope = mono.subs;
     const prevRet = this.currentReturnType;
+    const prevAsyncPayload = this.currentAsyncReturnPayloadType;
     const prevLive = this.liveTryFrames;
     const prevFinallyReturn = this.finallyReturnContext;
-    this.currentReturnType = mono.sig.returnType;
+    const sigReturnType = mono.sig.returnType;
+    let asyncPayload: TopazType | undefined = undefined;
+    if (mono.decl.isAsync) {
+      if (sigReturnType.kind !== "promise") {
+        throw new CodegenError(
+          { pos: mono.decl.pos },
+          `async generic function return annotation must be Promise<T>, got ${typeIdent(sigReturnType)}`,
+        );
+      }
+      asyncPayload = sigReturnType.value;
+    }
+    this.currentReturnType = asyncPayload === undefined ? sigReturnType : asyncPayload;
+    this.currentAsyncReturnPayloadType = asyncPayload;
     this.liveTryFrames = 0;
     this.finallyReturnContext = undefined;
     this.scope.push();
@@ -7088,10 +7127,25 @@ class Emitter {
     for (const p of mono.sig.params) {
       this.scope.declareBinding(p.name, p.type, /* isConst */ false, monoAnchor);
     }
-    const body = this.emitBlockBoundary(mono.decl.body, mono.sf);
+    let body: string = "";
+    if (asyncPayload === undefined) {
+      body = this.emitBlockBoundary(mono.decl.body, mono.sf);
+    } else {
+      const monoAsyncSig: TopLevelFunctionSig = {
+        name: mono.origName,
+        sf: mono.sf,
+        cName: mono.mangled,
+        params: mono.sig.params,
+        returnType: sigReturnType,
+        returnsNever: false,
+        isAsync: true,
+      };
+      body = this.emitAsyncFunctionBody(mono.decl.body, mono.sf, asyncPayload, monoAsyncSig);
+    }
     const rendered = `${this.formatMonomorphSignature(mono.mangled, mono.sig)} ${body}`;
     this.scope.pop();
     this.currentReturnType = prevRet;
+    this.currentAsyncReturnPayloadType = prevAsyncPayload;
     this.liveTryFrames = prevLive;
     this.finallyReturnContext = prevFinallyReturn;
     this.typeParamScope = prevScope;
