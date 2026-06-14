@@ -3315,6 +3315,7 @@ run_fail_case array_join_sep_type_fail examples/array_join_sep_type_fail.ts "Arr
 run_fail_case array_join_too_many_args_fail examples/array_join_too_many_args_fail.ts "Array.join expects at most one argument"
 
 run_case spread_basic $'3\n6\n3\n4\n4\n100\n6\n115\n2\n15\n0\n10\n3\n14\n6\n5\n159\n4\n10\n3\n9\n7'
+run_case array_spread_eval_plan $'left\nright\n5\n10'
 run_case array_push_spread $'4\n10\n8\n36\n4\n38\n4\n10'
 run_fail_case spread_call_args_fail examples/spread_call_args_fail.ts "spread in call arguments is unsupported"
 run_fail_case spread_new_args_fail examples/spread_new_args_fail.ts "spread in \`new\` arguments is unsupported"

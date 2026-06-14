@@ -274,6 +274,15 @@ type MultiAwaitCallArgEvent =
   | { kind: "snapshot"; argIndex: number; expr: Expr; nestedIndex: number; nestedArgIndex: number }
   | { kind: "materialize"; argIndex: number; nestedIndex: number };
 
+type ArrayLiteralSpreadPlanStep =
+  | { kind: "fixed"; expr: Expr }
+  | { kind: "spread"; expr: Expr; sourceType: TopazType; elemType: TopazType; sourceTmp: string; arrayName: string };
+
+type ArrayLiteralSpreadPlan = {
+  fixedCount: number;
+  steps: Array<ArrayLiteralSpreadPlanStep>;
+};
+
 type MultiAwaitNestedCallArgPlan = {
   argIndex: number;
   root: CallExpr;
@@ -14574,9 +14583,9 @@ class Emitter {
     expr: ArrayLitExpr,
     expected: TopazType | undefined,
   ): string {
-    // Phase 1.5-3.5h-spread: spread (`...x`) is allowed when the source is an
-    // Array<T> whose elem type can flow into the destination elem type.
-    // Set / Iterator sources stay rejected here (tracked in future sub-steps).
+    // Phase 5.144: array literal spread first builds a source-order plan.
+    // Spread sources are still synchronous Array<T> values only; the plan gives
+    // later async work a named boundary without accepting awaited sources here.
     // Holes in array literals are rejected in convert.
     let hasSpread = false;
     for (const elem of expr.elems) {
@@ -14601,53 +14610,70 @@ class Emitter {
         parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e.expr, elemType)});`);
       }
     } else {
+      const plan = this.buildArrayLiteralSpreadPlan(expr, elemType);
       // Snapshot every spread source first so the reserve sum / push loop see
       // a stable .len and .data, and each source expression evaluates once.
-      const spreadTmps: string[] = [];
-      const spreadElemTypes: TopazType[] = [];
-      const fixedCount = expr.elems.filter((e) => e.kind !== "spread").length;
-      for (const e of expr.elems) {
-        if (e.kind !== "spread") continue;
-        const srcType = this.inferType(e.expr);
-        if (!isArrayType(srcType)) {
-          throw new CodegenError(
-            { pos: e.expr.pos },
-            `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
-          );
-        }
-        const srcElem = arrayElem(srcType)!;
-        if (!typeEq(srcElem, elemType) && !this.isAssignableTo(srcElem, elemType)) {
-          throw new CodegenError(
-            { pos: e.expr.pos },
-            `spread element type ${typeIdent(srcElem)} does not match destination element type ${typeIdent(elemType)}`,
-          );
-        }
-        const spId = this.tmpCounter++;
-        const spTmp = `__topaz_sp_${spId}`;
-        const spName = arrayShortName(srcType);
-        parts.push(`topaz_array_${spName} *${spTmp} = ${this.emitExpression(e.expr)};`);
-        spreadTmps.push(spTmp);
-        spreadElemTypes.push(srcElem);
+      const reserveParts: Array<string> = [`${plan.fixedCount}`];
+      for (const step of plan.steps) {
+        if (step.kind !== "spread") continue;
+        parts.push(`topaz_array_${step.arrayName} *${step.sourceTmp} = ${this.emitExpression(step.expr)};`);
+        reserveParts.push(`${step.sourceTmp}->len`);
       }
-      const reserveSum = [`${fixedCount}`, ...spreadTmps.map((t) => `${t}->len`)].join(" + ");
+      const reserveSum = reserveParts.join(" + ");
       parts.push(`topaz_array_${name}_reserve(${tmp}, ${reserveSum});`);
-      let spIdx = 0;
-      for (const e of expr.elems) {
-        if (e.kind === "spread") {
-          const spTmp = spreadTmps[spIdx++];
-          const srcElem = spreadElemTypes[spIdx - 1];
+      for (const step of plan.steps) {
+        if (step.kind === "spread") {
           const iterId = this.tmpCounter++;
           const iVar = `__topaz_si_${iterId}`;
-          const elemStr = this.applyCoercion(`${spTmp}->data[${iVar}]`, srcElem, elemType, { pos: e.expr.pos });
+          const elemStr = this.applyCoercion(`${step.sourceTmp}->data[${iVar}]`, step.elemType, elemType, { pos: step.expr.pos });
           parts.push(
-            `for (size_t ${iVar} = 0; ${iVar} < ${spTmp}->len; ${iVar}++) topaz_array_${name}_push(${tmp}, ${elemStr});`,
+            `for (size_t ${iVar} = 0; ${iVar} < ${step.sourceTmp}->len; ${iVar}++) topaz_array_${name}_push(${tmp}, ${elemStr});`,
           );
         } else {
-          parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(e.expr, elemType)});`);
+          parts.push(`topaz_array_${name}_push(${tmp}, ${this.emitWithExpected(step.expr, elemType)});`);
         }
       }
     }
     return `({ ${parts.join(" ")} ${tmp}; })`;
+  }
+
+  private buildArrayLiteralSpreadPlan(
+    expr: ArrayLitExpr,
+    elemType: TopazType,
+  ): ArrayLiteralSpreadPlan {
+    const steps: Array<ArrayLiteralSpreadPlanStep> = [];
+    let fixedCount = 0;
+    for (const e of expr.elems) {
+      if (e.kind !== "spread") {
+        fixedCount++;
+        steps.push({ kind: "fixed", expr: e.expr });
+        continue;
+      }
+      const srcType = this.inferType(e.expr);
+      if (!isArrayType(srcType)) {
+        throw new CodegenError(
+          { pos: e.expr.pos },
+          `spread source in array literal must be an Array<T>, got ${typeIdent(srcType)}`,
+        );
+      }
+      const srcElem = arrayElem(srcType)!;
+      if (!typeEq(srcElem, elemType) && !this.isAssignableTo(srcElem, elemType)) {
+        throw new CodegenError(
+          { pos: e.expr.pos },
+          `spread element type ${typeIdent(srcElem)} does not match destination element type ${typeIdent(elemType)}`,
+        );
+      }
+      const spId = this.tmpCounter++;
+      steps.push({
+        kind: "spread",
+        expr: e.expr,
+        sourceType: srcType,
+        elemType: srcElem,
+        sourceTmp: `__topaz_sp_${spId}`,
+        arrayName: arrayShortName(srcType),
+      });
+    }
+    return { fixedCount, steps };
   }
 
   private firstArrayLiteralElementType(expr: ArrayLitExpr): TopazType {
