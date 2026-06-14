@@ -147,6 +147,7 @@ type AwaitReturnInfo = {
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
+  postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -164,6 +165,12 @@ type AwaitCallArgTemp = {
 };
 
 type AwaitSnapshotTemp = {
+  tempName: string;
+  expr: Expr;
+  exprType: TopazType;
+};
+
+type AwaitMaterializedTemp = {
   tempName: string;
   expr: Expr;
   exprType: TopazType;
@@ -195,6 +202,7 @@ type AwaitInitializerInfo = {
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
+  postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -214,6 +222,7 @@ type AwaitStatementInfo = {
   preAwaitIndexTemps: Array<AwaitIndexTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
+  postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -233,11 +242,24 @@ type MultiAwaitCallArgStepPlan = {
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
+  postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
 };
 
 type MultiAwaitCallArgPlan = {
   transformedExpr: Expr;
   steps: Array<MultiAwaitCallArgStepPlan>;
+};
+
+type MultiAwaitCallArgAwait = {
+  argIndex: number;
+  awaitExpr: AwaitExpr;
+  binaryArg: boolean;
+  tempName: string;
+  owner:
+    | { kind: "outer_direct" }
+    | { kind: "outer_binary" }
+    | { kind: "nested_direct"; nestedIndex: number; nestedArgIndex: number }
+    | { kind: "nested_binary"; nestedIndex: number; nestedArgIndex: number };
 };
 
 type MultiAwaitLeafEvent =
@@ -247,7 +269,22 @@ type MultiAwaitLeafEvent =
 
 type MultiAwaitCallArgEvent =
   | { kind: "await"; argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }
-  | { kind: "snapshot"; argIndex: number; expr: Expr };
+  | { kind: "snapshot"; argIndex: number; expr: Expr; nestedIndex: number; nestedArgIndex: number }
+  | { kind: "materialize"; argIndex: number; nestedIndex: number };
+
+type MultiAwaitNestedCallArgPlan = {
+  argIndex: number;
+  root: CallExpr;
+  resultTempName: string;
+  resultTempExpr: IdentExpr;
+  awaitedArgIndexes: Array<number>;
+  transformedDirectArgs: Map<number, IdentExpr>;
+  transformedBinaryArgs: Map<number, Expr>;
+  transformedCallee: Expr;
+  transformedCall?: CallExpr;
+  plan?: OrdinaryCallPlan;
+  resultType?: TopazType;
+};
 
 type AwaitOperandInfo = {
   operandType: TopazType;
@@ -5428,6 +5465,7 @@ class Emitter {
                     preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                     preAwaitArgTemps: planned.preAwaitArgTemps,
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
+                    postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                     index: i,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
@@ -5504,6 +5542,7 @@ class Emitter {
                 preAwaitReceiverTemps,
                 preAwaitArgTemps,
                 preAwaitSnapshotTemps: [],
+                postAwaitMaterializedTemps: [],
                 index: i,
                 pc: steps.length,
                 operandType: operandInfo.operandType,
@@ -5542,6 +5581,7 @@ class Emitter {
             preAwaitIndexTemps: [],
             preAwaitArgTemps: [],
             preAwaitSnapshotTemps: [],
+            postAwaitMaterializedTemps: [],
             index: i,
             pc: steps.length,
             operandType: operandInfo.operandType,
@@ -5597,6 +5637,7 @@ class Emitter {
                     preAwaitIndexTemps: [],
                     preAwaitArgTemps: planned.preAwaitArgTemps,
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
+                    postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                     index: i,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
@@ -5615,6 +5656,7 @@ class Emitter {
                     preAwaitIndexTemps: [],
                     preAwaitArgTemps: planned.preAwaitArgTemps,
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
+                    postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                     index: i,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
@@ -5664,6 +5706,7 @@ class Emitter {
               preAwaitIndexTemps,
               preAwaitArgTemps,
               preAwaitSnapshotTemps: [],
+              postAwaitMaterializedTemps: [],
               index: i,
               pc: steps.length,
               operandType: operandInfo.operandType,
@@ -5725,6 +5768,7 @@ class Emitter {
                   preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                   preAwaitArgTemps: planned.preAwaitArgTemps,
                   preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
+                  postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                   index: i,
                   pc: steps.length,
                   operandType: planned.operandInfo.operandType,
@@ -5789,6 +5833,7 @@ class Emitter {
               preAwaitReceiverTemps,
               preAwaitArgTemps,
               preAwaitSnapshotTemps: [],
+              postAwaitMaterializedTemps: [],
               index: i,
               pc: steps.length,
               operandType: operandInfo.operandType,
@@ -6388,6 +6433,127 @@ class Emitter {
     };
   }
 
+  private tryBuildNestedMultiAwaitCallArgPlan(
+    nestedRoot: CallExpr,
+    outerArgIndex: number,
+    nestedIndex: number,
+    tempPrefix: string,
+    awaitedArgs: Array<MultiAwaitCallArgAwait>,
+    callArgEvents: Array<MultiAwaitCallArgEvent>,
+  ): MultiAwaitNestedCallArgPlan | undefined {
+    if (nestedRoot.optional) {
+      return undefined;
+    }
+    if (this.firstSpreadArg(nestedRoot.args) !== undefined) {
+      return undefined;
+    }
+    if (this.collectAwaitExprsInExpr(nestedRoot.callee).length > 0) {
+      return undefined;
+    }
+    const callee = nestedRoot.callee;
+    if (callee.kind !== "ident" && callee.kind !== "prop_access") {
+      return undefined;
+    }
+    if (callee.kind === "prop_access" && callee.optional) {
+      return undefined;
+    }
+
+    const transformedBinaryArgs = new Map<number, Expr>();
+    const nestedAwaitIndexes: Array<number> = [];
+    for (let nestedArgIndex = 0; nestedArgIndex < nestedRoot.args.length; nestedArgIndex++) {
+      const arg = nestedRoot.args[nestedArgIndex];
+      const found = this.collectAwaitExprsInExpr(arg);
+      if (found.length === 0) continue;
+      const unwrapped = this.unwrapParenExpr(arg);
+      if (found.length === 1 && unwrapped.kind === "await_expr") {
+        if (found[0].pos !== unwrapped.pos || found[0].end !== unwrapped.end) {
+          return undefined;
+        }
+        const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+        const awaitIndex = awaitedArgs.length;
+        awaitedArgs.push({
+          argIndex: outerArgIndex,
+          awaitExpr: unwrapped,
+          binaryArg: false,
+          tempName,
+          owner: { kind: "nested_direct", nestedIndex, nestedArgIndex },
+        });
+        nestedAwaitIndexes.push(awaitIndex);
+        callArgEvents.push({
+          kind: "await",
+          argIndex: outerArgIndex,
+          awaitExpr: unwrapped,
+          binaryArg: false,
+        });
+        continue;
+      }
+      if (unwrapped.kind !== "bin_op") {
+        return undefined;
+      }
+      const events: Array<MultiAwaitLeafEvent> = [];
+      if (!this.collectMultiAwaitBinaryLeafEvents(unwrapped, events)) {
+        return undefined;
+      }
+      let binaryAwaitCount = 0;
+      for (const event of events) {
+        if (event.kind === "await") binaryAwaitCount++;
+      }
+      if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) {
+        return undefined;
+      }
+      transformedBinaryArgs.set(nestedArgIndex, arg);
+      for (const event of events) {
+        if (event.kind === "await") {
+          const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+          const awaitIndex = awaitedArgs.length;
+          awaitedArgs.push({
+            argIndex: outerArgIndex,
+            awaitExpr: event.awaitExpr,
+            binaryArg: true,
+            tempName,
+            owner: { kind: "nested_binary", nestedIndex, nestedArgIndex },
+          });
+          nestedAwaitIndexes.push(awaitIndex);
+          callArgEvents.push({
+            kind: "await",
+            argIndex: outerArgIndex,
+            awaitExpr: event.awaitExpr,
+            binaryArg: true,
+          });
+        } else if (event.kind === "snapshot") {
+          callArgEvents.push({
+            kind: "snapshot",
+            argIndex: outerArgIndex,
+            expr: event.expr,
+            nestedIndex,
+            nestedArgIndex,
+          });
+        }
+      }
+    }
+    if (nestedAwaitIndexes.length === 0) {
+      return undefined;
+    }
+
+    const resultTempName = `${tempPrefix}_nested_${nestedIndex}`;
+    const resultTempExpr: IdentExpr = {
+      kind: "ident",
+      name: resultTempName,
+      pos: nestedRoot.pos,
+      end: nestedRoot.end,
+    };
+    return {
+      argIndex: outerArgIndex,
+      root: nestedRoot,
+      resultTempName,
+      resultTempExpr,
+      awaitedArgIndexes: nestedAwaitIndexes,
+      transformedDirectArgs: new Map(),
+      transformedBinaryArgs,
+      transformedCallee: nestedRoot.callee,
+    };
+  }
+
   private tryBuildMultiAwaitCallArgExpression(
     expr: Expr,
     tempPrefix: string,
@@ -6397,11 +6563,19 @@ class Emitter {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "call_expr") return undefined;
     const root: CallExpr = rootMaybe;
-    if (root.optional) return undefined;
-    if (this.firstSpreadArg(root.args) !== undefined) return undefined;
+    if (root.optional) {
+      return undefined;
+    }
+    if (this.firstSpreadArg(root.args) !== undefined) {
+      return undefined;
+    }
     const rootCallee = root.callee;
-    if (rootCallee.kind !== "ident" && rootCallee.kind !== "prop_access") return undefined;
-    if (rootCallee.kind === "prop_access" && rootCallee.optional) return undefined;
+    if (rootCallee.kind !== "ident" && rootCallee.kind !== "prop_access") {
+      return undefined;
+    }
+    if (rootCallee.kind === "prop_access" && rootCallee.optional) {
+      return undefined;
+    }
 
     let receiverAwaitStep: MultiAwaitCallArgStepPlan | undefined = undefined;
     let signatureCallee: Expr = rootCallee;
@@ -6443,13 +6617,15 @@ class Emitter {
           preAwaitReceiverTemps: [],
           preAwaitArgTemps: [],
           preAwaitSnapshotTemps: [],
+          postAwaitMaterializedTemps: [],
         };
       }
     }
 
-    const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }> = [];
+    const awaitedArgs: Array<MultiAwaitCallArgAwait> = [];
     const callArgEvents: Array<MultiAwaitCallArgEvent> = [];
     const binaryArgIndexes = new Set<number>();
+    const nestedCallArgs: Array<MultiAwaitNestedCallArgPlan> = [];
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
       const found = this.collectAwaitExprsInExpr(arg);
@@ -6457,32 +6633,71 @@ class Emitter {
       const unwrapped = this.unwrapParenExpr(arg);
       if (found.length === 1 && unwrapped.kind === "await_expr") {
         if (found[0].pos !== unwrapped.pos || found[0].end !== unwrapped.end) return undefined;
-        awaitedArgs.push({ argIndex: i, awaitExpr: unwrapped, binaryArg: false });
+        const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+        awaitedArgs.push({
+          argIndex: i,
+          awaitExpr: unwrapped,
+          binaryArg: false,
+          tempName,
+          owner: { kind: "outer_direct" },
+        });
         callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: unwrapped, binaryArg: false });
+        continue;
+      }
+      if (unwrapped.kind === "call_expr") {
+        const nestedIndex = nestedCallArgs.length;
+        const nestedPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+          unwrapped,
+          i,
+          nestedIndex,
+          tempPrefix,
+          awaitedArgs,
+          callArgEvents,
+        );
+        if (nestedPlan === undefined) {
+          return undefined;
+        }
+        nestedCallArgs.push(nestedPlan);
+        callArgEvents.push({ kind: "materialize", argIndex: i, nestedIndex });
         continue;
       }
       if (unwrapped.kind !== "bin_op") {
         return undefined;
       }
       const events: Array<MultiAwaitLeafEvent> = [];
-      if (!this.collectMultiAwaitBinaryLeafEvents(unwrapped, events)) return undefined;
+      if (!this.collectMultiAwaitBinaryLeafEvents(unwrapped, events)) {
+        return undefined;
+      }
       let binaryAwaitCount = 0;
       for (const event of events) {
         if (event.kind === "await") binaryAwaitCount++;
       }
-      if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) return undefined;
+      if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) {
+        return undefined;
+      }
       binaryArgIndexes.add(i);
       for (const event of events) {
         if (event.kind === "await") {
-          awaitedArgs.push({ argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
+          const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+          awaitedArgs.push({
+            argIndex: i,
+            awaitExpr: event.awaitExpr,
+            binaryArg: true,
+            tempName,
+            owner: { kind: "outer_binary" },
+          });
           callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
         } else if (event.kind === "snapshot") {
-          callArgEvents.push({ kind: "snapshot", argIndex: i, expr: event.expr });
+          callArgEvents.push({ kind: "snapshot", argIndex: i, expr: event.expr, nestedIndex: -1, nestedArgIndex: -1 });
         }
       }
     }
-    if (receiverAwaitStep === undefined && awaitedArgs.length < 2) return undefined;
-    if (receiverAwaitStep !== undefined && awaitedArgs.length < 1) return undefined;
+    if (receiverAwaitStep === undefined && awaitedArgs.length < 2) {
+      return undefined;
+    }
+    if (receiverAwaitStep !== undefined && awaitedArgs.length < 1) {
+      return undefined;
+    }
 
     const plannedSteps: Array<MultiAwaitCallArgStepPlan> = [];
     if (receiverAwaitStep !== undefined) plannedSteps.push(receiverAwaitStep);
@@ -6492,13 +6707,30 @@ class Emitter {
       transformedBinaryArgs.set(argIndex, root.args[argIndex]);
     }
     const binarySnapshotsByAwait: Array<AwaitSnapshotsForAwait> = [];
-    if (binaryArgIndexes.size > 0) {
-      let pendingSnapshots: Array<{ argIndex: number; expr: Expr }> = [];
+    let hasCallArgSnapshotEvent = false;
+    for (const event of callArgEvents) {
+      if (event.kind === "snapshot") {
+        hasCallArgSnapshotEvent = true;
+        break;
+      }
+    }
+    if (hasCallArgSnapshotEvent) {
+      let pendingSnapshots: Array<{
+        argIndex: number;
+        expr: Expr;
+        nestedIndex: number;
+        nestedArgIndex: number;
+      }> = [];
       let snapshotIndex = 0;
       for (const event of callArgEvents) {
         switch (event.kind) {
           case "snapshot": {
-            pendingSnapshots.push({ argIndex: event.argIndex, expr: event.expr });
+            pendingSnapshots.push({
+              argIndex: event.argIndex,
+              expr: event.expr,
+              nestedIndex: event.nestedIndex,
+              nestedArgIndex: event.nestedArgIndex,
+            });
             break;
           }
           case "await": {
@@ -6516,29 +6748,52 @@ class Emitter {
                 pos: snapshotExpr.pos,
                 end: snapshotExpr.end,
               };
-              const transformedBinaryArg = transformedBinaryArgs.get(pendingSnapshot.argIndex);
-              if (transformedBinaryArg === undefined) return undefined;
-              transformedBinaryArgs.set(
-                pendingSnapshot.argIndex,
-                this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr),
-              );
+              if (pendingSnapshot.nestedIndex >= 0) {
+                const nestedPlan = nestedCallArgs[pendingSnapshot.nestedIndex];
+                const transformedBinaryArg = nestedPlan.transformedBinaryArgs.get(pendingSnapshot.nestedArgIndex);
+                if (transformedBinaryArg === undefined) {
+                  return undefined;
+                }
+                nestedPlan.transformedBinaryArgs.set(
+                  pendingSnapshot.nestedArgIndex,
+                  this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr),
+                );
+              } else {
+                const transformedBinaryArg = transformedBinaryArgs.get(pendingSnapshot.argIndex);
+                if (transformedBinaryArg === undefined) {
+                  return undefined;
+                }
+                transformedBinaryArgs.set(
+                  pendingSnapshot.argIndex,
+                  this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr),
+                );
+              }
               preAwaitSnapshotTemps.push({ tempName, expr: snapshotExpr, exprType });
             }
             if (preAwaitSnapshotTemps.length > 0) {
               binarySnapshotsByAwait.push({ awaitExpr: event.awaitExpr, temps: preAwaitSnapshotTemps });
             }
-            const nextPendingSnapshots: Array<{ argIndex: number; expr: Expr }> = [];
+            const nextPendingSnapshots: Array<{
+              argIndex: number;
+              expr: Expr;
+              nestedIndex: number;
+              nestedArgIndex: number;
+            }> = [];
             pendingSnapshots = nextPendingSnapshots;
             break;
           }
+          case "materialize":
+            break;
         }
       }
     }
     for (let i = 0; i < awaitedArgs.length; i++) {
       const awaited = awaitedArgs[i];
       const operandInfo = this.resolveAwaitOperand(awaited.awaitExpr.operand, undefined);
-      if (awaited.binaryArg && operandInfo.awaitedType.kind === "void") return undefined;
-      const tempName = `${tempPrefix}_${i}`;
+      if (awaited.binaryArg && operandInfo.awaitedType.kind === "void") {
+        return undefined;
+      }
+      const tempName = awaited.tempName;
       if (operandInfo.awaitedType.kind !== "void") {
         this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaited.awaitExpr.pos });
       }
@@ -6548,14 +6803,39 @@ class Emitter {
         pos: awaited.awaitExpr.pos,
         end: awaited.awaitExpr.end,
       };
-      if (!awaited.binaryArg) awaitedTempByArg.set(awaited.argIndex, tempExpr);
-      if (awaited.binaryArg) {
-        const transformedBinaryArg = transformedBinaryArgs.get(awaited.argIndex);
-        if (transformedBinaryArg === undefined) return undefined;
-        transformedBinaryArgs.set(
-          awaited.argIndex,
-          this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr),
-        );
+      const owner = awaited.owner;
+      switch (owner.kind) {
+        case "outer_direct":
+          awaitedTempByArg.set(awaited.argIndex, tempExpr);
+          break;
+        case "outer_binary": {
+          const transformedBinaryArg = transformedBinaryArgs.get(awaited.argIndex);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          transformedBinaryArgs.set(
+            awaited.argIndex,
+            this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr),
+          );
+          break;
+        }
+        case "nested_direct": {
+          const nestedPlan = nestedCallArgs[owner.nestedIndex];
+          nestedPlan.transformedDirectArgs.set(owner.nestedArgIndex, tempExpr);
+          break;
+        }
+        case "nested_binary": {
+          const nestedPlan = nestedCallArgs[owner.nestedIndex];
+          const transformedBinaryArg = nestedPlan.transformedBinaryArgs.get(owner.nestedArgIndex);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          nestedPlan.transformedBinaryArgs.set(
+            owner.nestedArgIndex,
+            this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr),
+          );
+          break;
+        }
       }
       let preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
       for (const snapshotEntry of binarySnapshotsByAwait) {
@@ -6575,6 +6855,319 @@ class Emitter {
         preAwaitReceiverTemps: [],
         preAwaitArgTemps: [],
         preAwaitSnapshotTemps,
+        postAwaitMaterializedTemps: [],
+      });
+    }
+
+    const nestedResultByArg = new Map<number, IdentExpr>();
+    const argStepOffset = receiverAwaitStep === undefined ? 0 : 1;
+    const stepForAwaitIndex = (awaitIndex: number): MultiAwaitCallArgStepPlan => {
+      return plannedSteps[awaitIndex + argStepOffset];
+    };
+    for (let nestedIndex = 0; nestedIndex < nestedCallArgs.length; nestedIndex++) {
+      const nestedPlan = nestedCallArgs[nestedIndex];
+      const firstNestedAwaitIndex = nestedPlan.awaitedArgIndexes[0];
+      const firstNestedAwait = awaitedArgs[firstNestedAwaitIndex];
+
+      const signatureNestedArgs: Array<Expr> = [];
+      for (let nestedArgIndex = 0; nestedArgIndex < nestedPlan.root.args.length; nestedArgIndex++) {
+        const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
+        const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
+        if (directArg !== undefined) signatureNestedArgs.push(directArg);
+        else if (binaryArg !== undefined) signatureNestedArgs.push(binaryArg);
+        else signatureNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
+      }
+      const signatureNestedCall: CallExpr = {
+        kind: "call_expr",
+        callee: nestedPlan.root.callee,
+        typeArgs: nestedPlan.root.typeArgs,
+        args: signatureNestedArgs,
+        optional: nestedPlan.root.optional,
+        pos: nestedPlan.root.pos,
+        end: nestedPlan.root.end,
+      };
+      const plan = this.resolveOrdinaryCallPlan(signatureNestedCall, firstNestedAwait.awaitExpr, false, undefined);
+      if (plan === undefined) {
+        return undefined;
+      }
+      this.checkCallArgCount(nestedPlan.root.args.length, plan.params, plan.label, { pos: nestedPlan.root.pos });
+      this.assertNotVoid(plan.returnType, { pos: nestedPlan.root.pos }, "nested await call argument result");
+
+      let transformedCallee: Expr = signatureNestedCall.callee;
+      const firstNestedStep = stepForAwaitIndex(firstNestedAwaitIndex);
+      switch (plan.kind) {
+        case "class_method": {
+          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+          firstNestedStep.preAwaitReceiverTemps.push({
+            tempName: receiverTempName,
+            receiver: plan.receiver,
+            receiverType: plan.receiverType,
+          });
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: receiverTempName,
+            pos: plan.receiver.pos,
+            end: plan.receiver.end,
+          };
+          transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: plan.methodName,
+            optional: false,
+            pos: plan.callee.pos,
+            end: plan.callee.end,
+          };
+          break;
+        }
+        case "interface_method": {
+          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+          firstNestedStep.preAwaitReceiverTemps.push({
+            tempName: receiverTempName,
+            receiver: plan.receiver,
+            receiverType: plan.receiverType,
+          });
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: receiverTempName,
+            pos: plan.receiver.pos,
+            end: plan.receiver.end,
+          };
+          transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: plan.methodName,
+            optional: false,
+            pos: plan.callee.pos,
+            end: plan.callee.end,
+          };
+          break;
+        }
+        case "map_method": {
+          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+          firstNestedStep.preAwaitReceiverTemps.push({
+            tempName: receiverTempName,
+            receiver: plan.receiver,
+            receiverType: plan.receiverType,
+          });
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: receiverTempName,
+            pos: plan.receiver.pos,
+            end: plan.receiver.end,
+          };
+          transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: plan.methodName,
+            optional: false,
+            pos: plan.callee.pos,
+            end: plan.callee.end,
+          };
+          break;
+        }
+        case "set_method": {
+          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+          firstNestedStep.preAwaitReceiverTemps.push({
+            tempName: receiverTempName,
+            receiver: plan.receiver,
+            receiverType: plan.receiverType,
+          });
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: receiverTempName,
+            pos: plan.receiver.pos,
+            end: plan.receiver.end,
+          };
+          transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: plan.methodName,
+            optional: false,
+            pos: plan.callee.pos,
+            end: plan.callee.end,
+          };
+          break;
+        }
+        case "array_method": {
+          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+          firstNestedStep.preAwaitReceiverTemps.push({
+            tempName: receiverTempName,
+            receiver: plan.receiver,
+            receiverType: plan.receiverType,
+          });
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: receiverTempName,
+            pos: plan.receiver.pos,
+            end: plan.receiver.end,
+          };
+          transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: plan.methodName,
+            optional: false,
+            pos: plan.callee.pos,
+            end: plan.callee.end,
+          };
+          break;
+        }
+        case "string_method": {
+          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+          firstNestedStep.preAwaitReceiverTemps.push({
+            tempName: receiverTempName,
+            receiver: plan.receiver,
+            receiverType: plan.receiverType,
+          });
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: receiverTempName,
+            pos: plan.receiver.pos,
+            end: plan.receiver.end,
+          };
+          transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: plan.methodName,
+            optional: false,
+            pos: plan.callee.pos,
+            end: plan.callee.end,
+          };
+          break;
+        }
+        case "number_method": {
+          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+          firstNestedStep.preAwaitReceiverTemps.push({
+            tempName: receiverTempName,
+            receiver: plan.receiver,
+            receiverType: plan.receiverType,
+          });
+          const receiverTempExpr: IdentExpr = {
+            kind: "ident",
+            name: receiverTempName,
+            pos: plan.receiver.pos,
+            end: plan.receiver.end,
+          };
+          transformedCallee = {
+            kind: "prop_access",
+            receiver: receiverTempExpr,
+            name: plan.methodName,
+            optional: false,
+            pos: plan.callee.pos,
+            end: plan.callee.end,
+          };
+          break;
+        }
+        default:
+          break;
+      }
+
+      const nestedArgTempByArg = new Map<number, IdentExpr>();
+      let nextNestedPreArgStart = 0;
+      for (const awaitIndex of nestedPlan.awaitedArgIndexes) {
+        const awaited = awaitedArgs[awaitIndex];
+        const owner = awaited.owner;
+        let ownerNestedArgIndex = -1;
+        switch (owner.kind) {
+          case "nested_direct":
+            ownerNestedArgIndex = owner.nestedArgIndex;
+            break;
+          case "nested_binary":
+            ownerNestedArgIndex = owner.nestedArgIndex;
+            break;
+          default:
+            return undefined;
+        }
+        const stepPlan = stepForAwaitIndex(awaitIndex);
+        for (let nestedArgIndex = nextNestedPreArgStart; nestedArgIndex < ownerNestedArgIndex; nestedArgIndex++) {
+          const arg = nestedPlan.root.args[nestedArgIndex];
+          if (nestedArgIndex >= plan.params.length) {
+            return undefined;
+          }
+          const param = plan.params[nestedArgIndex];
+          const argType = param.type;
+          this.assertNotVoid(argType, { pos: arg.pos }, "nested await call pre-argument temporary");
+          const tempName = `${nestedPlan.resultTempName}_arg_${awaitIndex}_${nestedArgIndex}`;
+          this.scope.declareBinding(tempName, argType, /* isConst */ true, { pos: arg.pos });
+          stepPlan.preAwaitArgTemps.push({ tempName, arg, argType });
+          nestedArgTempByArg.set(nestedArgIndex, {
+            kind: "ident",
+            name: tempName,
+            pos: arg.pos,
+            end: arg.end,
+          });
+        }
+        nextNestedPreArgStart = ownerNestedArgIndex + 1;
+      }
+
+      const transformedNestedArgs: Array<Expr> = [];
+      for (let nestedArgIndex = 0; nestedArgIndex < nestedPlan.root.args.length; nestedArgIndex++) {
+        const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
+        const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
+        const preArg = nestedArgTempByArg.get(nestedArgIndex);
+        if (directArg !== undefined) transformedNestedArgs.push(directArg);
+        else if (binaryArg !== undefined) transformedNestedArgs.push(binaryArg);
+        else if (preArg !== undefined) transformedNestedArgs.push(preArg);
+        else transformedNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
+      }
+
+      nestedPlan.transformedCallee = transformedCallee;
+      nestedPlan.plan = plan;
+      nestedPlan.resultType = plan.returnType;
+      nestedPlan.transformedCall = {
+        kind: "call_expr",
+        callee: transformedCallee,
+        typeArgs: nestedPlan.root.typeArgs,
+        args: transformedNestedArgs,
+        optional: nestedPlan.root.optional,
+        pos: nestedPlan.root.pos,
+        end: nestedPlan.root.end,
+      };
+      this.scope.declareBinding(nestedPlan.resultTempName, plan.returnType, /* isConst */ true, {
+        pos: nestedPlan.root.pos,
+      });
+      nestedResultByArg.set(nestedPlan.argIndex, nestedPlan.resultTempExpr);
+    }
+
+    let lastAwaitEvent: AwaitExpr | undefined = undefined;
+    for (const event of callArgEvents) {
+      if (event.kind === "await") {
+        lastAwaitEvent = event.awaitExpr;
+        continue;
+      }
+      if (event.kind !== "materialize") continue;
+      if (lastAwaitEvent === undefined) {
+        return undefined;
+      }
+      const nestedPlan = nestedCallArgs[event.nestedIndex];
+      const transformedCall = nestedPlan.transformedCall;
+      if (transformedCall === undefined) {
+        return undefined;
+      }
+      const resultType = nestedPlan.resultType;
+      if (resultType === undefined) {
+        return undefined;
+      }
+      let materializeStep: MultiAwaitCallArgStepPlan | undefined = undefined;
+      for (const step of plannedSteps) {
+        if (step.awaitExpr.pos === lastAwaitEvent.pos && step.awaitExpr.end === lastAwaitEvent.end) {
+          materializeStep = step;
+          break;
+        }
+      }
+      if (materializeStep === undefined) {
+        return undefined;
+      }
+      materializeStep.postAwaitMaterializedTemps.push({
+        tempName: nestedPlan.resultTempName,
+        expr: transformedCall,
+        exprType: resultType,
       });
     }
 
@@ -6582,8 +7175,10 @@ class Emitter {
     for (let i = 0; i < root.args.length; i++) {
       const awaitedTemp = awaitedTempByArg.get(i);
       const transformedBinaryArg = transformedBinaryArgs.get(i);
+      const nestedTemp = nestedResultByArg.get(i);
       if (awaitedTemp !== undefined) signatureArgs.push(awaitedTemp);
       else if (transformedBinaryArg !== undefined) signatureArgs.push(transformedBinaryArg);
+      else if (nestedTemp !== undefined) signatureArgs.push(nestedTemp);
       else signatureArgs.push(root.args[i]);
     }
     const signatureCall: CallExpr = {
@@ -6597,7 +7192,9 @@ class Emitter {
     };
     const firstAwait = receiverAwaitStep?.awaitExpr ?? awaitedArgs[0].awaitExpr;
     const plan = this.resolveOrdinaryCallPlan(signatureCall, firstAwait, false, expectedReturnType);
-    if (plan === undefined) return undefined;
+    if (plan === undefined) {
+      return undefined;
+    }
     if (receiverAwaitStep !== undefined) {
       const receiverAwaitPlanSupported =
         plan.kind === "class_method" ||
@@ -6685,13 +7282,14 @@ class Emitter {
 
     const argTempByArg = new Map<number, IdentExpr>();
     let nextPreArgStart = 0;
-    const argStepOffset = receiverAwaitStep === undefined ? 0 : 1;
     for (let i = 0; i < awaitedArgs.length; i++) {
       const awaited = awaitedArgs[i];
       const stepPlan = plannedSteps[i + argStepOffset];
       for (let argIndex = nextPreArgStart; argIndex < awaited.argIndex; argIndex++) {
         const arg = root.args[argIndex];
-        if (argIndex >= plan.params.length) return undefined;
+        if (argIndex >= plan.params.length) {
+          return undefined;
+        }
         const param = plan.params[argIndex];
         const argType = param.type;
         this.assertNotVoid(argType, { pos: arg.pos }, "await call pre-argument temporary");
@@ -6713,6 +7311,11 @@ class Emitter {
       const transformedBinaryArg = transformedBinaryArgs.get(i);
       if (transformedBinaryArg !== undefined) {
         transformedArgs.push(transformedBinaryArg);
+        continue;
+      }
+      const nestedTemp = nestedResultByArg.get(i);
+      if (nestedTemp !== undefined) {
+        transformedArgs.push(nestedTemp);
         continue;
       }
       const argTemp = argTempByArg.get(i);
@@ -6810,6 +7413,7 @@ class Emitter {
             preAwaitReceiverTemps: [],
             preAwaitArgTemps: [],
             preAwaitSnapshotTemps,
+            postAwaitMaterializedTemps: [],
           });
           break;
         }
@@ -6881,6 +7485,7 @@ class Emitter {
             preAwaitReceiverTemps: [],
             preAwaitArgTemps: [],
             preAwaitSnapshotTemps,
+            postAwaitMaterializedTemps: [],
           });
           break;
         }
@@ -6953,6 +7558,7 @@ class Emitter {
             preAwaitReceiverTemps: [],
             preAwaitArgTemps: [],
             preAwaitSnapshotTemps,
+            postAwaitMaterializedTemps: [],
           });
           break;
         }
@@ -7653,6 +8259,33 @@ class Emitter {
     }
   }
 
+  private emitAwaitMaterializedTempStores(
+    temps: Array<AwaitMaterializedTemp>,
+    frameRef: string,
+    lines: string[],
+    indent: string,
+  ): void {
+    for (const temp of temps) {
+      const expr = this.emitWithExpected(temp.expr, temp.exprType);
+      this.scope.declareBinding(temp.tempName, temp.exprType, /* isConst */ true, { pos: temp.expr.pos });
+      lines.push(`${indent}${cTypeName(temp.exprType)} ${temp.tempName} = ${expr};`);
+      lines.push(`${indent}${frameRef}->${temp.tempName} = ${temp.tempName};`);
+      lines.push(`${indent}(void)${temp.tempName};`);
+    }
+  }
+
+  private emitAwaitMaterializedTempRestores(
+    temps: Array<AwaitMaterializedTemp>,
+    lines: string[],
+    indent: string,
+  ): void {
+    for (const temp of temps) {
+      this.scope.declareBinding(temp.tempName, temp.exprType, /* isConst */ true, { pos: temp.expr.pos });
+      lines.push(`${indent}${cTypeName(temp.exprType)} ${temp.tempName} = ctx->${temp.tempName};`);
+      lines.push(`${indent}(void)${temp.tempName};`);
+    }
+  }
+
   private emitAsyncLocalCaptureStores(
     frame: AsyncAwaitFrameInfo,
     beforeIndex: number,
@@ -7684,6 +8317,7 @@ class Emitter {
     step: AsyncSuspensionStep,
     lines: string[],
     indent: string,
+    includePostAwaitMaterializedTemps: boolean,
   ): void {
     switch (step.kind) {
       case "binding":
@@ -7705,6 +8339,9 @@ class Emitter {
           lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
           lines.push(`${indent}(void)${step.tempName};`);
         }
+        if (includePostAwaitMaterializedTemps) {
+          this.emitAwaitMaterializedTempRestores(step.postAwaitMaterializedTemps, lines, indent);
+        }
         return;
       }
       case "return": {
@@ -7723,6 +8360,9 @@ class Emitter {
           this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
           lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
           lines.push(`${indent}(void)${step.tempName};`);
+        }
+        if (includePostAwaitMaterializedTemps) {
+          this.emitAwaitMaterializedTempRestores(step.postAwaitMaterializedTemps, lines, indent);
         }
         return;
       }
@@ -7747,6 +8387,9 @@ class Emitter {
           this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
           lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
           lines.push(`${indent}(void)${step.tempName};`);
+        }
+        if (includePostAwaitMaterializedTemps) {
+          this.emitAwaitMaterializedTempRestores(step.postAwaitMaterializedTemps, lines, indent);
         }
         return;
       }
@@ -7792,6 +8435,9 @@ class Emitter {
         for (const temp of binding.preAwaitSnapshotTemps) {
           fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
         }
+        for (const temp of binding.postAwaitMaterializedTemps) {
+          fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
+        }
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
         }
@@ -7809,6 +8455,9 @@ class Emitter {
           for (const temp of binding.preAwaitSnapshotTemps) {
             fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
           }
+          for (const temp of binding.postAwaitMaterializedTemps) {
+            fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
+          }
           if (binding.awaitedType.kind !== "void") {
             fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
           }
@@ -7821,6 +8470,9 @@ class Emitter {
           fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
         }
         for (const temp of binding.preAwaitSnapshotTemps) {
+          fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
+        }
+        for (const temp of binding.postAwaitMaterializedTemps) {
           fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
         }
         if (binding.awaitedType.kind !== "void") {
@@ -7918,7 +8570,7 @@ class Emitter {
       for (const prior of frame.steps) {
         if (prior.pc >= current.pc) continue;
         if (prior.index === current.index && this.asyncStepDefersStatementCompletion(prior)) {
-          this.emitAsyncStepTempRestores(prior, lines, "        ");
+          this.emitAsyncStepTempRestores(prior, lines, "        ", true);
           continue;
         }
         if (prior.kind === "binding") {
@@ -7999,6 +8651,7 @@ class Emitter {
             lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
             lines.push(`        (void)${current.tempName};`);
           }
+          this.emitAwaitMaterializedTempStores(current.postAwaitMaterializedTemps, "ctx", lines, "        ");
           const resultTmp = `__topaz_return_expr_result_${i}`;
           const resultC = cTypeName(payloadType);
           const resultExpr = this.emitWithExpected(returnExpr, payloadType);
@@ -8036,6 +8689,7 @@ class Emitter {
             lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
             lines.push(`        (void)${current.tempName};`);
           }
+          this.emitAwaitMaterializedTempStores(current.postAwaitMaterializedTemps, "ctx", lines, "        ");
           const initExpr = this.emitWithExpected(current.transformedInitializer, current.bindingType);
           lines.push(`        ${cTypeName(current.bindingType)} ${current.stmt.name} = ${initExpr};`);
           this.scope.declareBinding(
@@ -8070,6 +8724,7 @@ class Emitter {
               lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
               lines.push(`        (void)${current.tempName};`);
             }
+            this.emitAwaitMaterializedTempStores(current.postAwaitMaterializedTemps, "ctx", lines, "        ");
             lines.push(`        ${this.emitExpression(transformedExpr)};`);
           }
           // Plain awaited expression statements intentionally discard the
@@ -8085,6 +8740,33 @@ class Emitter {
         if (hasNextStep) {
           const next = frame.steps[i + 1];
           const nextSourceVar = `__topaz_await_next_${i}`;
+          if (currentDefersStatement) {
+            switch (current.kind) {
+              case "statement": {
+                if (current.postAwaitMaterializedTemps.length > 0) {
+                  this.emitAsyncStepTempRestores(current, lines, "        ", false);
+                  this.emitAwaitMaterializedTempStores(current.postAwaitMaterializedTemps, "ctx", lines, "        ");
+                }
+                break;
+              }
+              case "initializer": {
+                if (current.postAwaitMaterializedTemps.length > 0) {
+                  this.emitAsyncStepTempRestores(current, lines, "        ", false);
+                  this.emitAwaitMaterializedTempStores(current.postAwaitMaterializedTemps, "ctx", lines, "        ");
+                }
+                break;
+              }
+              case "return": {
+                if (current.postAwaitMaterializedTemps.length > 0) {
+                  this.emitAsyncStepTempRestores(current, lines, "        ", false);
+                  this.emitAwaitMaterializedTempStores(current.postAwaitMaterializedTemps, "ctx", lines, "        ");
+                }
+                break;
+              }
+              case "binding":
+                break;
+            }
+          }
           this.emitAsyncLocalCaptureStores(frame, next.index, "ctx", lines, "        ");
           this.emitAwaitStepPreArgStores(next, "ctx", lines, "        ");
           const operandExpr = this.emitAwaitSourceExpression(

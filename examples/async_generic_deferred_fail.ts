@@ -9,7 +9,7 @@ function wrap<T>(value: T): T {
 }
 
 async function unsupported<T>(left: Promise<T>, right: Promise<T>): Promise<T> {
-  return first<T>(await left, wrap<T>(await right));
+  return first<T>(await left, wrap<T>(wrap<T>(await right)));
 }
 
 unsupported<number>(Promise.resolve(1), Promise.resolve(2)).then((value: number): void => {

@@ -8,7 +8,7 @@ const map: Map<string, number> = new Map<string, number>();
 map.set("one", 1);
 
 async function fail(source: Map<string, number>): Promise<number> {
-  const got: number | undefined = (await Promise.resolve(source)).get(wrap(await Promise.resolve("one")));
+  const got: number | undefined = (await Promise.resolve(source)).get(wrap(wrap(await Promise.resolve("one"))));
   if (got !== undefined) {
     return got;
   }
