@@ -6651,6 +6651,7 @@ class Emitter {
     if (rootMaybe.kind !== "bin_op") return undefined;
     const awaits: Array<AwaitExpr> = [];
     if (!this.collectMultiAwaitBinaryTreeLeaves(rootMaybe, awaits)) return undefined;
+    if (awaits.length < 2) return undefined;
 
     let transformedExpr: Expr = expr;
     const steps: Array<MultiAwaitCallArgStepPlan> = [];
@@ -6793,12 +6794,49 @@ class Emitter {
       out.push(root);
       return true;
     }
+    if (this.isSideEffectFreeMultiAwaitBinaryLeaf(root)) return true;
     if (root.kind !== "bin_op") return false;
     if (root.op === "&&" || root.op === "||" || root.op === "??") return false;
     return (
       this.collectMultiAwaitBinaryTreeLeaves(root.lhs, out) &&
       this.collectMultiAwaitBinaryTreeLeaves(root.rhs, out)
     );
+  }
+
+  private isSideEffectFreeMultiAwaitBinaryLeaf(expr: Expr): boolean {
+    if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
+    switch (expr.kind) {
+      case "ident":
+      case "num_lit":
+      case "bigint_lit":
+      case "str_lit":
+      case "bool_lit":
+      case "null_lit":
+      case "undefined_lit":
+      case "this_expr":
+        return true;
+      case "paren_expr":
+        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.inner);
+      case "non_null":
+        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.operand);
+      case "type_assert":
+        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.expr);
+      case "prefix_op":
+        if (expr.op === "++" || expr.op === "--") return false;
+        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.operand);
+      case "typeof_expr":
+        return this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.operand);
+      case "bin_op":
+        if (expr.op === "&&" || expr.op === "||" || expr.op === "??") return false;
+        return (
+          this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.lhs) &&
+          this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.rhs)
+        );
+      case "prop_access":
+        return !expr.optional && this.isSideEffectFreeMultiAwaitBinaryLeaf(expr.receiver);
+      default:
+        return false;
+    }
   }
 
   private tryBuildPostAwaitCallArgSiblingExpression(
