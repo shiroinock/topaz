@@ -6,8 +6,9 @@ function mark(label: string, value: number): number {
 }
 
 async function rejectedStatic(): Promise<string> {
+  let middle = 1;
   const value: string = String.fromCharCode(
-    await Promise.resolve(5) + mark("mixed", 1) + await Promise.resolve(mark("post", 60)),
+    await Promise.resolve(5) + (middle = mark("mixed", 1)) + await Promise.resolve(mark("post", 60)),
   );
   return value;
 }

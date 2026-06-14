@@ -169,6 +169,11 @@ type AwaitSnapshotTemp = {
   exprType: TopazType;
 };
 
+type AwaitSnapshotsForAwait = {
+  awaitExpr: AwaitExpr;
+  temps: Array<AwaitSnapshotTemp>;
+};
+
 type AwaitCallReceiverTemp = {
   tempName: string;
   receiver: Expr;
@@ -6439,6 +6444,7 @@ class Emitter {
     }
 
     const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }> = [];
+    const binaryLeafEvents: Array<MultiAwaitLeafEvent> = [];
     let binaryAwaitArgIndex = -1;
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
@@ -6454,12 +6460,19 @@ class Emitter {
       if (unwrapped.kind !== "bin_op" || binaryAwaitArgIndex >= 0 || awaitedArgs.length > 0) {
         return undefined;
       }
-      const binaryAwaits: Array<AwaitExpr> = [];
-      if (!this.collectMultiAwaitBinaryTreeLeaves(unwrapped, binaryAwaits)) return undefined;
-      if (binaryAwaits.length !== found.length || binaryAwaits.length < 2) return undefined;
+      const events: Array<MultiAwaitLeafEvent> = [];
+      if (!this.collectMultiAwaitBinaryLeafEvents(unwrapped, events)) return undefined;
+      let binaryAwaitCount = 0;
+      for (const event of events) {
+        if (event.kind === "await") binaryAwaitCount++;
+      }
+      if (binaryAwaitCount !== found.length || binaryAwaitCount < 2) return undefined;
       binaryAwaitArgIndex = i;
-      for (const awaitExpr of binaryAwaits) {
-        awaitedArgs.push({ argIndex: i, awaitExpr, binaryArg: true });
+      for (const event of events) {
+        binaryLeafEvents.push(event);
+        if (event.kind === "await") {
+          awaitedArgs.push({ argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
+        }
       }
     }
     if (receiverAwaitStep === undefined && awaitedArgs.length < 2) return undefined;
@@ -6473,6 +6486,47 @@ class Emitter {
     if (binaryAwaitArgIndex >= 0) {
       hasTransformedBinaryArg = true;
       transformedBinaryArg = root.args[binaryAwaitArgIndex];
+    }
+    const binarySnapshotsByAwait: Array<AwaitSnapshotsForAwait> = [];
+    if (binaryAwaitArgIndex >= 0) {
+      let pendingSnapshots: Array<AwaitSnapshotTemp> = [];
+      let snapshotIndex = 0;
+      let seenAwaits = 0;
+      for (const event of binaryLeafEvents) {
+        switch (event.kind) {
+          case "pure":
+            break;
+          case "snapshot": {
+            const snapshotExpr = event.expr;
+            const exprType = this.inferType(snapshotExpr);
+            this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await call-argument binary snapshot value");
+            if (seenAwaits < awaitedArgs.length) {
+              const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
+              snapshotIndex++;
+              this.scope.declareBinding(tempName, exprType, /* isConst */ true, { pos: snapshotExpr.pos });
+              const tempExpr: IdentExpr = {
+                kind: "ident",
+                name: tempName,
+                pos: snapshotExpr.pos,
+                end: snapshotExpr.end,
+              };
+              transformedBinaryArg = this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr);
+              pendingSnapshots.push({ tempName, expr: snapshotExpr, exprType });
+            }
+            break;
+          }
+          case "await": {
+            const preAwaitSnapshotTemps = pendingSnapshots;
+            const nextPendingSnapshots: Array<AwaitSnapshotTemp> = [];
+            pendingSnapshots = nextPendingSnapshots;
+            if (preAwaitSnapshotTemps.length > 0) {
+              binarySnapshotsByAwait.push({ awaitExpr: event.awaitExpr, temps: preAwaitSnapshotTemps });
+            }
+            seenAwaits++;
+            break;
+          }
+        }
+      }
     }
     for (let i = 0; i < awaitedArgs.length; i++) {
       const awaited = awaitedArgs[i];
@@ -6492,6 +6546,16 @@ class Emitter {
       if (awaited.binaryArg) {
         transformedBinaryArg = this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr);
       }
+      let preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
+      for (const snapshotEntry of binarySnapshotsByAwait) {
+        if (
+          snapshotEntry.awaitExpr.pos === awaited.awaitExpr.pos &&
+          snapshotEntry.awaitExpr.end === awaited.awaitExpr.end
+        ) {
+          preAwaitSnapshotTemps = snapshotEntry.temps;
+          break;
+        }
+      }
       plannedSteps.push({
         awaitExpr: awaited.awaitExpr,
         operandInfo,
@@ -6499,7 +6563,7 @@ class Emitter {
         tempName,
         preAwaitReceiverTemps: [],
         preAwaitArgTemps: [],
-        preAwaitSnapshotTemps: [],
+        preAwaitSnapshotTemps,
       });
     }
 
@@ -6996,22 +7060,6 @@ class Emitter {
     return (
       this.collectMultiAwaitBinaryLeafEvents(root.lhs, out) &&
       this.collectMultiAwaitBinaryLeafEvents(root.rhs, out)
-    );
-  }
-
-  private collectMultiAwaitBinaryTreeLeaves(expr: Expr, out: Array<AwaitExpr>): boolean {
-    const root = this.unwrapParenExpr(expr);
-    if (root.kind === "await_expr") {
-      if (this.collectAwaitExprsInExpr(root.operand).length > 0) return false;
-      out.push(root);
-      return true;
-    }
-    if (this.isSideEffectFreeMultiAwaitLeaf(root)) return true;
-    if (root.kind !== "bin_op") return false;
-    if (root.op === "&&" || root.op === "||" || root.op === "??") return false;
-    return (
-      this.collectMultiAwaitBinaryTreeLeaves(root.lhs, out) &&
-      this.collectMultiAwaitBinaryTreeLeaves(root.rhs, out)
     );
   }
 
