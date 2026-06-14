@@ -25,6 +25,8 @@ import {
   TernaryExpr,
   ArrayElem,
   ArrayLitExpr,
+  ObjectMember,
+  ObjectLitExpr,
   ObjectPropKV,
   NewExpr,
   TemplateLitExpr,
@@ -5359,6 +5361,10 @@ class Emitter {
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
                   ) ??
+                  this.tryBuildMultiAwaitObjectLiteralExpression(
+                    initMaybe,
+                    `__topaz_init_await_${steps.length}`,
+                  ) ??
                   this.tryBuildMultiAwaitCallArgExpression(
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
@@ -5627,6 +5633,10 @@ class Emitter {
                   valueMaybe,
                   `__topaz_return_await_${steps.length}`,
                 ) ??
+                this.tryBuildMultiAwaitObjectLiteralExpression(
+                  valueMaybe,
+                  `__topaz_return_await_${steps.length}`,
+                ) ??
                 this.tryBuildMultiAwaitCallArgExpression(
                   valueMaybe,
                   `__topaz_return_await_${steps.length}`,
@@ -5803,7 +5813,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, and narrow multi-await binary/array literals in initializers/returns/expression statements are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, narrow multi-await binary/array literals in initializers/returns/expression statements, and narrow contextual multi-await object literals in initializers/returns are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -6634,12 +6644,61 @@ class Emitter {
     return { transformedExpr, steps };
   }
 
+  private tryBuildMultiAwaitObjectLiteralExpression(
+    expr: Expr,
+    tempPrefix: string,
+  ): MultiAwaitCallArgPlan | undefined {
+    const rootMaybe = this.unwrapParenExpr(expr);
+    if (rootMaybe.kind !== "object_lit") return undefined;
+    const awaits = this.collectMultiAwaitObjectLiteralProperties(rootMaybe);
+    if (awaits === undefined || awaits.length < 2) return undefined;
+
+    let transformedExpr: Expr = expr;
+    const steps: Array<MultiAwaitCallArgStepPlan> = [];
+    for (const awaitExpr of awaits) {
+      const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
+      if (operandInfo.awaitedType.kind === "void") return undefined;
+      const tempName = `${tempPrefix}_${steps.length}`;
+      this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
+      const tempExpr: IdentExpr = {
+        kind: "ident",
+        name: tempName,
+        pos: awaitExpr.pos,
+        end: awaitExpr.end,
+      };
+      transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaitExpr, tempExpr);
+      steps.push({
+        awaitExpr,
+        operandInfo,
+        awaitedType: operandInfo.awaitedType,
+        tempName,
+        preAwaitReceiverTemps: [],
+        preAwaitArgTemps: [],
+      });
+    }
+
+    return { transformedExpr, steps };
+  }
+
   private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<AwaitExpr> | undefined {
     if (expr.elems.length === 0) return undefined;
     const awaits: Array<AwaitExpr> = [];
     for (const elem of expr.elems) {
       if (elem.kind !== "elem") return undefined;
       const value = this.unwrapParenExpr(elem.expr);
+      if (value.kind !== "await_expr") return undefined;
+      if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
+      awaits.push(value);
+    }
+    return awaits;
+  }
+
+  private collectMultiAwaitObjectLiteralProperties(expr: ObjectLitExpr): Array<AwaitExpr> | undefined {
+    if (expr.props.length < 2) return undefined;
+    const awaits: Array<AwaitExpr> = [];
+    for (const prop of expr.props) {
+      if (prop.kind !== "prop_kv") return undefined;
+      const value = this.unwrapParenExpr(prop.value);
       if (value.kind !== "await_expr") return undefined;
       if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
       awaits.push(value);
@@ -6924,6 +6983,41 @@ class Emitter {
           return {
             kind: "array_lit",
             elems,
+            pos: expr.pos,
+            end: expr.end,
+          };
+        }
+      case "object_lit":
+        {
+          const props: Array<ObjectMember> = [];
+          for (const prop of expr.props) {
+            if (prop.kind === "prop_kv") {
+              props.push({
+                kind: "prop_kv",
+                name: prop.name,
+                value: this.replaceAwaitExprInExpr(prop.value, target, replacement),
+                pos: prop.pos,
+                end: prop.end,
+              });
+            } else if (prop.kind === "prop_shorthand") {
+              props.push({
+                kind: "prop_shorthand",
+                name: prop.name,
+                pos: prop.pos,
+                end: prop.end,
+              });
+            } else if (prop.kind === "prop_spread") {
+              props.push({
+                kind: "prop_spread",
+                expr: this.replaceAwaitExprInExpr(prop.expr, target, replacement),
+                pos: prop.pos,
+                end: prop.end,
+              });
+            }
+          }
+          return {
+            kind: "object_lit",
+            props,
             pos: expr.pos,
             end: expr.end,
           };
@@ -13567,6 +13661,10 @@ class Emitter {
 
   private inferTypeWithOptionalExpected(expr: Expr, expected: TopazType | undefined): TopazType {
     if (expected !== undefined) {
+      if (expr.kind === "object_lit") {
+        this.emitWithExpected(expr, expected);
+        return expected;
+      }
       if (expr.kind === "call_expr") {
         if (this.isPromiseStaticCall(expr, "reject")) {
           this.checkPromiseRejectWithExpected(expr, expected);

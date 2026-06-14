@@ -3026,6 +3026,7 @@ run_case async_expression_statement_binary_multiple_await $'decl left\narrow lef
 run_case async_binary_operator_multiple_await $'init left\nreturn left\nstmt left\nsync tail\ninit right\nreturn right\nstmt right\ninit result\n42\nstmt done\ninit then\n42\nreturn then\ntrue\nstmt then'
 run_case async_binary_tree_multiple_await $'init left\nreturn left\nstmt left\nsync tail\ninit middle\nreturn middle\nstmt middle\ninit right\nreturn right\nstmt right\ninit result\n6\nstmt done\ninit then\n6\nreturn then\n38\nstmt then'
 run_case async_array_literal_multiple_await $'init first\nreturn first\nstmt first\nsync tail\ninit second\nreturn second\nstmt second\ninit third\nstmt done\ninit result\n6\nreturn then\n30\nstmt then\ninit then\n6'
+run_case async_object_literal_multiple_await $'init left\nreturn left\nsync tail\ninit right\nreturn right\ninit result\n3\ninit then\n3\nreturn then\n30'
 run_case async_await_call_arg_initializer $'declared pre\narrow pre\nmethod pre\nexpr pre\nsync tail\ndeclared post\ndeclared call\ndeclared read\n123\narrow post\narrow call\narrow read\n456\nmethod post\nmethod call\nmethod read\n789\nexpr post\nexpr call\nexpr read\n234\ndeclared then\n123\narrow then\n456\nmethod then\n789\nexpr then\n234'
 run_case async_await_method_call_arg_initializer $'declared recv\ndeclared pre\narrow recv\narrow pre\nmethod recv\nmethod pre\nexpr recv\nexpr pre\nsync tail\ndeclared post\ndeclared call\ndeclared read\n1123\narrow post\narrow call\narrow read\n2456\nmethod post\nmethod call\nmethod read\n3789\nexpr post\nexpr call\nexpr read\n4234\ndeclared then\n1123\narrow then\n2456\nmethod then\n3789\nexpr then\n4234'
 run_case async_return_call_arg_await $'declared pre\narrow pre\nmethod recv\nmethod pre\nexpr recv\nexpr pre\nsync tail\ndeclared post\ndeclared call\narrow post\narrow call\nmethod post\nmethod call\nexpr post\nexpr call\ndeclared then\n123\narrow then\n456\nmethod then\n3789\nexpr then\n4234'
@@ -3078,6 +3079,7 @@ run_fail_case await_expression_deferred_fail examples/await_expression_deferred_
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
 run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_object_literal_statement_deferred_fail examples/await_object_literal_statement_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_multiple_deferred_fail examples/await_call_arg_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_builtin_deferred_fail examples/await_call_arg_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_fs_write_deferred_fail examples/await_call_arg_fs_write_deferred_fail.ts "writeFileSync returns void and cannot be used as a value"
