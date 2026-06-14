@@ -12902,12 +12902,17 @@ class Emitter {
       if (fulfilledIsSentinel) {
         const rejectedFnType = this.inferPromiseThenRejectedCallbackFn(expr.args[1]);
         const rejectedResultType = rejectedFnType.returnType;
-        this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true, false);
-        const rejectedPayload = this.normalizePromiseThenResultPayload(
-          expr.args[1],
-          rejectedResultType,
-          "Promise.then onRejected",
-        );
+        this.checkPromiseThenResultType(expr.args[1], rejectedResultType, "Promise.then onRejected", true, true);
+        let rejectedPayload: TopazType = rejectedResultType;
+        if (rejectedResultType.kind === "promise_like") {
+          rejectedPayload = rejectedResultType.value;
+        } else {
+          rejectedPayload = this.normalizePromiseThenResultPayload(
+            expr.args[1],
+            rejectedResultType,
+            "Promise.then onRejected",
+          );
+        }
         if (!typeEq(rejectedPayload, baseType.value)) {
           throw new CodegenError(
             { pos: expr.args[1].pos },
