@@ -12926,8 +12926,15 @@ class Emitter {
       if (rejectedIsSentinel) {
         const fnType = this.inferPromiseThenCallbackFn(expr.args[0], baseType.value);
         const resultType = fnType.returnType;
-        this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true, false);
-        const promiseType = resultType.kind === "promise" ? resultType : promiseOf(resultType);
+        this.checkPromiseThenResultType(expr.args[0], resultType, "Promise.then", true, true);
+        let promiseType: TopazType | undefined = undefined;
+        if (resultType.kind === "promise") {
+          promiseType = resultType;
+        } else if (resultType.kind === "promise_like") {
+          promiseType = { kind: "promise", value: resultType.value };
+        } else {
+          promiseType = promiseOf(resultType);
+        }
         if (promiseType === undefined) {
           throw new CodegenError(
             { pos: expr.args[0].pos },
