@@ -278,8 +278,10 @@ type MultiAwaitNestedCallArgPlan = {
   resultTempName: string;
   resultTempExpr: IdentExpr;
   awaitedArgIndexes: Array<number>;
+  awaitedArgDependencies: Array<{ awaitIndex: number; argIndex: number }>;
   transformedDirectArgs: Map<number, IdentExpr>;
   transformedBinaryArgs: Map<number, Expr>;
+  transformedNestedCallArgs: Map<number, IdentExpr>;
   transformedCallee: Expr;
   transformedCall?: CallExpr;
   plan?: OrdinaryCallPlan;
@@ -6440,6 +6442,7 @@ class Emitter {
     tempPrefix: string,
     awaitedArgs: Array<MultiAwaitCallArgAwait>,
     callArgEvents: Array<MultiAwaitCallArgEvent>,
+    nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
   ): MultiAwaitNestedCallArgPlan | undefined {
     if (nestedRoot.optional) {
       return undefined;
@@ -6458,8 +6461,26 @@ class Emitter {
       return undefined;
     }
 
+    const nestedPlan: MultiAwaitNestedCallArgPlan = {
+      argIndex: outerArgIndex,
+      root: nestedRoot,
+      resultTempName: `${tempPrefix}_nested_${nestedIndex}`,
+      resultTempExpr: {
+        kind: "ident",
+        name: `${tempPrefix}_nested_${nestedIndex}`,
+        pos: nestedRoot.pos,
+        end: nestedRoot.end,
+      },
+      awaitedArgIndexes: [],
+      awaitedArgDependencies: [],
+      transformedDirectArgs: new Map(),
+      transformedBinaryArgs: new Map(),
+      transformedNestedCallArgs: new Map(),
+      transformedCallee: nestedRoot.callee,
+    };
+    nestedCallArgs.push(nestedPlan);
+
     const transformedBinaryArgs = new Map<number, Expr>();
-    const nestedAwaitIndexes: Array<number> = [];
     for (let nestedArgIndex = 0; nestedArgIndex < nestedRoot.args.length; nestedArgIndex++) {
       const arg = nestedRoot.args[nestedArgIndex];
       const found = this.collectAwaitExprsInExpr(arg);
@@ -6478,13 +6499,35 @@ class Emitter {
           tempName,
           owner: { kind: "nested_direct", nestedIndex, nestedArgIndex },
         });
-        nestedAwaitIndexes.push(awaitIndex);
+        nestedPlan.awaitedArgIndexes.push(awaitIndex);
+        nestedPlan.awaitedArgDependencies.push({ awaitIndex, argIndex: nestedArgIndex });
         callArgEvents.push({
           kind: "await",
           argIndex: outerArgIndex,
           awaitExpr: unwrapped,
           binaryArg: false,
         });
+        continue;
+      }
+      if (unwrapped.kind === "call_expr") {
+        const childNestedIndex = nestedCallArgs.length;
+        const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+          unwrapped,
+          outerArgIndex,
+          childNestedIndex,
+          tempPrefix,
+          awaitedArgs,
+          callArgEvents,
+          nestedCallArgs,
+        );
+        if (childPlan === undefined) {
+          return undefined;
+        }
+        nestedPlan.transformedNestedCallArgs.set(nestedArgIndex, childPlan.resultTempExpr);
+        const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
+        nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
+        nestedPlan.awaitedArgDependencies.push({ awaitIndex: firstChildAwaitIndex, argIndex: nestedArgIndex });
+        callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
         continue;
       }
       if (unwrapped.kind !== "bin_op") {
@@ -6513,7 +6556,8 @@ class Emitter {
             tempName,
             owner: { kind: "nested_binary", nestedIndex, nestedArgIndex },
           });
-          nestedAwaitIndexes.push(awaitIndex);
+          nestedPlan.awaitedArgIndexes.push(awaitIndex);
+          nestedPlan.awaitedArgDependencies.push({ awaitIndex, argIndex: nestedArgIndex });
           callArgEvents.push({
             kind: "await",
             argIndex: outerArgIndex,
@@ -6531,27 +6575,12 @@ class Emitter {
         }
       }
     }
-    if (nestedAwaitIndexes.length === 0) {
+    if (nestedPlan.awaitedArgIndexes.length === 0) {
       return undefined;
     }
 
-    const resultTempName = `${tempPrefix}_nested_${nestedIndex}`;
-    const resultTempExpr: IdentExpr = {
-      kind: "ident",
-      name: resultTempName,
-      pos: nestedRoot.pos,
-      end: nestedRoot.end,
-    };
-    return {
-      argIndex: outerArgIndex,
-      root: nestedRoot,
-      resultTempName,
-      resultTempExpr,
-      awaitedArgIndexes: nestedAwaitIndexes,
-      transformedDirectArgs: new Map(),
-      transformedBinaryArgs,
-      transformedCallee: nestedRoot.callee,
-    };
+    nestedPlan.transformedBinaryArgs = transformedBinaryArgs;
+    return nestedPlan;
   }
 
   private tryBuildMultiAwaitCallArgExpression(
@@ -6653,11 +6682,11 @@ class Emitter {
           tempPrefix,
           awaitedArgs,
           callArgEvents,
+          nestedCallArgs,
         );
         if (nestedPlan === undefined) {
           return undefined;
         }
-        nestedCallArgs.push(nestedPlan);
         callArgEvents.push({ kind: "materialize", argIndex: i, nestedIndex });
         continue;
       }
@@ -6864,7 +6893,7 @@ class Emitter {
     const stepForAwaitIndex = (awaitIndex: number): MultiAwaitCallArgStepPlan => {
       return plannedSteps[awaitIndex + argStepOffset];
     };
-    for (let nestedIndex = 0; nestedIndex < nestedCallArgs.length; nestedIndex++) {
+    for (let nestedIndex = nestedCallArgs.length - 1; nestedIndex >= 0; nestedIndex--) {
       const nestedPlan = nestedCallArgs[nestedIndex];
       const firstNestedAwaitIndex = nestedPlan.awaitedArgIndexes[0];
       const firstNestedAwait = awaitedArgs[firstNestedAwaitIndex];
@@ -6873,8 +6902,10 @@ class Emitter {
       for (let nestedArgIndex = 0; nestedArgIndex < nestedPlan.root.args.length; nestedArgIndex++) {
         const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
         const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
+        const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
         if (directArg !== undefined) signatureNestedArgs.push(directArg);
         else if (binaryArg !== undefined) signatureNestedArgs.push(binaryArg);
+        else if (childArg !== undefined) signatureNestedArgs.push(childArg);
         else signatureNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
       }
       const signatureNestedCall: CallExpr = {
@@ -7070,23 +7101,14 @@ class Emitter {
 
       const nestedArgTempByArg = new Map<number, IdentExpr>();
       let nextNestedPreArgStart = 0;
-      for (const awaitIndex of nestedPlan.awaitedArgIndexes) {
-        const awaited = awaitedArgs[awaitIndex];
-        const owner = awaited.owner;
-        let ownerNestedArgIndex = -1;
-        switch (owner.kind) {
-          case "nested_direct":
-            ownerNestedArgIndex = owner.nestedArgIndex;
-            break;
-          case "nested_binary":
-            ownerNestedArgIndex = owner.nestedArgIndex;
-            break;
-          default:
-            return undefined;
-        }
+      for (const dependency of nestedPlan.awaitedArgDependencies) {
+        const awaitIndex = dependency.awaitIndex;
+        const ownerNestedArgIndex = dependency.argIndex;
         const stepPlan = stepForAwaitIndex(awaitIndex);
         for (let nestedArgIndex = nextNestedPreArgStart; nestedArgIndex < ownerNestedArgIndex; nestedArgIndex++) {
-          const arg = nestedPlan.root.args[nestedArgIndex];
+          const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
+          let arg: Expr = nestedPlan.root.args[nestedArgIndex];
+          if (childArg !== undefined) arg = childArg;
           if (nestedArgIndex >= plan.params.length) {
             return undefined;
           }
@@ -7111,9 +7133,11 @@ class Emitter {
         const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
         const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
         const preArg = nestedArgTempByArg.get(nestedArgIndex);
+        const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
         if (directArg !== undefined) transformedNestedArgs.push(directArg);
         else if (binaryArg !== undefined) transformedNestedArgs.push(binaryArg);
         else if (preArg !== undefined) transformedNestedArgs.push(preArg);
+        else if (childArg !== undefined) transformedNestedArgs.push(childArg);
         else transformedNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
       }
 
@@ -7286,7 +7310,9 @@ class Emitter {
       const awaited = awaitedArgs[i];
       const stepPlan = plannedSteps[i + argStepOffset];
       for (let argIndex = nextPreArgStart; argIndex < awaited.argIndex; argIndex++) {
-        const arg = root.args[argIndex];
+        const nestedTemp = nestedResultByArg.get(argIndex);
+        let arg: Expr = root.args[argIndex];
+        if (nestedTemp !== undefined) arg = nestedTemp;
         if (argIndex >= plan.params.length) {
           return undefined;
         }

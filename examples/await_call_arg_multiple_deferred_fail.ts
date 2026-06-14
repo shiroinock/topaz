@@ -1,20 +1,19 @@
 /// <reference lib="es2015.promise" />
 
 async function answer(): Promise<number> {
-  const n = (await Promise.resolve(new Combiner())).combine(wrap(wrap(await Promise.resolve(1))), await Promise.resolve(2));
-  return n;
+  return combine(snapshot(wrap(await Promise.resolve(1))) + await Promise.resolve(2), await Promise.resolve(3));
 }
 
 function wrap(value: number): number {
   return value;
 }
 
-class Combiner {
-  constructor() {}
+function snapshot(value: number): number {
+  return value;
+}
 
-  combine(a: number, b: number): number {
-    return a + b;
-  }
+function combine(a: number, b: number): number {
+  return a + b;
 }
 
 answer();
