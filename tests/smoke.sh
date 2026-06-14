@@ -3087,6 +3087,7 @@ run_case async_call_arg_awaited_nested_receiver_descriptor_await $'init receiver
 run_case async_call_arg_nested_snapshot_leaf_descriptor_await $'init left\nreturn left\nstmt left\nsync tail\ninit inner\nreturn inner\nstmt inner\ninit nested\ninit snapshot\ninit right\nreturn nested\nreturn middle\nreturn snapshot\nreturn right\nstmt nested\nstmt snapshot\nstmt right\ninit call\n26\nreturn call\n90\nstmt call\n620\ninit then\n26\nreturn then\n90\nstmt then'
 run_case async_call_arg_contextual_object_snapshot_leaf_descriptor_await $'left\nsync tail\ninner\nnested\n2\nreadBox\n12\nsnapshot\n112\nright\ncombine\n123\n3\nthen\n1126'
 run_case async_call_arg_contextual_object_array_snapshot_leaf_descriptor_await $'left\nsync tail\ninner\nnested\n2\nreadBox\n12\nsnapshot\n112\nright\ncombine\n123\n3\nthen\n1126'
+run_case async_call_arg_contextual_object_nested_object_snapshot_leaf_descriptor_await $'left\nsync tail\ninner\nnested\n2\nreadBox\n12\nsnapshot\n112\nright\ncombine\n123\n3\nthen\n1126'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_mixed_side_effect_deferred_fail examples/await_object_literal_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_nested_array_side_effect_deferred_fail examples/await_object_literal_nested_array_side_effect_deferred_fail.ts "await expression lowering is deferred"
@@ -3111,7 +3112,7 @@ run_fail_case await_array_literal_mixed_side_effect_deferred_fail examples/await
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_statement_deferred_fail examples/await_object_literal_statement_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_multiple_deferred_fail examples/await_call_arg_multiple_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_call_arg_nested_snapshot_nested_object_leaf_deferred_fail examples/await_call_arg_nested_snapshot_nested_object_leaf_deferred_fail.ts "await expression lowering is deferred"
+run_fail_case await_call_arg_nested_snapshot_deep_object_leaf_deferred_fail examples/await_call_arg_nested_snapshot_deep_object_leaf_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_builtin_deferred_fail examples/await_call_arg_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_fs_write_deferred_fail examples/await_call_arg_fs_write_deferred_fail.ts "writeFileSync returns void and cannot be used as a value"
 run_fail_case await_call_arg_string_static_deferred_fail examples/await_call_arg_string_static_deferred_fail.ts "await expression lowering is deferred"

@@ -6603,6 +6603,44 @@ class Emitter {
             continue;
           }
           if (value.kind !== "call_expr") {
+            if (value.kind === "object_lit") {
+              for (const nestedProp of value.props) {
+                if (nestedProp.kind !== "prop_kv") {
+                  return undefined;
+                }
+                const nestedValue = this.unwrapParenExpr(nestedProp.value);
+                const nestedValueAwaits = this.collectAwaitExprsInExpr(nestedValue);
+                if (nestedValueAwaits.length === 0) {
+                  continue;
+                }
+                if (nestedValue.kind !== "call_expr") {
+                  return undefined;
+                }
+                const childNestedIndex = nestedCallArgs.length;
+                const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+                  nestedValue,
+                  outerArgIndex,
+                  childNestedIndex,
+                  tempPrefix,
+                  awaitedArgs,
+                  callArgEvents,
+                  nestedCallArgs,
+                );
+                if (childPlan === undefined) {
+                  return undefined;
+                }
+                transformedObjectArg = this.replaceExactExprInExpr(
+                  transformedObjectArg,
+                  nestedValue,
+                  childPlan.resultTempExpr,
+                );
+                const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
+                nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
+                nestedPlan.awaitedArgDependencies.push({ awaitIndex: firstChildAwaitIndex, argIndex: nestedArgIndex });
+                callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
+              }
+              continue;
+            }
             if (value.kind !== "array_lit") {
               return undefined;
             }
