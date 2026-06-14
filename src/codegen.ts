@@ -5838,11 +5838,16 @@ class Emitter {
         transformedAwaitArg = this.replaceAwaitExprInExpr(arg, awaitExpr, awaitedTempExpr);
       } else {
         const siblingAwait = this.tryBuildPreAwaitCallArgSiblingTemp(arg, awaitExpr, awaitedTempExpr, stepOrdinal, i);
-        if (siblingAwait === undefined) {
-          throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+        if (siblingAwait !== undefined) {
+          transformedAwaitArg = siblingAwait.transformedArg;
+          awaitArgSiblingTemp = siblingAwait.temp;
+        } else {
+          const postSiblingAwait = this.tryBuildPostAwaitCallArgSiblingExpression(arg, awaitExpr, awaitedTempExpr);
+          if (postSiblingAwait === undefined) {
+            throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
+          }
+          transformedAwaitArg = postSiblingAwait;
         }
-        transformedAwaitArg = siblingAwait.transformedArg;
-        awaitArgSiblingTemp = siblingAwait.temp;
       }
       awaitArgIndex = i;
     }
@@ -6052,6 +6057,36 @@ class Emitter {
       },
       preAwaitReceiverTemps,
       preAwaitArgTemps,
+    };
+  }
+
+  private tryBuildPostAwaitCallArgSiblingExpression(
+    arg: Expr,
+    awaitExpr: AwaitExpr,
+    awaitedTempExpr: IdentExpr,
+  ): Expr | undefined {
+    const root = this.unwrapParenExpr(arg);
+    if (root.kind !== "bin_op") return undefined;
+    if (root.op === "&&" || root.op === "||" || root.op === "??") return undefined;
+    const lhsAwaits = this.collectAwaitExprsInExpr(root.lhs);
+    if (
+      lhsAwaits.length !== 1 ||
+      lhsAwaits[0].pos !== awaitExpr.pos ||
+      lhsAwaits[0].end !== awaitExpr.end ||
+      this.collectAwaitExprsInExpr(root.rhs).length > 0 ||
+      !this.simpleCallArgumentAwaitReplacementSupported(root.lhs, awaitExpr) ||
+      !this.preAwaitCallArgumentSiblingTempSupported(root.rhs)
+    ) {
+      return undefined;
+    }
+
+    return {
+      kind: "bin_op",
+      op: root.op,
+      lhs: this.replaceAwaitExprInExpr(root.lhs, awaitExpr, awaitedTempExpr),
+      rhs: root.rhs,
+      pos: root.pos,
+      end: root.end,
     };
   }
 

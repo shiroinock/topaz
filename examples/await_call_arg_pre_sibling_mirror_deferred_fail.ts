@@ -1,6 +1,6 @@
 /// <reference lib="es2015.promise" />
 
-function mark(label: string, value: number): number {
+function mark(label: string, value: boolean): boolean {
   console.log(label);
   return value;
 }
@@ -10,7 +10,7 @@ function read(value: number): void {
 }
 
 async function bad(): Promise<void> {
-  read(await Promise.resolve(2) + mark("post", 1));
+  read((await Promise.resolve(true)) && mark("post", true) ? 1 : 2);
 }
 
 bad();
