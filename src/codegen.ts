@@ -6409,7 +6409,11 @@ class Emitter {
         plan.kind === "class_method" ||
         plan.kind === "interface_method" ||
         (plan.kind === "array_method" && (plan.methodName === "map" || plan.methodName === "filter")) ||
-        (plan.kind === "string_method" && plan.methodName === "indexOf");
+        (plan.kind === "string_method" && plan.methodName === "indexOf") ||
+        (plan.kind === "map_method" &&
+          (plan.methodName === "get" || plan.methodName === "has" || plan.methodName === "delete")) ||
+        (plan.kind === "set_method" &&
+          (plan.methodName === "has" || plan.methodName === "delete"));
       if (!receiverAwaitPlanSupported) {
         return undefined;
       }
