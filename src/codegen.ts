@@ -6471,25 +6471,37 @@ class Emitter {
     return transformed;
   }
 
-  private tryWalkNestedMultiAwaitObjectCallLeaves(
+  private tryWalkNestedMultiAwaitLiteralTreeCallLeaves(
     outerArgIndex: number,
     nestedArgIndex: number,
     tempPrefix: string,
     nestedPlan: MultiAwaitNestedCallArgPlan,
     transformedObjectArg: Expr,
-    objectLit: ObjectLitExpr,
+    literal: ObjectLitExpr | ArrayLitExpr,
     awaitedArgs: Array<MultiAwaitCallArgAwait>,
     callArgEvents: Array<MultiAwaitCallArgEvent>,
     nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
   ): Expr | undefined {
     let transformed = transformedObjectArg;
-    for (const prop of objectLit.props) {
-      if (prop.kind !== "prop_kv") {
-        return undefined;
+    const children: Array<Expr> = [];
+    if (literal.kind === "object_lit") {
+      for (const prop of literal.props) {
+        if (prop.kind !== "prop_kv") {
+          return undefined;
+        }
+        children.push(prop.value);
       }
-      const value = this.unwrapParenExpr(prop.value);
-      const valueAwaits = this.collectAwaitExprsInExpr(value);
-      if (valueAwaits.length === 0) {
+    } else {
+      for (const elem of literal.elems) {
+        if (elem.kind !== "elem") {
+          return undefined;
+        }
+        children.push(elem.expr);
+      }
+    }
+    for (const child of children) {
+      const value = this.unwrapParenExpr(child);
+      if (this.collectAwaitExprsInExpr(value).length === 0) {
         continue;
       }
       if (value.kind === "call_expr") {
@@ -6510,24 +6522,43 @@ class Emitter {
         transformed = planned;
         continue;
       }
-      if (value.kind !== "object_lit") {
-        return undefined;
+      if (value.kind === "object_lit") {
+        const planned = this.tryWalkNestedMultiAwaitLiteralTreeCallLeaves(
+          outerArgIndex,
+          nestedArgIndex,
+          tempPrefix,
+          nestedPlan,
+          transformed,
+          value,
+          awaitedArgs,
+          callArgEvents,
+          nestedCallArgs,
+        );
+        if (planned === undefined) {
+          return undefined;
+        }
+        transformed = planned;
+        continue;
       }
-      const planned = this.tryWalkNestedMultiAwaitObjectCallLeaves(
-        outerArgIndex,
-        nestedArgIndex,
-        tempPrefix,
-        nestedPlan,
-        transformed,
-        value,
-        awaitedArgs,
-        callArgEvents,
-        nestedCallArgs,
-      );
-      if (planned === undefined) {
-        return undefined;
+      if (value.kind === "array_lit") {
+        const planned = this.tryWalkNestedMultiAwaitLiteralTreeCallLeaves(
+          outerArgIndex,
+          nestedArgIndex,
+          tempPrefix,
+          nestedPlan,
+          transformed,
+          value,
+          awaitedArgs,
+          callArgEvents,
+          nestedCallArgs,
+        );
+        if (planned === undefined) {
+          return undefined;
+        }
+        transformed = planned;
+        continue;
       }
-      transformed = planned;
+      return undefined;
     }
     return transformed;
   }
@@ -6685,90 +6716,19 @@ class Emitter {
         continue;
       }
       if (unwrapped.kind === "object_lit") {
-        let transformedObjectArg: Expr = arg;
-        for (const prop of unwrapped.props) {
-          if (prop.kind !== "prop_kv") {
-            return undefined;
-          }
-          const value = this.unwrapParenExpr(prop.value);
-          const valueAwaits = this.collectAwaitExprsInExpr(value);
-          if (valueAwaits.length === 0) {
-            continue;
-          }
-          if (value.kind === "array_lit") {
-            for (const elem of value.elems) {
-              if (elem.kind !== "elem") {
-                return undefined;
-              }
-              const elemValue = this.unwrapParenExpr(elem.expr);
-              const elemAwaits = this.collectAwaitExprsInExpr(elemValue);
-              if (elemAwaits.length === 0) {
-                continue;
-              }
-              if (elemValue.kind !== "call_expr") {
-                return undefined;
-              }
-              const childNestedIndex = nestedCallArgs.length;
-              const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
-                elemValue,
-                outerArgIndex,
-                childNestedIndex,
-                tempPrefix,
-                awaitedArgs,
-                callArgEvents,
-                nestedCallArgs,
-              );
-              if (childPlan === undefined) {
-                return undefined;
-              }
-              transformedObjectArg = this.replaceExactExprInExpr(
-                transformedObjectArg,
-                elemValue,
-                childPlan.resultTempExpr,
-              );
-              const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
-              nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
-              nestedPlan.awaitedArgDependencies.push({ awaitIndex: firstChildAwaitIndex, argIndex: nestedArgIndex });
-              callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
-            }
-            continue;
-          }
-          if (value.kind === "call_expr") {
-            const planned = this.tryPlanNestedMultiAwaitObjectCallLeaf(
-              value,
-              outerArgIndex,
-              nestedArgIndex,
-              tempPrefix,
-              nestedPlan,
-              transformedObjectArg,
-              awaitedArgs,
-              callArgEvents,
-              nestedCallArgs,
-            );
-            if (planned === undefined) {
-              return undefined;
-            }
-            transformedObjectArg = planned;
-            continue;
-          }
-          if (value.kind !== "object_lit") {
-            return undefined;
-          }
-          const planned = this.tryWalkNestedMultiAwaitObjectCallLeaves(
-            outerArgIndex,
-            nestedArgIndex,
-            tempPrefix,
-            nestedPlan,
-            transformedObjectArg,
-            value,
-            awaitedArgs,
-            callArgEvents,
-            nestedCallArgs,
-          );
-          if (planned === undefined) {
-            return undefined;
-          }
-          transformedObjectArg = planned;
+        const transformedObjectArg = this.tryWalkNestedMultiAwaitLiteralTreeCallLeaves(
+          outerArgIndex,
+          nestedArgIndex,
+          tempPrefix,
+          nestedPlan,
+          arg,
+          unwrapped,
+          awaitedArgs,
+          callArgEvents,
+          nestedCallArgs,
+        );
+        if (transformedObjectArg === undefined) {
+          return undefined;
         }
         nestedPlan.transformedObjectArgs.set(nestedArgIndex, transformedObjectArg);
         continue;
