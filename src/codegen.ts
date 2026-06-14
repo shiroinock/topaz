@@ -6614,6 +6614,47 @@ class Emitter {
                   continue;
                 }
                 if (nestedValue.kind !== "call_expr") {
+                  if (nestedValue.kind === "object_lit") {
+                    for (const deepProp of nestedValue.props) {
+                      if (deepProp.kind !== "prop_kv") {
+                        return undefined;
+                      }
+                      const deepValue = this.unwrapParenExpr(deepProp.value);
+                      const deepValueAwaits = this.collectAwaitExprsInExpr(deepValue);
+                      if (deepValueAwaits.length === 0) {
+                        continue;
+                      }
+                      if (deepValue.kind !== "call_expr") {
+                        return undefined;
+                      }
+                      const childNestedIndex = nestedCallArgs.length;
+                      const childPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+                        deepValue,
+                        outerArgIndex,
+                        childNestedIndex,
+                        tempPrefix,
+                        awaitedArgs,
+                        callArgEvents,
+                        nestedCallArgs,
+                      );
+                      if (childPlan === undefined) {
+                        return undefined;
+                      }
+                      transformedObjectArg = this.replaceExactExprInExpr(
+                        transformedObjectArg,
+                        deepValue,
+                        childPlan.resultTempExpr,
+                      );
+                      const firstChildAwaitIndex = childPlan.awaitedArgIndexes[0];
+                      nestedPlan.awaitedArgIndexes.push(firstChildAwaitIndex);
+                      nestedPlan.awaitedArgDependencies.push({
+                        awaitIndex: firstChildAwaitIndex,
+                        argIndex: nestedArgIndex,
+                      });
+                      callArgEvents.push({ kind: "materialize", argIndex: outerArgIndex, nestedIndex: childNestedIndex });
+                    }
+                    continue;
+                  }
                   return undefined;
                 }
                 const childNestedIndex = nestedCallArgs.length;
