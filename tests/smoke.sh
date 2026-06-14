@@ -990,7 +990,7 @@ if [[ "${substrate_out}" != *"promise-value-boundary: 3"* ]]; then
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
 fi
-if [[ "${substrate_out}" != *"promise-continuation-boundary: 17"* ]]; then
+if [[ "${substrate_out}" != *"promise-continuation-boundary: 19"* ]]; then
   echo "FAIL [runtime_substrate_inventory]: Promise continuation substrate lane count changed" >&2
   printf '%s\n' "${substrate_out}" | sed 's/^/    /' >&2
   exit 1
@@ -1042,6 +1042,8 @@ for fragment in \
   'topaz_promise_then (helper,' \
   'topaz_promise_then_into (helper,' \
   'topaz_promise_forward_into (helper,' \
+  'topaz_promise_like_from_promise (helper,' \
+  'topaz_promise_like_to_promise (helper,' \
   'topaz_promise_finally_cleanup_into (helper,' \
   'topaz_promise_finally_cleanup_settlement (helper,' \
   'topaz_promise_catch (helper,' \
@@ -1059,14 +1061,14 @@ for fragment in \
   fi
 done
 for fragment in \
-  'runtime substrate inventory ok: 76 symbols classified' \
+  'runtime substrate inventory ok: 78 symbols classified' \
   'bigint-limb-intrinsic-family: 8' \
   'c-abi-type-boundary: 8' \
   'container-monomorph-boundary: 13' \
   'exception-boundary: 4' \
   'host-abi-boundary: 12' \
   'libc-libm-boundary: 3' \
-  'promise-continuation-boundary: 17' \
+  'promise-continuation-boundary: 19' \
   'promise-value-boundary: 3' \
   'raw-memory-boundary: 3' \
   'string-buffer-intrinsic-family: 5' \
@@ -2994,6 +2996,7 @@ run_case promise_undefined_passthrough_handlers $'sync tail\nthen fulfilled\n10\
 run_case promise_handler_sentinel_normalization $'7\n8\n9\n10\n11\n12\n13\n14\n15'
 run_case promise_like_type_annotation "callback"
 run_case promise_like_container_annotation $'map\nset\nnested'
+run_case promise_like_native_adapter $'param\nreturn\narray\nmap\nset\nfield\nnested'
 run_case promise_container_annotation $'2\ntrue\ntrue\nnested'
 run_case promise_iterator_annotation $'2\n2\n6\ntrue\n2\n0'
 run_case promise_optional_extraction $'promise hit\npromise miss\npromise coalesce\npromise bang\nlike miss\nlike still missing\nexplicit absent\nexplicit coalesce'
@@ -3101,6 +3104,7 @@ run_fail_case promise_like_array_await_deferred_fail examples/promise_like_array
 run_fail_case promise_like_field_await_deferred_fail examples/promise_like_field_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
 run_fail_case promise_like_async_return_fail examples/promise_like_async_return_fail.ts "async function return annotation must be Promise<T>; PromiseLike<T> bridge is deferred"
 run_fail_case promise_like_resolve_deferred_fail examples/promise_like_resolve_deferred_fail.ts "Promise.resolve payload type topaz_promise_like_number is unsupported"
+run_fail_case promise_like_structural_adapter_fail examples/promise_like_structural_adapter_fail.ts "expected identifier"
 run_fail_case promise_like_unknown_payload_fail examples/promise_like_unknown_payload_fail.ts "PromiseLike<T>: payload type topaz_unknown is unsupported"
 run_fail_case promise_like_map_key_deferred_fail examples/promise_like_map_key_deferred_fail.ts "no Map monomorph for key=topaz_promise_like_number, value=topaz_number"
 run_fail_case promise_map_key_deferred_fail examples/promise_map_key_deferred_fail.ts "no Map monomorph for key=topaz_promise_number, value=topaz_string"

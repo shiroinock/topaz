@@ -999,7 +999,7 @@ function cTypeName(t: TopazType): string {
     return "void *";
   }
   if (t.kind === "promise_like") {
-    return "void *";
+    return "topaz_promise_like *";
   }
   if (t.kind === "dunion") {
     return typeIdent(t);
@@ -17262,6 +17262,11 @@ class Emitter {
         return true;
       }
     }
+    if (expected.kind === "promise_like") {
+      if (actual.kind === "promise") {
+        return typeEq(actual.value, expected.value);
+      }
+    }
     return false;
   }
 
@@ -17692,6 +17697,14 @@ class Emitter {
         const id = this.tmpCounter++;
         const tmp = `__topaz_dw_${id}`;
         return `({ ${typeIdent(actual)} ${tmp} = ${raw}; (${typeIdent(expected)}){ ${tmp}.${actual.discriminator}, ${tmp}.data }; })`;
+      }
+    }
+    if (expected.kind === "promise_like") {
+      if (actual.kind === "promise") {
+        if (!typeEq(actual.value, expected.value)) {
+          throw new CodegenError(anchor, `type mismatch: expected ${typeIdent(expected)}, got ${typeIdent(actual)}`);
+        }
+        return `topaz_promise_like_from_promise(${raw})`;
       }
     }
     // Phase 1.5-3e: string_literal "X" widens to plain string (the literal

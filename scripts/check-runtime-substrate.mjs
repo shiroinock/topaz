@@ -351,6 +351,18 @@ const inventory = {
     migration: MIGRATION.PROMISE_CONTINUATION,
     next: NEXT.PROMISE_CONTINUATION,
   },
+  topaz_promise_like_from_promise: {
+    category: CATEGORY.PROMISE,
+    reason: "allocate a PromiseLike descriptor that wraps a native Topaz Promise without aliasing the Promise pointer.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
+  topaz_promise_like_to_promise: {
+    category: CATEGORY.PROMISE,
+    reason: "forward a native PromiseLike descriptor settlement into a fresh Topaz Promise for future await/resolve bridge surfaces.",
+    migration: MIGRATION.PROMISE_CONTINUATION,
+    next: NEXT.PROMISE_CONTINUATION,
+  },
   topaz_promise_finally_cleanup_into: {
     category: CATEGORY.PROMISE,
     reason: "register Promise.finally cleanup Promise waiting into an existing chained target Promise.",

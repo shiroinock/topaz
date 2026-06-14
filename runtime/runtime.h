@@ -119,6 +119,15 @@ struct topaz_promise {
   topaz_promise_continuation *continuations_tail;
 };
 
+typedef enum {
+  TOPAZ_PROMISE_LIKE_NATIVE_PROMISE,
+} topaz_promise_like_kind;
+
+typedef struct topaz_promise_like {
+  topaz_promise_like_kind kind;
+  topaz_promise *promise;
+} topaz_promise_like;
+
 typedef struct topaz_microtask {
   topaz_promise_continuation_fn fn;
   void *ctx;
@@ -134,6 +143,15 @@ static inline topaz_promise *topaz_promise_new_pending(void) {
   topaz_promise *promise = (topaz_promise *)topaz_arena_calloc(1, sizeof(*promise));
   promise->state = TOPAZ_PROMISE_PENDING;
   return promise;
+}
+
+static inline topaz_promise_like *topaz_promise_like_from_promise(void *promise_value) {
+  topaz_promise *promise = (topaz_promise *)promise_value;
+  if (!promise) abort();
+  topaz_promise_like *like = (topaz_promise_like *)topaz_arena_calloc(1, sizeof(*like));
+  like->kind = TOPAZ_PROMISE_LIKE_NATIVE_PROMISE;
+  like->promise = promise;
+  return like;
 }
 
 static inline void topaz_microtask_enqueue(
@@ -341,6 +359,16 @@ static inline void *topaz_promise_forward_into(void *source_value, void *target_
     target_value,
     false
   );
+}
+
+static inline void *topaz_promise_like_to_promise(void *like_value) {
+  topaz_promise_like *like = (topaz_promise_like *)like_value;
+  if (!like) abort();
+  if (like->kind == TOPAZ_PROMISE_LIKE_NATIVE_PROMISE) {
+    topaz_promise *target = topaz_promise_new_pending();
+    return topaz_promise_forward_into(like->promise, target);
+  }
+  abort();
 }
 
 static inline void *topaz_promise_finally_cleanup_into(
