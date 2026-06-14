@@ -2978,6 +2978,7 @@ run_case promise_like_container_annotation $'map\nset\nnested'
 run_case promise_container_annotation $'2\ntrue\ntrue\nnested'
 run_case promise_iterator_annotation $'2\n2\n6\ntrue\n2\n0'
 run_case promise_optional_extraction $'promise hit\npromise miss\npromise coalesce\npromise bang\nlike miss\nlike still missing\nexplicit absent\nexplicit coalesce'
+run_case promise_array_extraction $'2\n2\n1\n2\n0'
 run_fail_case promise_iterator_nested_container_deferred_fail examples/promise_iterator_nested_container_deferred_fail.ts "Iterator<T>: element type topaz_array_promise_number is unsupported"
 run_case promise_finally_return_promise $'sync tail\ncleanup fulfilled preserve\ncleanup rejected preserve\ncleanup fulfilled override\ncleanup rejected override\nnested cleanup start\nfifo marker\ncleanup throw before promise\nnested cleanup inner\nthrow override\n66\nfulfilled value\n1\npreserved rejection\nsource\nfulfilled override\nfulfilled cleanup\nrejected override\nrejected cleanup\nnested result\n5'
 run_case promise_finally_ignored_return $'sync tail\ncleanup number\ncleanup string\ncleanup boolean\ncleanup literal\nfifo then\nfifo finally\ncleanup throw\nfulfilled value\n10\nrejected string preserved\nsource string\nrejected bool preserved\nsource bool\nliteral result\n5\nfifo final then\n7\noverride catch\n88\nstring recovery\n2\nbool recovery\n3'
@@ -3076,6 +3077,7 @@ run_fail_case promise_resolve_wrong_arity_fail examples/promise_resolve_wrong_ar
 run_fail_case promise_resolve_undefined_fail examples/promise_resolve_undefined_fail.ts "Promise.resolve payload type topaz_undefined is unsupported"
 run_fail_case promise_like_await_deferred_fail examples/promise_like_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
 run_fail_case promise_like_optional_await_deferred_fail examples/promise_like_optional_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
+run_fail_case promise_like_array_await_deferred_fail examples/promise_like_array_await_deferred_fail.ts "await operand is PromiseLike<T>; explicit PromiseLike bridge / thenable assimilation is deferred"
 run_fail_case promise_like_async_return_fail examples/promise_like_async_return_fail.ts "async function return annotation must be Promise<T>; PromiseLike<T> bridge is deferred"
 run_fail_case promise_like_resolve_deferred_fail examples/promise_like_resolve_deferred_fail.ts "Promise.resolve payload type topaz_promise_like_number is unsupported"
 run_fail_case promise_like_unknown_payload_fail examples/promise_like_unknown_payload_fail.ts "PromiseLike<T>: payload type topaz_unknown is unsupported"
