@@ -2789,12 +2789,6 @@ class Emitter {
             throw new CodegenError(fnAnchor, "async generic function return annotation must be Promise<T>");
           }
           this.validateGenericAsyncReturnAnnotation(fnReturnType);
-          for (const s of fn.body.stmts) {
-            const foundAwait = this.collectAwaitExprsInStmt(s);
-            if (foundAwait.length > 0) {
-              throw new CodegenError({ pos: foundAwait[0].pos }, "async generic function with await is deferred");
-            }
-          }
         }
         this.genericFunctions.set(fname, { name: fname, typeParams, decl: fn, sf });
         return;
