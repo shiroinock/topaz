@@ -3511,6 +3511,12 @@ run_case brand_generic_template_property_key_constraint $'u1\nu1\no1\ntrue\ntrue
 run_case brand_generic_computed_template_property_key_constraint $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_property_key_union_constraint $'u1\nu1\no1\ntrue\ntrue\nu1'
 run_case brand_generic_computed_template_property_key_union_constraint $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_generic_template_base_constraint $'u1\nu1\no1\ntrue\ntrue\nu1'
+run_case brand_generic_computed_template_base_constraint $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_generic_template_base_property_key_constraint $'u1\nu1\n42\ntrue\ntrue\nu1'
+run_case brand_generic_computed_template_base_property_key_constraint $'u1\nu1\n42\ntrue\ntrue\nu1'
+run_case brand_generic_template_base_property_key_union_constraint $'u1\nu1\n42\ntrue\ntrue\nu1'
+run_case brand_generic_computed_template_base_property_key_union_constraint $'u1\nu1\n42\ntrue\ntrue\nu1'
 run_case brand_phantom_object_template $'u1\nu1\no1\ntrue\ntrue\nu1\nx1\nn1'
 run_case brand_phantom_object_computed_template $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_phantom_object_template_constrained $'u1\nu1\no1\ntrue\ntrue\nu1'
@@ -3541,9 +3547,10 @@ run_fail_case brand_generic_template_base_default_fail examples/brand_generic_te
 run_fail_case brand_generic_template_bad_shape_fail examples/brand_generic_template_bad_shape_fail.ts "generic type alias 'Brand' is unsupported"
 run_fail_case brand_generic_template_bad_constraint_fail examples/brand_generic_template_bad_constraint_fail.ts "brand template payload constraint must be string, PropertyKey, or string | number | symbol"
 run_fail_case brand_generic_template_property_key_union_missing_fail examples/brand_generic_template_property_key_union_missing_fail.ts "brand template payload constraint must be string, PropertyKey, or string | number | symbol"
-run_fail_case brand_generic_template_base_constraint_fail examples/brand_generic_template_base_constraint_fail.ts "brand template base type parameter constraint is unsupported"
-run_fail_case brand_generic_template_base_property_key_constraint_fail examples/brand_generic_template_base_property_key_constraint_fail.ts "brand template base type parameter constraint is unsupported"
-run_fail_case brand_generic_template_base_property_key_union_constraint_fail examples/brand_generic_template_base_property_key_union_constraint_fail.ts "brand template base type parameter constraint is unsupported"
+run_fail_case brand_generic_template_base_bad_constraint_fail examples/brand_generic_template_base_bad_constraint_fail.ts "brand template base type parameter constraint must be string, PropertyKey, or string | number | symbol"
+run_fail_case brand_generic_template_base_constraint_fail examples/brand_generic_template_base_constraint_fail.ts "does not satisfy constraint string"
+run_fail_case brand_generic_template_base_property_key_constraint_fail examples/brand_generic_template_base_property_key_constraint_fail.ts "does not satisfy constraint PropertyKey"
+run_fail_case brand_generic_template_base_property_key_union_constraint_fail examples/brand_generic_template_base_property_key_union_constraint_fail.ts "does not satisfy constraint string | number | symbol"
 run_fail_case brand_phantom_object_cross_assign_fail examples/brand_phantom_object_cross_assign_fail.ts "topaz_brand_Phantom_3a___brand_3a_OrderId"
 run_fail_case brand_phantom_object_bare_fail examples/brand_phantom_object_bare_fail.ts "unsupported outside a brand intersection"
 run_fail_case brand_phantom_object_bad_shape_fail examples/brand_phantom_object_bad_shape_fail.ts "generic type alias 'Phantom' is unsupported"

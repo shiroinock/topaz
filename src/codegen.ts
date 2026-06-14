@@ -1470,11 +1470,20 @@ type TypeAliasInfo = {
   recursive: boolean;
 };
 
-type BrandAliasTemplateInfo = {
-  kind: "base_payload" | "phantom_object";
+type BasePayloadBrandAliasTemplateInfo = {
+  kind: "base_payload";
+  fieldKey: string;
+  baseConstraint: string;
+  payloadDefault: string | undefined;
+};
+
+type PhantomObjectBrandAliasTemplateInfo = {
+  kind: "phantom_object";
   fieldKey: string;
   payloadDefault: string | undefined;
 };
+
+type BrandAliasTemplateInfo = BasePayloadBrandAliasTemplateInfo | PhantomObjectBrandAliasTemplateInfo;
 
 type InterfacePhantomBrandDescriptor = {
   fieldKey: string;
@@ -4542,11 +4551,12 @@ class Emitter {
       }
     }
     if (!hasBase || !hasPhantom) return undefined;
-    const baseConstraint = baseTypeParam.constraint;
-    if (baseConstraint !== undefined) {
+    const baseConstraintNode = baseTypeParam.constraint;
+    const baseConstraint = this.brandTemplateBaseConstraint(baseConstraintNode);
+    if (baseConstraint === undefined) {
       throw this.typeErr(
-        { pos: baseConstraint.pos },
-        "brand template base type parameter constraint is unsupported",
+        { pos: baseConstraintNode === undefined ? baseTypeParam.pos : baseConstraintNode.pos },
+        "brand template base type parameter constraint must be string, PropertyKey, or string | number | symbol",
       );
     }
     const baseDefault = baseTypeParam.defaultType;
@@ -4574,7 +4584,7 @@ class Emitter {
         );
       }
     }
-    return { kind: "base_payload", fieldKey, payloadDefault };
+    return { kind: "base_payload", fieldKey, baseConstraint, payloadDefault };
   }
 
   private tryMakePhantomObjectBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
@@ -4606,30 +4616,58 @@ class Emitter {
     return { kind: "phantom_object", fieldKey, payloadDefault };
   }
 
-  private isBrandPayloadTypeParamConstraint(node: TypeNode): boolean {
+  private brandTemplateBaseConstraint(node: TypeNode | undefined): string | undefined {
+    if (node === undefined) return "unconstrained";
+    return this.brandTemplatePropertyKeyConstraint(node);
+  }
+
+  private brandTemplatePropertyKeyConstraint(
+    node: TypeNode,
+  ): string | undefined {
     if (node.kind === "type_ref") {
-      return (node.name === "string" || node.name === "PropertyKey") && node.typeArgs.length === 0;
+      if (node.name === "string" && node.typeArgs.length === 0) return "string";
+      if (node.name === "PropertyKey" && node.typeArgs.length === 0) return "property_key";
+      return undefined;
     }
-    if (node.kind !== "type_union" || node.variants.length !== 3) return false;
+    if (node.kind !== "type_union" || node.variants.length !== 3) return undefined;
     let hasString = false;
     let hasNumber = false;
     let hasSymbol = false;
     for (const variant of node.variants) {
-      if (variant.kind !== "type_ref" || variant.typeArgs.length !== 0) return false;
+      if (variant.kind !== "type_ref" || variant.typeArgs.length !== 0) return undefined;
       if (variant.name === "string") {
-        if (hasString) return false;
+        if (hasString) return undefined;
         hasString = true;
       } else if (variant.name === "number") {
-        if (hasNumber) return false;
+        if (hasNumber) return undefined;
         hasNumber = true;
       } else if (variant.name === "symbol") {
-        if (hasSymbol) return false;
+        if (hasSymbol) return undefined;
         hasSymbol = true;
       } else {
-        return false;
+        return undefined;
       }
     }
-    return hasString && hasNumber && hasSymbol;
+    return hasString && hasNumber && hasSymbol ? "property_key_union" : undefined;
+  }
+
+  private isBrandPayloadTypeParamConstraint(node: TypeNode): boolean {
+    return this.brandTemplatePropertyKeyConstraint(node) !== undefined;
+  }
+
+  private brandTemplateBaseConstraintName(constraint: string): string {
+    if (constraint === "string") return "string";
+    if (constraint === "property_key") return "PropertyKey";
+    if (constraint === "property_key_union") return "string | number | symbol";
+    return "string / number / boolean / bigint";
+  }
+
+  private isBrandTemplateBaseKindAllowed(baseKind: string, constraint: string): boolean {
+    if (constraint === "unconstrained") {
+      return baseKind === "string" || baseKind === "number" || baseKind === "boolean" || baseKind === "bigint";
+    }
+    if (constraint === "string") return baseKind === "string";
+    return baseKind === "string" || baseKind === "number";
   }
 
   private brandPayloadSpelling(node: TypeNode): string | undefined {
@@ -4679,10 +4717,13 @@ class Emitter {
     const baseNode = node.typeArgs[0];
     const base = this.typeFromAnnotation(baseNode, { pos: baseNode.pos }, sf);
     const baseKind = brandBase(base).kind;
-    if (baseKind !== "string" && baseKind !== "number" && baseKind !== "boolean" && baseKind !== "bigint") {
+    if (!this.isBrandTemplateBaseKindAllowed(baseKind, template.baseConstraint)) {
+      const constraintName = this.brandTemplateBaseConstraintName(template.baseConstraint);
       throw this.typeErr(
         { pos: baseNode.pos },
-        `unsupported brand template base type ${typeIdent(base)} (expected string / number / boolean / bigint)`,
+        template.baseConstraint === "unconstrained"
+          ? `unsupported brand template base type ${typeIdent(base)} (expected ${constraintName})`
+          : `brand template alias '${aliasName}' base type ${typeIdent(base)} does not satisfy constraint ${constraintName}`,
       );
     }
     let payload: string | undefined = template.payloadDefault;

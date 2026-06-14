@@ -1,5 +1,5 @@
 type Brand<T extends string, K extends string> = T & { readonly __brand: K };
-type UserId = Brand<string, "UserId">;
+type Score = Brand<number, "Score">;
 
-const id: UserId = "u1" as UserId;
-console.log(id);
+const score: Score = 42 as Score;
+console.log(score);

@@ -1,5 +1,5 @@
 type Brand<T extends string | number | symbol, K extends string> = T & { readonly __brand: K };
-type UserId = Brand<string, "UserId">;
+type Flag = Brand<boolean, "Flag">;
 
-const id: UserId = "u1" as UserId;
-console.log(id);
+const flag: Flag = true as Flag;
+console.log(flag);
