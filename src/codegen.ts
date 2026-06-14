@@ -146,6 +146,7 @@ type AwaitReturnInfo = {
   returnExpr: Expr | undefined;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
+  preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -160,6 +161,12 @@ type AwaitCallArgTemp = {
   tempName: string;
   arg: Expr;
   argType: TopazType;
+};
+
+type AwaitSnapshotTemp = {
+  tempName: string;
+  expr: Expr;
+  exprType: TopazType;
 };
 
 type AwaitCallReceiverTemp = {
@@ -182,6 +189,7 @@ type AwaitInitializerInfo = {
   transformedInitializer: Expr;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
+  preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -200,6 +208,7 @@ type AwaitStatementInfo = {
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitIndexTemps: Array<AwaitIndexTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
+  preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   index: number;
   pc: number;
   operandType: TopazType;
@@ -218,12 +227,18 @@ type MultiAwaitCallArgStepPlan = {
   tempName: string;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
+  preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
 };
 
 type MultiAwaitCallArgPlan = {
   transformedExpr: Expr;
   steps: Array<MultiAwaitCallArgStepPlan>;
 };
+
+type MultiAwaitBinaryLeafEvent =
+  | { kind: "await"; awaitExpr: AwaitExpr }
+  | { kind: "pure"; expr: Expr }
+  | { kind: "snapshot"; expr: Expr };
 
 type AwaitOperandInfo = {
   operandType: TopazType;
@@ -5403,6 +5418,7 @@ class Emitter {
                     transformedInitializer: multiAwait.transformedExpr,
                     preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                     preAwaitArgTemps: planned.preAwaitArgTemps,
+                    preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     index: i,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
@@ -5478,6 +5494,7 @@ class Emitter {
                 transformedInitializer,
                 preAwaitReceiverTemps,
                 preAwaitArgTemps,
+                preAwaitSnapshotTemps: [],
                 index: i,
                 pc: steps.length,
                 operandType: operandInfo.operandType,
@@ -5515,6 +5532,7 @@ class Emitter {
             preAwaitReceiverTemps: [],
             preAwaitIndexTemps: [],
             preAwaitArgTemps: [],
+            preAwaitSnapshotTemps: [],
             index: i,
             pc: steps.length,
             operandType: operandInfo.operandType,
@@ -5569,6 +5587,7 @@ class Emitter {
                     preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                     preAwaitIndexTemps: [],
                     preAwaitArgTemps: planned.preAwaitArgTemps,
+                    preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     index: i,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
@@ -5586,6 +5605,7 @@ class Emitter {
                     preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                     preAwaitIndexTemps: [],
                     preAwaitArgTemps: planned.preAwaitArgTemps,
+                    preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     index: i,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
@@ -5634,6 +5654,7 @@ class Emitter {
               preAwaitReceiverTemps,
               preAwaitIndexTemps,
               preAwaitArgTemps,
+              preAwaitSnapshotTemps: [],
               index: i,
               pc: steps.length,
               operandType: operandInfo.operandType,
@@ -5694,6 +5715,7 @@ class Emitter {
                   returnExpr: multiAwait.transformedExpr,
                   preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                   preAwaitArgTemps: planned.preAwaitArgTemps,
+                  preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                   index: i,
                   pc: steps.length,
                   operandType: planned.operandInfo.operandType,
@@ -5757,6 +5779,7 @@ class Emitter {
               returnExpr,
               preAwaitReceiverTemps,
               preAwaitArgTemps,
+              preAwaitSnapshotTemps: [],
               index: i,
               pc: steps.length,
               operandType: operandInfo.operandType,
@@ -6410,6 +6433,7 @@ class Emitter {
           tempName,
           preAwaitReceiverTemps: [],
           preAwaitArgTemps: [],
+          preAwaitSnapshotTemps: [],
         };
       }
     }
@@ -6475,6 +6499,7 @@ class Emitter {
         tempName,
         preAwaitReceiverTemps: [],
         preAwaitArgTemps: [],
+        preAwaitSnapshotTemps: [],
       });
     }
 
@@ -6652,32 +6677,66 @@ class Emitter {
   ): MultiAwaitCallArgPlan | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "bin_op") return undefined;
-    const awaits: Array<AwaitExpr> = [];
-    if (!this.collectMultiAwaitBinaryTreeLeaves(rootMaybe, awaits)) return undefined;
-    if (awaits.length < 2) return undefined;
+    const events: Array<MultiAwaitBinaryLeafEvent> = [];
+    if (!this.collectMultiAwaitBinaryLeafEvents(rootMaybe, events)) return undefined;
+    const awaitCount = events.filter((event) => event.kind === "await").length;
+    if (awaitCount < 2) return undefined;
 
     let transformedExpr: Expr = expr;
     const steps: Array<MultiAwaitCallArgStepPlan> = [];
-    for (const awaitExpr of awaits) {
-      const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
-      if (operandInfo.awaitedType.kind === "void") return undefined;
-      const tempName = `${tempPrefix}_${steps.length}`;
-      this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
-      const tempExpr: IdentExpr = {
-        kind: "ident",
-        name: tempName,
-        pos: awaitExpr.pos,
-        end: awaitExpr.end,
-      };
-      transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaitExpr, tempExpr);
-      steps.push({
-        awaitExpr,
-        operandInfo,
-        awaitedType: operandInfo.awaitedType,
-        tempName,
-        preAwaitReceiverTemps: [],
-        preAwaitArgTemps: [],
-      });
+    let pendingSnapshots: Array<AwaitSnapshotTemp> = [];
+    let snapshotIndex = 0;
+    for (const event of events) {
+      switch (event.kind) {
+        case "pure":
+          break;
+        case "snapshot": {
+          const expr = event.expr;
+          const exprType = this.inferType(expr);
+          this.assertNotVoid(exprType, { pos: expr.pos }, "await binary snapshot value");
+          if (steps.length < awaitCount) {
+            const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
+            snapshotIndex++;
+            this.scope.declareBinding(tempName, exprType, /* isConst */ true, { pos: expr.pos });
+            const tempExpr: IdentExpr = {
+              kind: "ident",
+              name: tempName,
+              pos: expr.pos,
+              end: expr.end,
+            };
+            transformedExpr = this.replaceExactExprInExpr(transformedExpr, expr, tempExpr);
+            pendingSnapshots.push({ tempName, expr, exprType });
+          }
+          break;
+        }
+        case "await": {
+          const awaitExpr = event.awaitExpr;
+          const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
+          if (operandInfo.awaitedType.kind === "void") return undefined;
+          const tempName = `${tempPrefix}_${steps.length}`;
+          this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
+          const tempExpr: IdentExpr = {
+            kind: "ident",
+            name: tempName,
+            pos: awaitExpr.pos,
+            end: awaitExpr.end,
+          };
+          transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaitExpr, tempExpr);
+          const preAwaitSnapshotTemps = pendingSnapshots;
+          const nextPendingSnapshots: Array<AwaitSnapshotTemp> = [];
+          pendingSnapshots = nextPendingSnapshots;
+          steps.push({
+            awaitExpr,
+            operandInfo,
+            awaitedType: operandInfo.awaitedType,
+            tempName,
+            preAwaitReceiverTemps: [],
+            preAwaitArgTemps: [],
+            preAwaitSnapshotTemps,
+          });
+          break;
+        }
+      }
     }
 
     return { transformedExpr, steps };
@@ -6713,6 +6772,7 @@ class Emitter {
         tempName,
         preAwaitReceiverTemps: [],
         preAwaitArgTemps: [],
+        preAwaitSnapshotTemps: [],
       });
     }
 
@@ -6750,6 +6810,7 @@ class Emitter {
         tempName,
         preAwaitReceiverTemps: [],
         preAwaitArgTemps: [],
+        preAwaitSnapshotTemps: [],
       });
     }
 
@@ -6821,6 +6882,29 @@ class Emitter {
     return true;
   }
 
+  private collectMultiAwaitBinaryLeafEvents(expr: Expr, out: Array<MultiAwaitBinaryLeafEvent>): boolean {
+    const root = this.unwrapParenExpr(expr);
+    if (root.kind === "await_expr") {
+      if (this.collectAwaitExprsInExpr(root.operand).length > 0) return false;
+      out.push({ kind: "await", awaitExpr: root });
+      return true;
+    }
+    if (this.isSideEffectFreeMultiAwaitLeaf(root)) {
+      out.push({ kind: "pure", expr: root });
+      return true;
+    }
+    if (this.isSnapshotMultiAwaitBinaryLeaf(root)) {
+      out.push({ kind: "snapshot", expr: root });
+      return true;
+    }
+    if (root.kind !== "bin_op") return false;
+    if (root.op === "&&" || root.op === "||" || root.op === "??") return false;
+    return (
+      this.collectMultiAwaitBinaryLeafEvents(root.lhs, out) &&
+      this.collectMultiAwaitBinaryLeafEvents(root.rhs, out)
+    );
+  }
+
   private collectMultiAwaitBinaryTreeLeaves(expr: Expr, out: Array<AwaitExpr>): boolean {
     const root = this.unwrapParenExpr(expr);
     if (root.kind === "await_expr") {
@@ -6835,6 +6919,16 @@ class Emitter {
       this.collectMultiAwaitBinaryTreeLeaves(root.lhs, out) &&
       this.collectMultiAwaitBinaryTreeLeaves(root.rhs, out)
     );
+  }
+
+  private isSnapshotMultiAwaitBinaryLeaf(expr: Expr): boolean {
+    if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
+    if (expr.kind !== "call_expr") return false;
+    if (expr.optional) return false;
+    if (this.firstSpreadArg(expr.args) !== undefined) return false;
+    const callee = expr.callee;
+    if (callee.kind === "prop_access" && callee.optional) return false;
+    return true;
   }
 
   private isSideEffectFreeMultiAwaitLeaf(expr: Expr): boolean {
@@ -7179,6 +7273,25 @@ class Emitter {
     }
   }
 
+  private replaceExactExprInExpr(expr: Expr, target: Expr, replacement: Expr): Expr {
+    if (expr.pos === target.pos && expr.end === target.end && expr.kind === target.kind) return replacement;
+    switch (expr.kind) {
+      case "paren_expr":
+        return { kind: "paren_expr", inner: this.replaceExactExprInExpr(expr.inner, target, replacement), pos: expr.pos, end: expr.end };
+      case "bin_op":
+        return {
+          kind: "bin_op",
+          op: expr.op,
+          lhs: this.replaceExactExprInExpr(expr.lhs, target, replacement),
+          rhs: this.replaceExactExprInExpr(expr.rhs, target, replacement),
+          pos: expr.pos,
+          end: expr.end,
+        };
+      default:
+        return expr;
+    }
+  }
+
   private emitAsyncFunctionBodyWithAwaitFrame(
     block: BlockStmt,
     payloadType: TopazType,
@@ -7264,6 +7377,7 @@ class Emitter {
           const expr = this.emitWithExpected(temp.arg, temp.argType);
           lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
         }
+        this.emitAwaitSnapshotTempStores(step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
       case "return": {
@@ -7275,6 +7389,7 @@ class Emitter {
           const expr = this.emitWithExpected(temp.arg, temp.argType);
           lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
         }
+        this.emitAwaitSnapshotTempStores(step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
       case "statement": {
@@ -7290,10 +7405,35 @@ class Emitter {
           const expr = this.emitWithExpected(temp.arg, temp.argType);
           lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
         }
+        this.emitAwaitSnapshotTempStores(step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
       case "binding":
         return;
+    }
+  }
+
+  private emitAwaitSnapshotTempStores(
+    temps: Array<AwaitSnapshotTemp>,
+    frameRef: string,
+    lines: string[],
+    indent: string,
+  ): void {
+    for (const temp of temps) {
+      const expr = this.emitWithExpected(temp.expr, temp.exprType);
+      lines.push(`${indent}${frameRef}->${temp.tempName} = ${expr};`);
+    }
+  }
+
+  private emitAwaitSnapshotTempRestores(
+    temps: Array<AwaitSnapshotTemp>,
+    lines: string[],
+    indent: string,
+  ): void {
+    for (const temp of temps) {
+      this.scope.declareBinding(temp.tempName, temp.exprType, /* isConst */ true, { pos: temp.expr.pos });
+      lines.push(`${indent}${cTypeName(temp.exprType)} ${temp.tempName} = ctx->${temp.tempName};`);
+      lines.push(`${indent}(void)${temp.tempName};`);
     }
   }
 
@@ -7343,6 +7483,7 @@ class Emitter {
           lines.push(`${indent}${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
           lines.push(`${indent}(void)${temp.tempName};`);
         }
+        this.emitAwaitSnapshotTempRestores(step.preAwaitSnapshotTemps, lines, indent);
         if (step.awaitedType.kind !== "void") {
           this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
           lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
@@ -7361,6 +7502,7 @@ class Emitter {
           lines.push(`${indent}${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
           lines.push(`${indent}(void)${temp.tempName};`);
         }
+        this.emitAwaitSnapshotTempRestores(step.preAwaitSnapshotTemps, lines, indent);
         if (step.awaitedType.kind !== "void") {
           this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
           lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
@@ -7384,6 +7526,7 @@ class Emitter {
           lines.push(`${indent}${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
           lines.push(`${indent}(void)${temp.tempName};`);
         }
+        this.emitAwaitSnapshotTempRestores(step.preAwaitSnapshotTemps, lines, indent);
         if (step.awaitedType.kind !== "void") {
           this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
           lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
@@ -7430,6 +7573,9 @@ class Emitter {
         for (const temp of binding.preAwaitArgTemps) {
           fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
         }
+        for (const temp of binding.preAwaitSnapshotTemps) {
+          fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
+        }
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
         }
@@ -7444,6 +7590,9 @@ class Emitter {
           for (const temp of binding.preAwaitArgTemps) {
             fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
           }
+          for (const temp of binding.preAwaitSnapshotTemps) {
+            fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
+          }
           if (binding.awaitedType.kind !== "void") {
             fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
           }
@@ -7454,6 +7603,9 @@ class Emitter {
         }
         for (const temp of binding.preAwaitArgTemps) {
           fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
+        }
+        for (const temp of binding.preAwaitSnapshotTemps) {
+          fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
         }
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
@@ -7625,6 +7777,7 @@ class Emitter {
             lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
             lines.push(`        (void)${temp.tempName};`);
           }
+          this.emitAwaitSnapshotTempRestores(current.preAwaitSnapshotTemps, lines, "        ");
           if (current.awaitedType.kind !== "void") {
             this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
             lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
@@ -7661,6 +7814,7 @@ class Emitter {
             lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
             lines.push(`        (void)${temp.tempName};`);
           }
+          this.emitAwaitSnapshotTempRestores(current.preAwaitSnapshotTemps, lines, "        ");
           if (current.awaitedType.kind !== "void") {
             this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
             lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
@@ -7694,6 +7848,7 @@ class Emitter {
               lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
               lines.push(`        (void)${temp.tempName};`);
             }
+            this.emitAwaitSnapshotTempRestores(current.preAwaitSnapshotTemps, lines, "        ");
             if (current.awaitedType.kind !== "void") {
               this.scope.declareBinding(current.tempName, current.awaitedType, /* isConst */ true, { pos: current.awaitExpr.pos });
               lines.push(`        ${cTypeName(current.awaitedType)} ${current.tempName} = ctx->${current.tempName};`);
