@@ -1474,6 +1474,7 @@ type BasePayloadBrandAliasTemplateInfo = {
   kind: "base_payload";
   fieldKey: string;
   baseConstraint: string;
+  baseDefault: TopazType | undefined;
   payloadDefault: string | undefined;
 };
 
@@ -2693,7 +2694,7 @@ class Emitter {
         throw new CodegenError(aliasAnchor, `redeclaration of type alias '${name}'`);
       }
       if (alias.typeParams.length > 0) {
-        const template = this.tryMakeBrandAliasTemplate(alias);
+        const template = this.tryMakeBrandAliasTemplate(alias, sf);
         if (template !== undefined) {
           this.brandAliasTemplates.set(name, template);
           return;
@@ -4513,7 +4514,7 @@ class Emitter {
     return { kind: "brand", base, key };
   }
 
-  private tryMakeBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
+  private tryMakeBrandAliasTemplate(alias: TypeAliasDecl, sf: SourceModule): BrandAliasTemplateInfo | undefined {
     if (alias.typeParams.length === 1) {
       return this.tryMakePhantomObjectBrandAliasTemplate(alias);
     }
@@ -4552,11 +4553,16 @@ class Emitter {
         "brand template base type parameter constraint must be string, PropertyKey, or string | number | symbol",
       );
     }
-    const baseDefault = baseTypeParam.defaultType;
-    if (baseDefault !== undefined) {
-      throw this.typeErr(
-        { pos: baseDefault.pos },
-        "brand template base type parameter default is unsupported",
+    const baseDefaultNode = baseTypeParam.defaultType;
+    let baseDefault: TopazType | undefined = undefined;
+    if (baseDefaultNode !== undefined) {
+      baseDefault = this.resolveBrandTemplateBaseType(
+        alias.name,
+        baseDefaultNode,
+        { pos: baseDefaultNode.pos },
+        sf,
+        baseConstraint,
+        "default",
       );
     }
     const payloadConstraint = payloadTypeParam.constraint;
@@ -4577,7 +4583,7 @@ class Emitter {
         );
       }
     }
-    return { kind: "base_payload", fieldKey, baseConstraint, payloadDefault };
+    return { kind: "base_payload", fieldKey, baseConstraint, baseDefault, payloadDefault };
   }
 
   private tryMakePhantomObjectBrandAliasTemplate(alias: TypeAliasDecl): BrandAliasTemplateInfo | undefined {
@@ -4663,6 +4669,34 @@ class Emitter {
     return baseKind === "string" || baseKind === "number";
   }
 
+  private resolveBrandTemplateBaseType(
+    aliasName: string,
+    baseNode: TypeNode,
+    anchor: { pos: number },
+    sf: SourceModule,
+    constraint: string,
+    source: "argument" | "default",
+  ): TopazType {
+    const base = this.typeFromAnnotation(baseNode, anchor, sf);
+    const baseKind = brandBase(base).kind;
+    if (!this.isBrandTemplateBaseKindAllowed(baseKind, constraint)) {
+      const constraintName = this.brandTemplateBaseConstraintName(constraint);
+      if (constraint === "unconstrained") {
+        const subject = source === "default" ? "base default type" : "base type";
+        throw this.typeErr(
+          anchor,
+          `unsupported brand template ${subject} ${typeIdent(base)} (expected ${constraintName})`,
+        );
+      }
+      const subject = source === "default" ? "base default type" : "base type";
+      throw this.typeErr(
+        anchor,
+        `brand template alias '${aliasName}' ${subject} ${typeIdent(base)} does not satisfy constraint ${constraintName}`,
+      );
+    }
+    return base;
+  }
+
   private brandPayloadSpelling(node: TypeNode): string | undefined {
     if (node.kind === "type_str_lit") return node.value;
     if (node.kind === "type_query") return `typeof ${node.name}`;
@@ -4700,24 +4734,32 @@ class Emitter {
     if (template.kind === "phantom_object") {
       throw this.typeErr(anchor, `phantom object brand helper alias '${aliasName}' is unsupported outside a brand intersection`);
     }
+    const hasBaseDefault = template.baseDefault !== undefined;
     const hasPayloadDefault = template.payloadDefault !== undefined;
-    if (!hasPayloadDefault && node.typeArgs.length !== 2) {
+    if (!hasBaseDefault && !hasPayloadDefault && node.typeArgs.length !== 2) {
       throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 2 type arguments`);
     }
-    if (hasPayloadDefault && (node.typeArgs.length < 1 || node.typeArgs.length > 2)) {
+    if (!hasBaseDefault && hasPayloadDefault && (node.typeArgs.length < 1 || node.typeArgs.length > 2)) {
       throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 1 or 2 type arguments`);
     }
-    const baseNode = node.typeArgs[0];
-    const base = this.typeFromAnnotation(baseNode, { pos: baseNode.pos }, sf);
-    const baseKind = brandBase(base).kind;
-    if (!this.isBrandTemplateBaseKindAllowed(baseKind, template.baseConstraint)) {
-      const constraintName = this.brandTemplateBaseConstraintName(template.baseConstraint);
-      throw this.typeErr(
-        { pos: baseNode.pos },
-        template.baseConstraint === "unconstrained"
-          ? `unsupported brand template base type ${typeIdent(base)} (expected ${constraintName})`
-          : `brand template alias '${aliasName}' base type ${typeIdent(base)} does not satisfy constraint ${constraintName}`,
-      );
+    if (hasBaseDefault && !hasPayloadDefault && node.typeArgs.length !== 0 && node.typeArgs.length !== 2) {
+      throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 0 or 2 type arguments`);
+    }
+    if (hasBaseDefault && hasPayloadDefault && node.typeArgs.length > 2) {
+      throw this.typeErr(anchor, `brand template alias '${aliasName}' requires 0, 1, or 2 type arguments`);
+    }
+    const base = node.typeArgs.length === 0
+      ? template.baseDefault
+      : this.resolveBrandTemplateBaseType(
+          aliasName,
+          node.typeArgs[0],
+          { pos: node.typeArgs[0].pos },
+          sf,
+          template.baseConstraint,
+          "argument",
+        );
+    if (base === undefined) {
+      throwInternalCodegenError("resolveBrandAliasTemplate: missing base default");
     }
     let payload: string | undefined = template.payloadDefault;
     if (node.typeArgs.length === 2) {
@@ -4731,7 +4773,7 @@ class Emitter {
       }
     }
     if (payload === undefined) {
-      throwInternalCodegenError("resolveBrandAliasTemplate: missing payload default");
+      throw this.typeErr(anchor, `brand template alias '${aliasName}' requires a payload default when all type arguments are omitted`);
     }
     const key = `${aliasName}:${template.fieldKey}:${payload}`;
     return { kind: "brand", base, key };

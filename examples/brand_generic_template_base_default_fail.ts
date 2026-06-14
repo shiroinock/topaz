@@ -1,5 +1,5 @@
-type Brand<T = string, K = "UserId"> = T & { readonly __brand: K };
-type UserId = Brand<string>;
+type Brand<T = Array<string>, K = "UserId"> = T & { readonly __brand: K };
+type UserId = Brand;
 
-const userId: UserId = "u1" as UserId;
+const userId: UserId = ["u1"] as UserId;
 console.log(userId);
