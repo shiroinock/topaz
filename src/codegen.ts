@@ -13602,6 +13602,45 @@ class Emitter {
         params.push(this.makeParamInfo(`value${i}`, elem));
       }
       returnType = T_VOID;
+    } else if (methodName === "map") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, "Array.map expects exactly one argument");
+      }
+      const cb = expr.args[0];
+      const fnType = this.inferArrayMapCallbackFn(cb, elem);
+      const u = fnType.returnType;
+      if (u.kind === "void") {
+        throw new CodegenError({ pos: cb.pos }, "Array.map callback cannot return `void` (no Array<void> monomorph)");
+      }
+      if (u.kind === "undefined" || (u.kind === "union" && containsUndefined(u))) {
+        throw new CodegenError(
+          { pos: cb.pos },
+          `Array.map callback returning ${typeIdent(u)} is unsupported (no Array<T | undefined> monomorph)`,
+        );
+      }
+      const result = arrayOf(u);
+      if (result === undefined) {
+        throw new CodegenError({ pos: expr.pos }, `Array.map: cannot form Array<${typeIdent(u)}> result`);
+      }
+      this.recordArrayMonomorph(result);
+      this.recordFnMonomorph(fnType);
+      params = [this.makeParamInfo("callback", fnType)];
+      returnType = result;
+    } else if (methodName === "filter") {
+      if (expr.args.length !== 1) {
+        throw new CodegenError({ pos: expr.pos }, "Array.filter expects exactly one argument");
+      }
+      const cb = expr.args[0];
+      const fnType = this.inferCallbackFn(cb, [elem], "Array.filter");
+      if (fnType.returnType.kind !== "boolean") {
+        throw new CodegenError(
+          { pos: cb.pos },
+          `Array.filter callback must return boolean, got ${typeIdent(fnType.returnType)}`,
+        );
+      }
+      this.recordFnMonomorph(fnType);
+      params = [this.makeParamInfo("callback", fnType)];
+      returnType = baseType;
     } else {
       throw new CodegenError({ pos: callee.pos }, `unsupported method '.${methodName}' on ${typeIdent(baseType)}`);
     }
@@ -14229,11 +14268,20 @@ class Emitter {
           callee.name !== "includes" &&
           callee.name !== "slice" &&
           callee.name !== "join" &&
-          callee.name !== "push"
+          callee.name !== "push" &&
+          callee.name !== "map" &&
+          callee.name !== "filter"
         ) {
           return undefined;
         }
-        if (callee.name === "includes" || callee.name === "slice" || callee.name === "join" || callee.name === "push") {
+        if (
+          callee.name === "includes" ||
+          callee.name === "slice" ||
+          callee.name === "join" ||
+          callee.name === "push" ||
+          callee.name === "map" ||
+          callee.name === "filter"
+        ) {
           return this.resolveArrayMethodCallPlan(expr, callee, receiverType);
         }
         return undefined;
