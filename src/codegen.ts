@@ -6785,27 +6785,40 @@ class Emitter {
     expr: ObjectLitExpr,
     allowPureLeaves: boolean,
   ): Array<AwaitExpr> | undefined {
-    if (expr.props.length < 2) return undefined;
     const awaits: Array<AwaitExpr> = [];
+    if (!this.collectMultiAwaitObjectLiteralLeaves(expr, allowPureLeaves, awaits)) return undefined;
+    return awaits;
+  }
+
+  private collectMultiAwaitObjectLiteralLeaves(
+    expr: ObjectLitExpr,
+    allowPureLeaves: boolean,
+    awaits: Array<AwaitExpr>,
+  ): boolean {
+    if (expr.props.length === 0) return false;
     for (const prop of expr.props) {
       if (prop.kind === "prop_shorthand") {
-        if (!allowPureLeaves) return undefined;
+        if (!allowPureLeaves) return false;
         continue;
       }
-      if (prop.kind !== "prop_kv") return undefined;
+      if (prop.kind !== "prop_kv") return false;
       const value = this.unwrapParenExpr(prop.value);
       if (value.kind === "await_expr") {
-        if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
+        if (this.collectAwaitExprsInExpr(value.operand).length > 0) return false;
         awaits.push(value);
         continue;
       }
       if (value.kind === "array_lit") {
-        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, awaits)) return undefined;
+        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, awaits)) return false;
         continue;
       }
-      if (!allowPureLeaves || !this.isSideEffectFreeMultiAwaitLeaf(value)) return undefined;
+      if (value.kind === "object_lit") {
+        if (!allowPureLeaves || !this.collectMultiAwaitObjectLiteralLeaves(value, allowPureLeaves, awaits)) return false;
+        continue;
+      }
+      if (!allowPureLeaves || !this.isSideEffectFreeMultiAwaitLeaf(value)) return false;
     }
-    return awaits;
+    return true;
   }
 
   private collectMultiAwaitBinaryTreeLeaves(expr: Expr, out: Array<AwaitExpr>): boolean {
