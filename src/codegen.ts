@@ -6405,7 +6405,16 @@ class Emitter {
     const plan = this.resolveOrdinaryCallPlan(signatureCall, firstAwait, false, expectedReturnType);
     if (plan === undefined) return undefined;
     if (receiverAwaitStep !== undefined) {
-      if (plan.kind !== "class_method" && plan.kind !== "interface_method") return undefined;
+      if (
+        plan.kind !== "class_method" &&
+        plan.kind !== "interface_method" &&
+        !(
+          plan.kind === "array_method" &&
+          (plan.methodName === "map" || plan.methodName === "filter")
+        )
+      ) {
+        return undefined;
+      }
     } else {
       if (
         !(
