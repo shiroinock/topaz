@@ -1,8 +1,6 @@
 /// <reference lib="es2015.promise" />
 
-interface Box {
-  value: number;
-}
+type Box = { value: number };
 
 function mark(label: string, value: number): number {
   console.log(label);
@@ -11,18 +9,24 @@ function mark(label: string, value: number): number {
 
 function wrap(label: string, value: number): number {
   console.log(label);
-  return value;
+  console.log(value);
+  return value + 10;
 }
 
 function readBox(box: Box): number {
-  return box.value;
+  console.log("readBox");
+  console.log(box.value);
+  return box.value + 100;
 }
 
 function combine(a: number, b: number): number {
-  return a + b;
+  console.log("combine");
+  console.log(a);
+  console.log(b);
+  return a + b + 1000;
 }
 
-async function bad(): Promise<number> {
+async function run(): Promise<number> {
   return combine(
     await Promise.resolve(mark("left", 1)) +
       wrap("snapshot", readBox({ value: wrap("nested", await Promise.resolve(mark("inner", 2))) })),
@@ -30,4 +34,9 @@ async function bad(): Promise<number> {
   );
 }
 
-bad();
+run().then((value: number): void => {
+  console.log("then");
+  console.log(value);
+});
+
+console.log("sync tail");
