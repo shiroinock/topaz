@@ -3103,7 +3103,7 @@ run_case promise_like_optional_await_deferred_fail $'sync tail\noptional missing
 run_case promise_like_array_await_deferred_fail $'sync tail\narray then\n43'
 run_case promise_like_field_await_deferred_fail $'sync tail\nfield then\n50'
 run_fail_case promise_like_async_return_fail examples/promise_like_async_return_fail.ts "async function return annotation must be Promise<T>; PromiseLike<T> bridge is deferred"
-run_fail_case promise_like_resolve_deferred_fail examples/promise_like_resolve_deferred_fail.ts "Promise.resolve payload type topaz_promise_like_number is unsupported"
+run_case promise_like_resolve_deferred_fail $'sync tail\nassign\n11\nreturn\n22'
 run_fail_case promise_like_structural_adapter_fail examples/promise_like_structural_adapter_fail.ts "expected identifier"
 run_fail_case promise_like_unknown_payload_fail examples/promise_like_unknown_payload_fail.ts "PromiseLike<T>: payload type topaz_unknown is unsupported"
 run_fail_case promise_like_map_key_deferred_fail examples/promise_like_map_key_deferred_fail.ts "no Map monomorph for key=topaz_promise_like_number, value=topaz_number"

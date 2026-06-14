@@ -12632,12 +12632,29 @@ class Emitter {
   }
 
   private inferPromiseResolveCall(expr: CallExpr): TopazType {
+    return this.resolvePromiseResolveCall(expr).returnType;
+  }
+
+  private resolvePromiseResolveCall(expr: CallExpr): {
+    argType: TopazType | undefined;
+    returnType: TopazType;
+  } {
     this.checkPromiseStaticTypeArgs(expr, "resolve");
-    if (expr.args.length === 0) return { kind: "promise", value: T_VOID };
+    if (expr.args.length === 0) return { argType: undefined, returnType: { kind: "promise", value: T_VOID } };
     if (expr.args.length !== 1) {
       throw new CodegenError({ pos: expr.pos }, `Promise.resolve expects 0..1 argument(s), got ${expr.args.length}`);
     }
     const payloadType = this.inferType(expr.args[0]);
+    if (payloadType.kind === "promise_like") {
+      const promiseType = promiseOf(payloadType.value);
+      if (promiseType === undefined) {
+        throw new CodegenError(
+          { pos: expr.args[0].pos },
+          `Promise.resolve payload type ${typeIdent(payloadType)} is unsupported (must be value-representable or void; unknown, undefined, and unsupported unions are deferred)`,
+        );
+      }
+      return { argType: payloadType, returnType: promiseType };
+    }
     const promiseType = promiseOf(payloadType);
     if (promiseType === undefined) {
       throw new CodegenError(
@@ -12645,7 +12662,7 @@ class Emitter {
         `Promise.resolve payload type ${typeIdent(payloadType)} is unsupported (must be value-representable or void; unknown, undefined, and unsupported unions are deferred)`,
       );
     }
-    return promiseType;
+    return { argType: payloadType, returnType: promiseType };
   }
 
   private inferPromiseRejectWithoutContext(expr: CallExpr): TopazType {
@@ -12741,9 +12758,17 @@ class Emitter {
   }
 
   private emitPromiseResolveCall(expr: CallExpr): string {
-    const promiseType = this.inferPromiseResolveCall(expr);
+    const info = this.resolvePromiseResolveCall(expr);
+    const promiseType = info.returnType;
     if (promiseType.kind !== "promise") {
       throwInternalCodegenError("emitPromiseResolveCall: resolve did not infer Promise<T>");
+    }
+    const argType = info.argType;
+    if (argType !== undefined) {
+      if (argType.kind === "promise_like") {
+        const promiseLikeExpr = this.emitWithExpected(expr.args[0], argType);
+        return `topaz_promise_like_to_promise(${promiseLikeExpr})`;
+      }
     }
     if (promiseType.value.kind === "void") {
       return "topaz_promise_resolve_void()";
@@ -13610,7 +13635,8 @@ class Emitter {
       };
     }
     if (receiver.name === "Promise" && callee.name === "resolve") {
-      const returnType = this.inferPromiseResolveCall(expr);
+      const info = this.resolvePromiseResolveCall(expr);
+      const returnType = info.returnType;
       if (returnType.kind !== "promise") {
         throwInternalCodegenError("resolveSyntheticCallPlan: Promise.resolve did not infer Promise<T>");
       }
@@ -13621,7 +13647,7 @@ class Emitter {
         params:
           expr.args.length === 0
             ? this.noParamInfos()
-            : [this.makeParamInfo("value", returnType.value)],
+            : [this.makeParamInfo("value", info.argType ?? returnType.value)],
         returnType,
         label: "Promise.resolve",
       };
