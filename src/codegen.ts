@@ -6799,6 +6799,10 @@ class Emitter {
         awaits.push(value);
         continue;
       }
+      if (value.kind === "array_lit") {
+        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, awaits)) return undefined;
+        continue;
+      }
       if (!allowPureLeaves || !this.isSideEffectFreeMultiAwaitLeaf(value)) return undefined;
     }
     return awaits;
