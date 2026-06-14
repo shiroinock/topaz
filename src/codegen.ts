@@ -213,6 +213,7 @@ type MultiAwaitCallArgStepPlan = {
   operandInfo: AwaitOperandInfo;
   awaitedType: TopazType;
   tempName: string;
+  preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
 };
 
@@ -5348,7 +5349,7 @@ class Emitter {
                   this.assertNotVoid(annotatedInitializerType, { pos: s.pos }, "await initializer binding type");
                   expectedInitializerType = annotatedInitializerType;
                 }
-                const multiAwait = this.tryBuildMultiAwaitBareCallArgExpression(
+                const multiAwait = this.tryBuildMultiAwaitCallArgExpression(
                   initMaybe,
                   `__topaz_init_await_${steps.length}`,
                   steps.length,
@@ -5383,7 +5384,7 @@ class Emitter {
                     awaitExpr: planned.awaitExpr,
                     initializer: initMaybe,
                     transformedInitializer: multiAwait.transformedExpr,
-                    preAwaitReceiverTemps: [],
+                    preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                     preAwaitArgTemps: planned.preAwaitArgTemps,
                     index: i,
                     pc: steps.length,
@@ -5510,7 +5511,7 @@ class Emitter {
           const statementAwaits = this.collectAwaitExprsInExpr(s.expr);
           if (statementAwaits.length > 0) {
             if (statementAwaits.length > 1) {
-              const multiAwait = this.tryBuildMultiAwaitBareCallArgExpression(
+              const multiAwait = this.tryBuildMultiAwaitCallArgExpression(
                 s.expr,
                 `__topaz_stmt_await_${steps.length}`,
                 steps.length,
@@ -5530,7 +5531,7 @@ class Emitter {
                   stmt: s,
                   awaitExpr: planned.awaitExpr,
                   transformedExpr: multiAwait.transformedExpr,
-                  preAwaitReceiverTemps: [],
+                  preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                   preAwaitIndexTemps: [],
                   preAwaitArgTemps: planned.preAwaitArgTemps,
                   index: i,
@@ -5598,7 +5599,7 @@ class Emitter {
           const returnAwaits = this.collectAwaitExprsInExpr(valueMaybe);
           if (returnAwaits.length > 0) {
             if (returnAwaits.length > 1) {
-              const multiAwait = this.tryBuildMultiAwaitBareCallArgExpression(
+              const multiAwait = this.tryBuildMultiAwaitCallArgExpression(
                 valueMaybe,
                 `__topaz_return_await_${steps.length}`,
                 steps.length,
@@ -5624,7 +5625,7 @@ class Emitter {
                   stmt: s,
                   awaitExpr: planned.awaitExpr,
                   returnExpr: multiAwait.transformedExpr,
-                  preAwaitReceiverTemps: [],
+                  preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
                   preAwaitArgTemps: planned.preAwaitArgTemps,
                   index: i,
                   pc: steps.length,
@@ -6288,7 +6289,7 @@ class Emitter {
     };
   }
 
-  private tryBuildMultiAwaitBareCallArgExpression(
+  private tryBuildMultiAwaitCallArgExpression(
     expr: Expr,
     tempPrefix: string,
     stepOrdinalStart: number,
@@ -6299,7 +6300,9 @@ class Emitter {
     const root: CallExpr = rootMaybe;
     if (root.optional) return undefined;
     if (this.firstSpreadArg(root.args) !== undefined) return undefined;
-    if (root.callee.kind !== "ident") return undefined;
+    const rootCallee = root.callee;
+    if (rootCallee.kind !== "ident" && rootCallee.kind !== "prop_access") return undefined;
+    if (rootCallee.kind === "prop_access" && rootCallee.optional) return undefined;
 
     const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr }> = [];
     for (let i = 0; i < root.args.length; i++) {
@@ -6333,6 +6336,7 @@ class Emitter {
         operandInfo,
         awaitedType: operandInfo.awaitedType,
         tempName,
+        preAwaitReceiverTemps: [],
         preAwaitArgTemps: [],
       });
     }
@@ -6345,7 +6349,7 @@ class Emitter {
     }
     const signatureCall: CallExpr = {
       kind: "call_expr",
-      callee: root.callee,
+      callee: rootCallee,
       typeArgs: root.typeArgs,
       args: signatureArgs,
       optional: root.optional,
@@ -6355,8 +6359,72 @@ class Emitter {
     const firstAwait = awaitedArgs[0].awaitExpr;
     const plan = this.resolveOrdinaryCallPlan(signatureCall, firstAwait, false, expectedReturnType);
     if (plan === undefined) return undefined;
-    if (!(plan.kind === "top_level" || plan.kind === "generic" || plan.kind === "fn_value")) return undefined;
+    if (
+      !(
+        plan.kind === "top_level" ||
+        plan.kind === "generic" ||
+        plan.kind === "fn_value" ||
+        plan.kind === "class_method" ||
+        plan.kind === "interface_method"
+      )
+    ) {
+      return undefined;
+    }
     this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
+
+    let transformedCallee: Expr = rootCallee;
+    switch (plan.kind) {
+      case "interface_method": {
+        const receiverTempName = `__topaz_call_recv_${stepOrdinalStart}`;
+        this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+        plannedSteps[0].preAwaitReceiverTemps.push({
+          tempName: receiverTempName,
+          receiver: plan.receiver,
+          receiverType: plan.receiverType,
+        });
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: receiverTempName,
+          pos: plan.receiver.pos,
+          end: plan.receiver.end,
+        };
+        transformedCallee = {
+          kind: "prop_access",
+          receiver: receiverTempExpr,
+          name: plan.methodName,
+          optional: false,
+          pos: plan.callee.pos,
+          end: plan.callee.end,
+        };
+        break;
+      }
+      case "class_method": {
+        const receiverTempName = `__topaz_call_recv_${stepOrdinalStart}`;
+        this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+        plannedSteps[0].preAwaitReceiverTemps.push({
+          tempName: receiverTempName,
+          receiver: plan.receiver,
+          receiverType: plan.receiverType,
+        });
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: receiverTempName,
+          pos: plan.receiver.pos,
+          end: plan.receiver.end,
+        };
+        transformedCallee = {
+          kind: "prop_access",
+          receiver: receiverTempExpr,
+          name: plan.methodName,
+          optional: false,
+          pos: plan.callee.pos,
+          end: plan.callee.end,
+        };
+        break;
+      }
+      default:
+        break;
+    }
 
     const argTempByArg = new Map<number, IdentExpr>();
     let nextPreArgStart = 0;
@@ -6392,7 +6460,7 @@ class Emitter {
     return {
       transformedExpr: {
         kind: "call_expr",
-        callee: root.callee,
+        callee: transformedCallee,
         typeArgs: root.typeArgs,
         args: transformedArgs,
         optional: root.optional,
