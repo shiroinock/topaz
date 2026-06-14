@@ -258,6 +258,7 @@ type MultiAwaitCallArgAwait = {
   owner:
     | { kind: "outer_direct" }
     | { kind: "outer_binary" }
+    | { kind: "nested_receiver"; nestedIndex: number }
     | { kind: "nested_direct"; nestedIndex: number; nestedArgIndex: number }
     | { kind: "nested_binary"; nestedIndex: number; nestedArgIndex: number };
 };
@@ -283,6 +284,7 @@ type MultiAwaitNestedCallArgPlan = {
   transformedBinaryArgs: Map<number, Expr>;
   transformedNestedCallArgs: Map<number, IdentExpr>;
   transformedCallee: Expr;
+  awaitedReceiverIndex?: number;
   transformedCall?: CallExpr;
   plan?: OrdinaryCallPlan;
   resultType?: TopazType;
@@ -6450,14 +6452,27 @@ class Emitter {
     if (this.firstSpreadArg(nestedRoot.args) !== undefined) {
       return undefined;
     }
-    if (this.collectAwaitExprsInExpr(nestedRoot.callee).length > 0) {
-      return undefined;
-    }
     const callee = nestedRoot.callee;
     if (callee.kind !== "ident" && callee.kind !== "prop_access") {
       return undefined;
     }
     if (callee.kind === "prop_access" && callee.optional) {
+      return undefined;
+    }
+    if (callee.kind === "prop_access") {
+      const receiverAwaits = this.collectAwaitExprsInExpr(callee.receiver);
+      if (receiverAwaits.length > 0) {
+        const receiverMaybe = this.unwrapParenExpr(callee.receiver);
+        if (
+          receiverAwaits.length !== 1 ||
+          receiverMaybe.kind !== "await_expr" ||
+          receiverAwaits[0].pos !== receiverMaybe.pos ||
+          receiverAwaits[0].end !== receiverMaybe.end
+        ) {
+          return undefined;
+        }
+      }
+    } else if (this.collectAwaitExprsInExpr(nestedRoot.callee).length > 0) {
       return undefined;
     }
 
@@ -6479,6 +6494,49 @@ class Emitter {
       transformedCallee: nestedRoot.callee,
     };
     nestedCallArgs.push(nestedPlan);
+
+    if (callee.kind === "prop_access") {
+      const receiverAwaits = this.collectAwaitExprsInExpr(callee.receiver);
+      if (receiverAwaits.length > 0) {
+        const receiverMaybe = this.unwrapParenExpr(callee.receiver);
+        if (receiverMaybe.kind !== "await_expr") {
+          return undefined;
+        }
+        const operandInfo = this.resolveAwaitOperand(receiverMaybe.operand, undefined);
+        this.assertNotVoid(operandInfo.awaitedType, { pos: receiverMaybe.pos }, "await nested method receiver");
+        const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+        const awaitIndex = awaitedArgs.length;
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: tempName,
+          pos: receiverMaybe.pos,
+          end: receiverMaybe.end,
+        };
+        awaitedArgs.push({
+          argIndex: outerArgIndex,
+          awaitExpr: receiverMaybe,
+          binaryArg: false,
+          tempName,
+          owner: { kind: "nested_receiver", nestedIndex },
+        });
+        nestedPlan.awaitedArgIndexes.push(awaitIndex);
+        nestedPlan.awaitedReceiverIndex = awaitIndex;
+        nestedPlan.transformedCallee = {
+          kind: "prop_access",
+          receiver: receiverTempExpr,
+          name: callee.name,
+          optional: false,
+          pos: callee.pos,
+          end: callee.end,
+        };
+        callArgEvents.push({
+          kind: "await",
+          argIndex: outerArgIndex,
+          awaitExpr: receiverMaybe,
+          binaryArg: false,
+        });
+      }
+    }
 
     const transformedBinaryArgs = new Map<number, Expr>();
     for (let nestedArgIndex = 0; nestedArgIndex < nestedRoot.args.length; nestedArgIndex++) {
@@ -6848,6 +6906,8 @@ class Emitter {
           );
           break;
         }
+        case "nested_receiver":
+          break;
         case "nested_direct": {
           const nestedPlan = nestedCallArgs[owner.nestedIndex];
           nestedPlan.transformedDirectArgs.set(owner.nestedArgIndex, tempExpr);
@@ -6910,7 +6970,7 @@ class Emitter {
       }
       const signatureNestedCall: CallExpr = {
         kind: "call_expr",
-        callee: nestedPlan.root.callee,
+        callee: nestedPlan.transformedCallee,
         typeArgs: nestedPlan.root.typeArgs,
         args: signatureNestedArgs,
         optional: nestedPlan.root.optional,
@@ -6926,177 +6986,179 @@ class Emitter {
 
       let transformedCallee: Expr = signatureNestedCall.callee;
       const firstNestedStep = stepForAwaitIndex(firstNestedAwaitIndex);
-      switch (plan.kind) {
-        case "class_method": {
-          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-          firstNestedStep.preAwaitReceiverTemps.push({
-            tempName: receiverTempName,
-            receiver: plan.receiver,
-            receiverType: plan.receiverType,
-          });
-          const receiverTempExpr: IdentExpr = {
-            kind: "ident",
-            name: receiverTempName,
-            pos: plan.receiver.pos,
-            end: plan.receiver.end,
-          };
-          transformedCallee = {
-            kind: "prop_access",
-            receiver: receiverTempExpr,
-            name: plan.methodName,
-            optional: false,
-            pos: plan.callee.pos,
-            end: plan.callee.end,
-          };
-          break;
+      if (nestedPlan.awaitedReceiverIndex === undefined) {
+        switch (plan.kind) {
+          case "class_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "interface_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "map_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "set_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "array_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "string_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "number_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          default:
+            break;
         }
-        case "interface_method": {
-          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-          firstNestedStep.preAwaitReceiverTemps.push({
-            tempName: receiverTempName,
-            receiver: plan.receiver,
-            receiverType: plan.receiverType,
-          });
-          const receiverTempExpr: IdentExpr = {
-            kind: "ident",
-            name: receiverTempName,
-            pos: plan.receiver.pos,
-            end: plan.receiver.end,
-          };
-          transformedCallee = {
-            kind: "prop_access",
-            receiver: receiverTempExpr,
-            name: plan.methodName,
-            optional: false,
-            pos: plan.callee.pos,
-            end: plan.callee.end,
-          };
-          break;
-        }
-        case "map_method": {
-          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-          firstNestedStep.preAwaitReceiverTemps.push({
-            tempName: receiverTempName,
-            receiver: plan.receiver,
-            receiverType: plan.receiverType,
-          });
-          const receiverTempExpr: IdentExpr = {
-            kind: "ident",
-            name: receiverTempName,
-            pos: plan.receiver.pos,
-            end: plan.receiver.end,
-          };
-          transformedCallee = {
-            kind: "prop_access",
-            receiver: receiverTempExpr,
-            name: plan.methodName,
-            optional: false,
-            pos: plan.callee.pos,
-            end: plan.callee.end,
-          };
-          break;
-        }
-        case "set_method": {
-          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-          firstNestedStep.preAwaitReceiverTemps.push({
-            tempName: receiverTempName,
-            receiver: plan.receiver,
-            receiverType: plan.receiverType,
-          });
-          const receiverTempExpr: IdentExpr = {
-            kind: "ident",
-            name: receiverTempName,
-            pos: plan.receiver.pos,
-            end: plan.receiver.end,
-          };
-          transformedCallee = {
-            kind: "prop_access",
-            receiver: receiverTempExpr,
-            name: plan.methodName,
-            optional: false,
-            pos: plan.callee.pos,
-            end: plan.callee.end,
-          };
-          break;
-        }
-        case "array_method": {
-          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-          firstNestedStep.preAwaitReceiverTemps.push({
-            tempName: receiverTempName,
-            receiver: plan.receiver,
-            receiverType: plan.receiverType,
-          });
-          const receiverTempExpr: IdentExpr = {
-            kind: "ident",
-            name: receiverTempName,
-            pos: plan.receiver.pos,
-            end: plan.receiver.end,
-          };
-          transformedCallee = {
-            kind: "prop_access",
-            receiver: receiverTempExpr,
-            name: plan.methodName,
-            optional: false,
-            pos: plan.callee.pos,
-            end: plan.callee.end,
-          };
-          break;
-        }
-        case "string_method": {
-          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-          firstNestedStep.preAwaitReceiverTemps.push({
-            tempName: receiverTempName,
-            receiver: plan.receiver,
-            receiverType: plan.receiverType,
-          });
-          const receiverTempExpr: IdentExpr = {
-            kind: "ident",
-            name: receiverTempName,
-            pos: plan.receiver.pos,
-            end: plan.receiver.end,
-          };
-          transformedCallee = {
-            kind: "prop_access",
-            receiver: receiverTempExpr,
-            name: plan.methodName,
-            optional: false,
-            pos: plan.callee.pos,
-            end: plan.callee.end,
-          };
-          break;
-        }
-        case "number_method": {
-          const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-          this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-          firstNestedStep.preAwaitReceiverTemps.push({
-            tempName: receiverTempName,
-            receiver: plan.receiver,
-            receiverType: plan.receiverType,
-          });
-          const receiverTempExpr: IdentExpr = {
-            kind: "ident",
-            name: receiverTempName,
-            pos: plan.receiver.pos,
-            end: plan.receiver.end,
-          };
-          transformedCallee = {
-            kind: "prop_access",
-            receiver: receiverTempExpr,
-            name: plan.methodName,
-            optional: false,
-            pos: plan.callee.pos,
-            end: plan.callee.end,
-          };
-          break;
-        }
-        default:
-          break;
       }
 
       const nestedArgTempByArg = new Map<number, IdentExpr>();
