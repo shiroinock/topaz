@@ -23,6 +23,7 @@ import {
   ElemAccessExpr,
   BinOpExpr,
   TernaryExpr,
+  ArrayElem,
   ArrayLitExpr,
   ObjectPropKV,
   NewExpr,
@@ -5354,6 +5355,10 @@ class Emitter {
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
                   ) ??
+                  this.tryBuildMultiAwaitArrayLiteralExpression(
+                    initMaybe,
+                    `__topaz_init_await_${steps.length}`,
+                  ) ??
                   this.tryBuildMultiAwaitCallArgExpression(
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
@@ -5521,6 +5526,10 @@ class Emitter {
                   s.expr,
                   `__topaz_stmt_await_${steps.length}`,
                 ) ??
+                this.tryBuildMultiAwaitArrayLiteralExpression(
+                  s.expr,
+                  `__topaz_stmt_await_${steps.length}`,
+                ) ??
                 this.tryBuildMultiAwaitCallArgExpression(
                   s.expr,
                   `__topaz_stmt_await_${steps.length}`,
@@ -5611,6 +5620,10 @@ class Emitter {
             if (returnAwaits.length > 1) {
               const multiAwait =
                 this.tryBuildMultiAwaitBinaryExpression(
+                  valueMaybe,
+                  `__topaz_return_await_${steps.length}`,
+                ) ??
+                this.tryBuildMultiAwaitArrayLiteralExpression(
                   valueMaybe,
                   `__topaz_return_await_${steps.length}`,
                 ) ??
@@ -5790,7 +5803,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, and narrow multi-await binary + initializers/returns are supported";
+    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, and narrow multi-await binary/array literals in initializers/returns/expression statements are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -6585,6 +6598,55 @@ class Emitter {
     return { transformedExpr, steps };
   }
 
+  private tryBuildMultiAwaitArrayLiteralExpression(
+    expr: Expr,
+    tempPrefix: string,
+  ): MultiAwaitCallArgPlan | undefined {
+    const rootMaybe = this.unwrapParenExpr(expr);
+    if (rootMaybe.kind !== "array_lit") return undefined;
+    const awaits = this.collectMultiAwaitArrayLiteralElements(rootMaybe);
+    if (awaits === undefined || awaits.length < 2) return undefined;
+
+    let transformedExpr: Expr = expr;
+    const steps: Array<MultiAwaitCallArgStepPlan> = [];
+    for (const awaitExpr of awaits) {
+      const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
+      if (operandInfo.awaitedType.kind === "void") return undefined;
+      const tempName = `${tempPrefix}_${steps.length}`;
+      this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
+      const tempExpr: IdentExpr = {
+        kind: "ident",
+        name: tempName,
+        pos: awaitExpr.pos,
+        end: awaitExpr.end,
+      };
+      transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaitExpr, tempExpr);
+      steps.push({
+        awaitExpr,
+        operandInfo,
+        awaitedType: operandInfo.awaitedType,
+        tempName,
+        preAwaitReceiverTemps: [],
+        preAwaitArgTemps: [],
+      });
+    }
+
+    return { transformedExpr, steps };
+  }
+
+  private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<AwaitExpr> | undefined {
+    if (expr.elems.length === 0) return undefined;
+    const awaits: Array<AwaitExpr> = [];
+    for (const elem of expr.elems) {
+      if (elem.kind !== "elem") return undefined;
+      const value = this.unwrapParenExpr(elem.expr);
+      if (value.kind !== "await_expr") return undefined;
+      if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
+      awaits.push(value);
+    }
+    return awaits;
+  }
+
   private collectMultiAwaitBinaryTreeLeaves(expr: Expr, out: Array<AwaitExpr>): boolean {
     const root = this.unwrapParenExpr(expr);
     if (root.kind === "await_expr") {
@@ -6843,6 +6905,29 @@ class Emitter {
           pos: expr.pos,
           end: expr.end,
         };
+      case "array_lit":
+        {
+          const elems: Array<ArrayElem> = [];
+          for (const elem of expr.elems) {
+            if (elem.kind === "elem") {
+              elems.push({
+                kind: "elem",
+                expr: this.replaceAwaitExprInExpr(elem.expr, target, replacement),
+              });
+            } else {
+              elems.push({
+                kind: "spread",
+                expr: this.replaceAwaitExprInExpr(elem.expr, target, replacement),
+              });
+            }
+          }
+          return {
+            kind: "array_lit",
+            elems,
+            pos: expr.pos,
+            end: expr.end,
+          };
+        }
       default:
         return expr;
     }
