@@ -6487,6 +6487,7 @@ class Emitter {
           plan.kind === "top_level" ||
           plan.kind === "generic" ||
           plan.kind === "fn_value" ||
+          (plan.kind === "synthetic_call" && this.isMultiAwaitBinarySyntheticCallArgKind(plan.syntheticKind)) ||
           plan.kind === "class_method" ||
           plan.kind === "interface_method"
         )
@@ -6600,6 +6601,20 @@ class Emitter {
       },
       steps: plannedSteps,
     };
+  }
+
+  private isMultiAwaitBinarySyntheticCallArgKind(kind: SyntheticCallKind): boolean {
+    return (
+      kind === "string_from_char_code" ||
+      kind === "parse_int" ||
+      kind === "parse_float" ||
+      kind === "path_dirname" ||
+      kind === "path_basename" ||
+      kind === "path_extname" ||
+      kind === "path_resolve" ||
+      kind === "path_join" ||
+      kind === "url_file_url_to_path"
+    );
   }
 
   private tryBuildMultiAwaitBinaryExpression(

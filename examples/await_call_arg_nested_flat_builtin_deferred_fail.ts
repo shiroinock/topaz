@@ -6,7 +6,10 @@ function mark(label: string, value: string): string {
 }
 
 async function bad(): Promise<number> {
-  const n: number = parseInt(await Promise.resolve("1") + await Promise.resolve(mark("post", "2")), 10);
+  const n: number = parseInt(
+    await Promise.resolve("1") + mark("mixed", "") + await Promise.resolve(mark("post", "2")),
+    10,
+  );
   return n;
 }
 
