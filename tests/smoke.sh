@@ -3488,12 +3488,15 @@ run_fail_case dunion_optional_non_optional_bang_fail examples/dunion_optional_no
 run_fail_case dunion_optional_non_optional_coalesce_fail examples/dunion_optional_non_optional_coalesce_fail.ts "left operand to be"
 
 run_case brand_string_phantom $'u1\nu1\no1\ntrue\ntrue\nu1'
+run_case brand_string_phantom_mutable $'u1\nu1\no1\ntrue\ntrue\nu1'
 run_fail_case brand_string_phantom_implicit_fail examples/brand_string_phantom_implicit_fail.ts "type mismatch"
 run_fail_case brand_string_phantom_cross_assign_fail examples/brand_string_phantom_cross_assign_fail.ts "topaz_brand_OrderId"
 run_fail_case brand_string_phantom_non_brand_as_fail examples/brand_string_phantom_non_brand_as_fail.ts "only brand assertions are supported"
 run_fail_case brand_string_phantom_bad_shape_fail examples/brand_string_phantom_bad_shape_fail.ts "unsupported brand intersection shape"
+run_fail_case brand_string_phantom_optional_fail examples/brand_string_phantom_optional_fail.ts "phantom field must be required"
 
 run_case brand_unique_symbol_phantom $'u1\nu1\nt1\ntrue\ntrue\nu1'
+run_case brand_unique_symbol_phantom_mutable $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_type_query_payload $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_fail_case brand_unique_symbol_cross_assign_fail examples/brand_unique_symbol_cross_assign_fail.ts "topaz_brand_TeamId"
 run_fail_case brand_unique_symbol_implicit_fail examples/brand_unique_symbol_implicit_fail.ts "type mismatch"
@@ -3504,6 +3507,7 @@ run_fail_case brand_type_query_implicit_fail examples/brand_type_query_implicit_
 run_fail_case brand_type_query_qualified_fail examples/brand_type_query_qualified_fail.ts "qualified type queries are unsupported"
 
 run_case brand_generic_template $'u1\nu1\no1\ntrue\ntrue\nu1\n42\n42'
+run_case brand_generic_template_mutable $'u1\nu1\no1\ntrue\ntrue\nu1\n42\n42'
 run_case brand_generic_computed_template $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_template_constrained $'u1\nu1\no1\ntrue\ntrue\nu1'
 run_case brand_generic_computed_template_constrained $'u1\nu1\nt1\ntrue\ntrue\nu1'
@@ -3518,6 +3522,7 @@ run_case brand_generic_computed_template_base_property_key_constraint $'u1\nu1\n
 run_case brand_generic_template_base_property_key_union_constraint $'u1\nu1\n42\ntrue\ntrue\nu1'
 run_case brand_generic_computed_template_base_property_key_union_constraint $'u1\nu1\n42\ntrue\ntrue\nu1'
 run_case brand_phantom_object_template $'u1\nu1\no1\ntrue\ntrue\nu1\nx1\nn1'
+run_case brand_phantom_object_mutable $'u1\nu1\no1\ntrue\ntrue\nu1\nx1\nn1'
 run_case brand_phantom_object_computed_template $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_phantom_object_template_constrained $'u1\nu1\no1\ntrue\ntrue\nu1'
 run_case brand_phantom_object_computed_template_property_key_constraint $'u1\nu1\nt1\ntrue\ntrue\nu1'
@@ -3534,6 +3539,7 @@ run_case brand_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_generic_ambient_unique_symbol_marker $'u1\nu1\nt1\ntrue\ntrue\nu1'
 run_case brand_export_ambient_unique_symbol_marker $'u1\ntrue'
 run_case brand_interface_phantom $'u1\nu1\no1\ntrue\ntrue\nu1\nt1\nn1\no1'
+run_case brand_interface_phantom_mutable $'u1\nu1\no1\ntrue\ntrue\nu1\nt1\nn1\no1'
 run_case brand_interface_computed_phantom $'u1\nu1\nt1\ntrue\ntrue\nn1'
 run_fail_case brand_generic_template_cross_assign_fail examples/brand_generic_template_cross_assign_fail.ts "topaz_brand_Brand_3a___brand_3a_UserId"
 run_fail_case brand_generic_template_type_query_cross_assign_fail examples/brand_generic_template_type_query_cross_assign_fail.ts "topaz_brand_Brand_3a__5b_UserIdBrand_5d__3a_typeof_20_UserIdBrand"

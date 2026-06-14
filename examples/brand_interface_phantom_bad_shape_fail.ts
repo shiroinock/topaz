@@ -1,5 +1,5 @@
 interface UserIdBrand {
-  __brand: "UserId";
+  brand(): "UserId";
 }
 
 type UserId = string & UserIdBrand;

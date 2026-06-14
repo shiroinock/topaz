@@ -3699,7 +3699,6 @@ class Emitter {
     if (iface.members.length !== 1) return undefined;
     const member = iface.members[0];
     if (member.kind !== "interface_field") return undefined;
-    if (!member.isReadonly) return undefined;
     const payload = this.brandPayloadSpelling(member.type);
     if (payload === undefined) return undefined;
     if (member.nameKind === "computed_unsupported") {
@@ -4439,7 +4438,7 @@ class Emitter {
   ): TopazType | undefined {
     if (node.kind !== "type_intersection") return undefined;
     if (node.variants.length !== 2) {
-      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & readonly phantom object");
+      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & required phantom object");
     }
     let hasBase = false;
     let baseNode: TypeNode = node;
@@ -4465,7 +4464,7 @@ class Emitter {
       }
     }
     if (!hasBase || !hasPhantom) {
-      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & readonly phantom object");
+      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & required phantom object");
     }
     const base = this.typeFromAnnotation(baseNode, { pos: baseNode.pos }, sf);
     const baseKind = brandBase(base).kind;
@@ -4483,12 +4482,12 @@ class Emitter {
       return this.resolvePhantomObjectBrandAliasTemplate(phantomNode.name, phantomNode, { pos: phantomNode.pos }, base);
     }
     if (phantomNode.kind !== "type_literal") {
-      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & readonly phantom object");
+      throw this.typeErr(anchor, "unsupported brand intersection shape: expected base & required phantom object");
     }
     if (phantomNode.members.length !== 1) {
       throw this.typeErr(
         { pos: phantomNode.pos },
-        "unsupported brand intersection shape: phantom object must have exactly one readonly required field",
+        "unsupported brand intersection shape: phantom object must have exactly one required field",
       );
     }
     const member = phantomNode.members[0];
@@ -4501,10 +4500,10 @@ class Emitter {
         "unsupported computed phantom field name: expected computed identifier [Name]",
       );
     }
-    if (!member.isReadonly || member.isOptional) {
+    if (member.isOptional) {
       throw this.typeErr(
         { pos: member.pos },
-        "unsupported brand intersection shape: phantom field must be readonly and required",
+        "unsupported brand intersection shape: phantom field must be required",
       );
     }
     const payloadType = member.type;
@@ -4686,7 +4685,7 @@ class Emitter {
     const member = node.members[0];
     if (member.kind !== "type_lit_field") return undefined;
     if (member.nameKind === "computed_unsupported") return undefined;
-    if (!member.isReadonly || member.isOptional) return undefined;
+    if (member.isOptional) return undefined;
     const payloadType = member.type;
     if (payloadType.kind !== "type_ref") return undefined;
     if (payloadType.name !== payloadParam || payloadType.typeArgs.length !== 0) return undefined;
