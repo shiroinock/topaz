@@ -5536,6 +5536,10 @@ class Emitter {
                   s.expr,
                   `__topaz_stmt_await_${steps.length}`,
                 ) ??
+                this.tryBuildMultiAwaitObjectLiteralExpression(
+                  s.expr,
+                  `__topaz_stmt_await_${steps.length}`,
+                ) ??
                 this.tryBuildMultiAwaitCallArgExpression(
                   s.expr,
                   `__topaz_stmt_await_${steps.length}`,
@@ -5548,25 +5552,47 @@ class Emitter {
                   this.unsupportedAwaitLoweringMessage(),
                 );
               }
+              let transformedStatementExpr: Expr | undefined = multiAwait.transformedExpr;
+              if (this.unwrapParenExpr(multiAwait.transformedExpr).kind === "object_lit") {
+                transformedStatementExpr = undefined;
+              }
               for (let multiIndex = 0; multiIndex < multiAwait.steps.length; multiIndex++) {
                 const planned = multiAwait.steps[multiIndex];
                 this.assertNotVoid(planned.awaitedType, { pos: planned.awaitExpr.pos }, "await statement value");
-                steps.push({
-                  kind: "statement",
-                  stmt: s,
-                  awaitExpr: planned.awaitExpr,
-                  transformedExpr: multiAwait.transformedExpr,
-                  preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
-                  preAwaitIndexTemps: [],
-                  preAwaitArgTemps: planned.preAwaitArgTemps,
-                  index: i,
-                  pc: steps.length,
-                  operandType: planned.operandInfo.operandType,
-                  sourcePromiseType: planned.operandInfo.sourcePromiseType,
-                  awaitedType: planned.awaitedType,
-                  tempName: planned.tempName,
-                  deferStatementCompletion: multiIndex + 1 < multiAwait.steps.length,
-                });
+                if (transformedStatementExpr === undefined) {
+                  steps.push({
+                    kind: "statement",
+                    stmt: s,
+                    awaitExpr: planned.awaitExpr,
+                    preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
+                    preAwaitIndexTemps: [],
+                    preAwaitArgTemps: planned.preAwaitArgTemps,
+                    index: i,
+                    pc: steps.length,
+                    operandType: planned.operandInfo.operandType,
+                    sourcePromiseType: planned.operandInfo.sourcePromiseType,
+                    awaitedType: planned.awaitedType,
+                    tempName: planned.tempName,
+                    deferStatementCompletion: multiIndex + 1 < multiAwait.steps.length,
+                  });
+                } else {
+                  steps.push({
+                    kind: "statement",
+                    stmt: s,
+                    awaitExpr: planned.awaitExpr,
+                    transformedExpr: transformedStatementExpr,
+                    preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
+                    preAwaitIndexTemps: [],
+                    preAwaitArgTemps: planned.preAwaitArgTemps,
+                    index: i,
+                    pc: steps.length,
+                    operandType: planned.operandInfo.operandType,
+                    sourcePromiseType: planned.operandInfo.sourcePromiseType,
+                    awaitedType: planned.awaitedType,
+                    tempName: planned.tempName,
+                    deferStatementCompletion: multiIndex + 1 < multiAwait.steps.length,
+                  });
+                }
                 supportedAwaitExprs.add(planned.awaitExpr);
               }
               this.applyCarryNarrowing(s);

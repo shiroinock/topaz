@@ -25,6 +25,14 @@ async function terminalReturnObject(): Promise<Pair> {
   };
 }
 
+async function discardObject(): Promise<void> {
+  ({
+    left: await Promise.resolve(mark("stmt left", 100)),
+    right: await Promise.resolve(mark("stmt right", 200)),
+  });
+  console.log("stmt done");
+}
+
 initializerObject().then((n: number): void => {
   console.log("init then");
   console.log(n);
@@ -33,6 +41,10 @@ initializerObject().then((n: number): void => {
 terminalReturnObject().then((pair: Pair): void => {
   console.log("return then");
   console.log(pair.left + pair.right);
+});
+
+discardObject().then((): void => {
+  console.log("stmt then");
 });
 
 console.log("sync tail");
