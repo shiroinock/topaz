@@ -1,12 +1,15 @@
 /// <reference lib="es2015.promise" />
 
 async function answer(): Promise<number> {
-  const n = combine(await Promise.resolve(1), await Promise.resolve(2));
+  const box = new Combiner();
+  const n = box.combine(await Promise.resolve(1), await Promise.resolve(2));
   return n;
 }
 
-function combine(a: number, b: number): number {
-  return a + b;
+class Combiner {
+  combine(a: number, b: number): number {
+    return a + b;
+  }
 }
 
 answer();

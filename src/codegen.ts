@@ -150,6 +150,7 @@ type AwaitReturnInfo = {
   awaitedType: TopazType;
   returnType: TopazType;
   tempName: string;
+  deferStatementCompletion: boolean;
 };
 
 type AwaitCallArgTemp = {
@@ -185,6 +186,7 @@ type AwaitInitializerInfo = {
   awaitedType: TopazType;
   bindingType: TopazType;
   tempName: string;
+  deferStatementCompletion: boolean;
 };
 
 type AwaitStatementInfo = {
@@ -201,9 +203,23 @@ type AwaitStatementInfo = {
   sourcePromiseType: TopazType;
   awaitedType: TopazType;
   tempName: string;
+  deferStatementCompletion: boolean;
 };
 
 type AsyncSuspensionStep = AwaitBindingInfo | AwaitReturnInfo | AwaitInitializerInfo | AwaitStatementInfo;
+
+type MultiAwaitCallArgStepPlan = {
+  awaitExpr: AwaitExpr;
+  operandInfo: AwaitOperandInfo;
+  awaitedType: TopazType;
+  tempName: string;
+  preAwaitArgTemps: Array<AwaitCallArgTemp>;
+};
+
+type MultiAwaitCallArgPlan = {
+  transformedExpr: Expr;
+  steps: Array<MultiAwaitCallArgStepPlan>;
+};
 
 type AwaitOperandInfo = {
   operandType: TopazType;
@@ -5325,10 +5341,64 @@ class Emitter {
                 throw new CodegenError({ pos: s.pos }, "await binding must use `const` or `let`");
               }
               if (initializerAwaits.length > 1) {
-                throw new CodegenError(
-                  { pos: initializerAwaits[1].pos },
-                  this.unsupportedAwaitLoweringMessage(),
+                let expectedInitializerType: TopazType | undefined = undefined;
+                const typeMaybe = s.type;
+                if (typeMaybe !== undefined) {
+                  const annotatedInitializerType = this.typeFromAnnotation(typeMaybe, { pos: typeMaybe.pos }, g_currentModule!);
+                  this.assertNotVoid(annotatedInitializerType, { pos: s.pos }, "await initializer binding type");
+                  expectedInitializerType = annotatedInitializerType;
+                }
+                const multiAwait = this.tryBuildMultiAwaitBareCallArgExpression(
+                  initMaybe,
+                  `__topaz_init_await_${steps.length}`,
+                  steps.length,
+                  expectedInitializerType,
                 );
+                if (multiAwait === undefined) {
+                  throw new CodegenError(
+                    { pos: initializerAwaits[1].pos },
+                    this.unsupportedAwaitLoweringMessage(),
+                  );
+                }
+                let bindingType = this.inferTypeWithOptionalExpected(multiAwait.transformedExpr, expectedInitializerType);
+                if (expectedInitializerType !== undefined) {
+                  if (!typeEq(bindingType, expectedInitializerType) && !this.isAssignableTo(bindingType, expectedInitializerType)) {
+                    throw new CodegenError(
+                      { pos: s.pos },
+                      `type mismatch: expected ${typeIdent(expectedInitializerType)}, got ${typeIdent(bindingType)}`,
+                    );
+                  }
+                  bindingType = expectedInitializerType;
+                }
+                this.assertNotVoid(
+                  bindingType,
+                  { pos: s.pos },
+                  "await initializer binding type",
+                );
+                for (let multiIndex = 0; multiIndex < multiAwait.steps.length; multiIndex++) {
+                  const planned = multiAwait.steps[multiIndex];
+                  steps.push({
+                    kind: "initializer",
+                    stmt: s,
+                    awaitExpr: planned.awaitExpr,
+                    initializer: initMaybe,
+                    transformedInitializer: multiAwait.transformedExpr,
+                    preAwaitReceiverTemps: [],
+                    preAwaitArgTemps: planned.preAwaitArgTemps,
+                    index: i,
+                    pc: steps.length,
+                    operandType: planned.operandInfo.operandType,
+                    sourcePromiseType: planned.operandInfo.sourcePromiseType,
+                    awaitedType: planned.awaitedType,
+                    bindingType,
+                    tempName: planned.tempName,
+                    deferStatementCompletion: multiIndex + 1 < multiAwait.steps.length,
+                  });
+                  supportedAwaitExprs.add(planned.awaitExpr);
+                }
+                this.scope.declareBinding(s.name, bindingType, s.declKind === "const", { pos: s.pos });
+                this.applyCarryNarrowing(s);
+                continue;
               }
               const awaitExpr = initializerAwaits[0];
               const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
@@ -5397,6 +5467,7 @@ class Emitter {
                 awaitedType: awaitedPayload,
                 bindingType,
                 tempName,
+                deferStatementCompletion: false,
               });
               supportedAwaitExprs.add(awaitExpr);
               this.scope.declareBinding(s.name, bindingType, s.declKind === "const", { pos: s.pos });
@@ -5432,16 +5503,48 @@ class Emitter {
             sourcePromiseType: operandInfo.sourcePromiseType,
             awaitedType: awaitedPayload,
             tempName: `__topaz_stmt_await_${steps.length}`,
+            deferStatementCompletion: false,
           });
           supportedAwaitExprs.add(expr);
         } else {
           const statementAwaits = this.collectAwaitExprsInExpr(s.expr);
           if (statementAwaits.length > 0) {
             if (statementAwaits.length > 1) {
-              throw new CodegenError(
-                { pos: statementAwaits[1].pos },
-                this.unsupportedAwaitLoweringMessage(),
+              const multiAwait = this.tryBuildMultiAwaitBareCallArgExpression(
+                s.expr,
+                `__topaz_stmt_await_${steps.length}`,
+                steps.length,
+                undefined,
               );
+              if (multiAwait === undefined) {
+                throw new CodegenError(
+                  { pos: statementAwaits[1].pos },
+                  this.unsupportedAwaitLoweringMessage(),
+                );
+              }
+              for (let multiIndex = 0; multiIndex < multiAwait.steps.length; multiIndex++) {
+                const planned = multiAwait.steps[multiIndex];
+                this.assertNotVoid(planned.awaitedType, { pos: planned.awaitExpr.pos }, "await statement value");
+                steps.push({
+                  kind: "statement",
+                  stmt: s,
+                  awaitExpr: planned.awaitExpr,
+                  transformedExpr: multiAwait.transformedExpr,
+                  preAwaitReceiverTemps: [],
+                  preAwaitIndexTemps: [],
+                  preAwaitArgTemps: planned.preAwaitArgTemps,
+                  index: i,
+                  pc: steps.length,
+                  operandType: planned.operandInfo.operandType,
+                  sourcePromiseType: planned.operandInfo.sourcePromiseType,
+                  awaitedType: planned.awaitedType,
+                  tempName: planned.tempName,
+                  deferStatementCompletion: multiIndex + 1 < multiAwait.steps.length,
+                });
+                supportedAwaitExprs.add(planned.awaitExpr);
+              }
+              this.applyCarryNarrowing(s);
+              continue;
             }
             const awaitExpr = statementAwaits[0];
             const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
@@ -5483,6 +5586,7 @@ class Emitter {
               sourcePromiseType: operandInfo.sourcePromiseType,
               awaitedType: awaitedPayload,
               tempName,
+              deferStatementCompletion: false,
             });
             supportedAwaitExprs.add(awaitExpr);
           }
@@ -5494,10 +5598,47 @@ class Emitter {
           const returnAwaits = this.collectAwaitExprsInExpr(valueMaybe);
           if (returnAwaits.length > 0) {
             if (returnAwaits.length > 1) {
-              throw new CodegenError(
-                { pos: returnAwaits[1].pos },
-                this.unsupportedAwaitLoweringMessage(),
+              const multiAwait = this.tryBuildMultiAwaitBareCallArgExpression(
+                valueMaybe,
+                `__topaz_return_await_${steps.length}`,
+                steps.length,
+                payloadType,
               );
+              if (multiAwait === undefined) {
+                throw new CodegenError(
+                  { pos: returnAwaits[1].pos },
+                  this.unsupportedAwaitLoweringMessage(),
+                );
+              }
+              const returnType = this.inferTypeWithOptionalExpected(multiAwait.transformedExpr, payloadType);
+              if (!typeEq(returnType, payloadType) && !this.isAssignableTo(returnType, payloadType)) {
+                throw new CodegenError(
+                  { pos: s.pos },
+                  `type mismatch: expected ${typeIdent(payloadType)}, got ${typeIdent(returnType)}`,
+                );
+              }
+              for (let multiIndex = 0; multiIndex < multiAwait.steps.length; multiIndex++) {
+                const planned = multiAwait.steps[multiIndex];
+                steps.push({
+                  kind: "return",
+                  stmt: s,
+                  awaitExpr: planned.awaitExpr,
+                  returnExpr: multiAwait.transformedExpr,
+                  preAwaitReceiverTemps: [],
+                  preAwaitArgTemps: planned.preAwaitArgTemps,
+                  index: i,
+                  pc: steps.length,
+                  operandType: planned.operandInfo.operandType,
+                  sourcePromiseType: planned.operandInfo.sourcePromiseType,
+                  awaitedType: planned.awaitedType,
+                  returnType,
+                  tempName: planned.tempName,
+                  deferStatementCompletion: multiIndex + 1 < multiAwait.steps.length,
+                });
+                supportedAwaitExprs.add(planned.awaitExpr);
+              }
+              this.applyCarryNarrowing(s);
+              continue;
             }
             const awaitExpr = returnAwaits[0];
             const isDirectReturnAwait = value.kind === "await_expr";
@@ -5555,6 +5696,7 @@ class Emitter {
               awaitedType: awaitedPayload,
               returnType,
               tempName,
+              deferStatementCompletion: false,
             });
             supportedAwaitExprs.add(awaitExpr);
           }
@@ -6146,6 +6288,121 @@ class Emitter {
     };
   }
 
+  private tryBuildMultiAwaitBareCallArgExpression(
+    expr: Expr,
+    tempPrefix: string,
+    stepOrdinalStart: number,
+    expectedReturnType: TopazType | undefined,
+  ): MultiAwaitCallArgPlan | undefined {
+    const rootMaybe = this.unwrapParenExpr(expr);
+    if (rootMaybe.kind !== "call_expr") return undefined;
+    const root: CallExpr = rootMaybe;
+    if (root.optional) return undefined;
+    if (this.firstSpreadArg(root.args) !== undefined) return undefined;
+    if (root.callee.kind !== "ident") return undefined;
+
+    const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr }> = [];
+    for (let i = 0; i < root.args.length; i++) {
+      const arg = root.args[i];
+      const found = this.collectAwaitExprsInExpr(arg);
+      if (found.length === 0) continue;
+      const unwrapped = this.unwrapParenExpr(arg);
+      if (found.length !== 1 || unwrapped.kind !== "await_expr") return undefined;
+      if (found[0].pos !== unwrapped.pos || found[0].end !== unwrapped.end) return undefined;
+      awaitedArgs.push({ argIndex: i, awaitExpr: unwrapped });
+    }
+    if (awaitedArgs.length < 2) return undefined;
+
+    const plannedSteps: Array<MultiAwaitCallArgStepPlan> = [];
+    const awaitedTempByArg = new Map<number, IdentExpr>();
+    for (let i = 0; i < awaitedArgs.length; i++) {
+      const awaited = awaitedArgs[i];
+      const operandInfo = this.resolveAwaitOperand(awaited.awaitExpr.operand, undefined);
+      const tempName = `${tempPrefix}_${i}`;
+      if (operandInfo.awaitedType.kind !== "void") {
+        this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaited.awaitExpr.pos });
+      }
+      awaitedTempByArg.set(awaited.argIndex, {
+        kind: "ident",
+        name: tempName,
+        pos: awaited.awaitExpr.pos,
+        end: awaited.awaitExpr.end,
+      });
+      plannedSteps.push({
+        awaitExpr: awaited.awaitExpr,
+        operandInfo,
+        awaitedType: operandInfo.awaitedType,
+        tempName,
+        preAwaitArgTemps: [],
+      });
+    }
+
+    const signatureArgs: Array<Expr> = [];
+    for (let i = 0; i < root.args.length; i++) {
+      const awaitedTemp = awaitedTempByArg.get(i);
+      if (awaitedTemp !== undefined) signatureArgs.push(awaitedTemp);
+      else signatureArgs.push(root.args[i]);
+    }
+    const signatureCall: CallExpr = {
+      kind: "call_expr",
+      callee: root.callee,
+      typeArgs: root.typeArgs,
+      args: signatureArgs,
+      optional: root.optional,
+      pos: root.pos,
+      end: root.end,
+    };
+    const firstAwait = awaitedArgs[0].awaitExpr;
+    const plan = this.resolveOrdinaryCallPlan(signatureCall, firstAwait, false, expectedReturnType);
+    if (plan === undefined) return undefined;
+    if (!(plan.kind === "top_level" || plan.kind === "generic" || plan.kind === "fn_value")) return undefined;
+    this.checkCallArgCount(root.args.length, plan.params, plan.label, { pos: root.pos });
+
+    const argTempByArg = new Map<number, IdentExpr>();
+    let nextPreArgStart = 0;
+    for (let i = 0; i < awaitedArgs.length; i++) {
+      const awaited = awaitedArgs[i];
+      const stepPlan = plannedSteps[i];
+      for (let argIndex = nextPreArgStart; argIndex < awaited.argIndex; argIndex++) {
+        const arg = root.args[argIndex];
+        if (argIndex >= plan.params.length) return undefined;
+        const param = plan.params[argIndex];
+        const argType = param.type;
+        this.assertNotVoid(argType, { pos: arg.pos }, "await call pre-argument temporary");
+        const tempName = `__topaz_call_arg_${stepOrdinalStart}_${i}_${argIndex}`;
+        this.scope.declareBinding(tempName, argType, /* isConst */ true, { pos: arg.pos });
+        stepPlan.preAwaitArgTemps.push({ tempName, arg, argType });
+        argTempByArg.set(argIndex, { kind: "ident", name: tempName, pos: arg.pos, end: arg.end });
+      }
+      nextPreArgStart = awaited.argIndex + 1;
+    }
+
+    const transformedArgs: Array<Expr> = [];
+    for (let i = 0; i < root.args.length; i++) {
+      const awaitedTemp = awaitedTempByArg.get(i);
+      if (awaitedTemp !== undefined) {
+        transformedArgs.push(awaitedTemp);
+        continue;
+      }
+      const argTemp = argTempByArg.get(i);
+      if (argTemp !== undefined) transformedArgs.push(argTemp);
+      else transformedArgs.push(root.args[i]);
+    }
+
+    return {
+      transformedExpr: {
+        kind: "call_expr",
+        callee: root.callee,
+        typeArgs: root.typeArgs,
+        args: transformedArgs,
+        optional: root.optional,
+        pos: root.pos,
+        end: root.end,
+      },
+      steps: plannedSteps,
+    };
+  }
+
   private tryBuildPostAwaitCallArgSiblingExpression(
     arg: Expr,
     awaitExpr: AwaitExpr,
@@ -6526,6 +6783,89 @@ class Emitter {
     }
   }
 
+  private asyncStepDefersStatementCompletion(step: AsyncSuspensionStep): boolean {
+    switch (step.kind) {
+      case "binding":
+        return false;
+      case "initializer":
+        return step.deferStatementCompletion === true;
+      case "return":
+        return step.deferStatementCompletion === true;
+      case "statement":
+        return step.deferStatementCompletion === true;
+    }
+  }
+
+  private emitAsyncStepTempRestores(
+    step: AsyncSuspensionStep,
+    lines: string[],
+    indent: string,
+  ): void {
+    switch (step.kind) {
+      case "binding":
+        return;
+      case "initializer": {
+        for (const receiverTemp of step.preAwaitReceiverTemps) {
+          this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
+          lines.push(`${indent}${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
+          lines.push(`${indent}(void)${receiverTemp.tempName};`);
+        }
+        for (const temp of step.preAwaitArgTemps) {
+          this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
+          lines.push(`${indent}${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
+          lines.push(`${indent}(void)${temp.tempName};`);
+        }
+        if (step.awaitedType.kind !== "void") {
+          this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
+          lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
+          lines.push(`${indent}(void)${step.tempName};`);
+        }
+        return;
+      }
+      case "return": {
+        for (const receiverTemp of step.preAwaitReceiverTemps) {
+          this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
+          lines.push(`${indent}${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
+          lines.push(`${indent}(void)${receiverTemp.tempName};`);
+        }
+        for (const temp of step.preAwaitArgTemps) {
+          this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
+          lines.push(`${indent}${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
+          lines.push(`${indent}(void)${temp.tempName};`);
+        }
+        if (step.awaitedType.kind !== "void") {
+          this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
+          lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
+          lines.push(`${indent}(void)${step.tempName};`);
+        }
+        return;
+      }
+      case "statement": {
+        for (const receiverTemp of step.preAwaitReceiverTemps) {
+          this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
+          lines.push(`${indent}${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
+          lines.push(`${indent}(void)${receiverTemp.tempName};`);
+        }
+        for (const indexTemp of step.preAwaitIndexTemps) {
+          this.scope.declareBinding(indexTemp.tempName, indexTemp.indexType, /* isConst */ true, { pos: indexTemp.index.pos });
+          lines.push(`${indent}${cTypeName(indexTemp.indexType)} ${indexTemp.tempName} = ctx->${indexTemp.tempName};`);
+          lines.push(`${indent}(void)${indexTemp.tempName};`);
+        }
+        for (const temp of step.preAwaitArgTemps) {
+          this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
+          lines.push(`${indent}${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
+          lines.push(`${indent}(void)${temp.tempName};`);
+        }
+        if (step.awaitedType.kind !== "void") {
+          this.scope.declareBinding(step.tempName, step.awaitedType, /* isConst */ true, { pos: step.awaitExpr.pos });
+          lines.push(`${indent}${cTypeName(step.awaitedType)} ${step.tempName} = ctx->${step.tempName};`);
+          lines.push(`${indent}(void)${step.tempName};`);
+        }
+        return;
+      }
+    }
+  }
+
   private recordAsyncAwaitRunner(
     ctxName: string,
     runnerName: string,
@@ -6536,12 +6876,6 @@ class Emitter {
     runnerCaptureContext?: CaptureContext,
     runnerThisContext?: AsyncFrameThisContext,
   ): void {
-    let returnStep: AwaitReturnInfo | undefined = undefined;
-    for (const step of frame.steps) {
-      if (step.kind === "return") {
-        returnStep = step;
-      }
-    }
     const fields: string[] = [];
     fields.push("  int __topaz_pc;");
     fields.push("  topaz_promise *output;");
@@ -6559,7 +6893,9 @@ class Emitter {
       if (binding.kind === "binding") {
         if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
       } else if (binding.kind === "initializer") {
-        if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+        if (!this.asyncStepDefersStatementCompletion(binding) && binding.bindingType.kind !== "void") {
+          fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+        }
         for (const receiverTemp of binding.preAwaitReceiverTemps) {
           fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
         }
@@ -6570,7 +6906,7 @@ class Emitter {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
         }
       } else if (binding.kind === "statement") {
-        if (binding.transformedExpr !== undefined) {
+        if (binding.transformedExpr !== undefined || this.asyncStepDefersStatementCompletion(binding)) {
           for (const receiverTemp of binding.preAwaitReceiverTemps) {
             fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
           }
@@ -6584,18 +6920,17 @@ class Emitter {
             fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
           }
         }
+      } else if (binding.kind === "return") {
+        for (const receiverTemp of binding.preAwaitReceiverTemps) {
+          fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
+        }
+        for (const temp of binding.preAwaitArgTemps) {
+          fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
+        }
+        if (binding.awaitedType.kind !== "void") {
+          fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
+        }
       }
-    }
-    if (returnStep !== undefined) {
-      for (const receiverTemp of returnStep.preAwaitReceiverTemps) {
-        fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
-      }
-      for (const temp of returnStep.preAwaitArgTemps) {
-        fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
-      }
-    }
-    if (returnStep !== undefined && returnStep.awaitedType.kind !== "void") {
-      fields.push(`  ${cTypeName(returnStep.awaitedType)} ${returnStep.tempName};`);
     }
     this.promiseThenFwdLines.push(`typedef struct ${ctxName} {\n${fields.join("\n")}\n} ${ctxName};`);
     this.promiseThenFwdLines.push(`static void ${runnerName}(void *__topaz_ctx, topaz_promise *source, topaz_promise *target);`);
@@ -6686,6 +7021,10 @@ class Emitter {
       }
       for (const prior of frame.steps) {
         if (prior.pc >= current.pc) continue;
+        if (prior.index === current.index && this.asyncStepDefersStatementCompletion(prior)) {
+          this.emitAsyncStepTempRestores(prior, lines, "        ");
+          continue;
+        }
         if (prior.kind === "binding") {
           this.scope.declareBinding(
             prior.stmt.name,
@@ -6698,6 +7037,7 @@ class Emitter {
             lines.push(`        (void)${prior.stmt.name};`);
           }
         } else if (prior.kind === "initializer") {
+          if (this.asyncStepDefersStatementCompletion(prior)) continue;
           this.scope.declareBinding(
             prior.stmt.name,
             prior.bindingType,
@@ -6721,7 +7061,8 @@ class Emitter {
         lines.push(`        ${cTypeName(capture.type)} ${capture.stmt.name} = ctx->${capture.stmt.name};`);
         lines.push(`        (void)${capture.stmt.name};`);
       }
-      if (current.kind === "return") {
+      const currentDefersStatement = this.asyncStepDefersStatementCompletion(current);
+      if (current.kind === "return" && !currentDefersStatement) {
         const returnExpr = current.returnExpr;
         if (returnExpr === undefined) {
           if (payloadType.kind === "void") {
@@ -6781,7 +7122,7 @@ class Emitter {
             lines.push(`        ${cTypeName(current.bindingType)} ${current.stmt.name} = ctx->${current.stmt.name};`);
             lines.push(`        (void)${current.stmt.name};`);
           }
-        } else if (current.kind === "initializer") {
+        } else if (current.kind === "initializer" && !currentDefersStatement) {
           for (const receiverTemp of current.preAwaitReceiverTemps) {
             this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
             lines.push(`        ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
@@ -6807,7 +7148,7 @@ class Emitter {
           );
           lines.push(`        ctx->${current.stmt.name} = ${current.stmt.name};`);
           lines.push(`        (void)${current.stmt.name};`);
-        } else if (current.kind === "statement") {
+        } else if (current.kind === "statement" && !currentDefersStatement) {
           const transformedExpr = current.transformedExpr;
           if (transformedExpr !== undefined) {
             for (const receiverTemp of current.preAwaitReceiverTemps) {
@@ -6835,7 +7176,7 @@ class Emitter {
           // Plain awaited expression statements intentionally discard the
           // fulfilled payload; transformed call statements discard the call
           // result after emitting the resumed expression above.
-        } else {
+        } else if (!currentDefersStatement) {
           throwInternalCodegenError("unknown non-return async suspension step");
         }
         for (const s of stmts.slice(segmentStart, segmentEnd)) {
