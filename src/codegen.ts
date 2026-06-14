@@ -247,7 +247,7 @@ type MultiAwaitLeafEvent =
 
 type MultiAwaitCallArgEvent =
   | { kind: "await"; argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }
-  | { kind: "snapshot"; expr: Expr };
+  | { kind: "snapshot"; argIndex: number; expr: Expr };
 
 type AwaitOperandInfo = {
   operandType: TopazType;
@@ -6449,7 +6449,7 @@ class Emitter {
 
     const awaitedArgs: Array<{ argIndex: number; awaitExpr: AwaitExpr; binaryArg: boolean }> = [];
     const callArgEvents: Array<MultiAwaitCallArgEvent> = [];
-    let binaryAwaitArgIndex = -1;
+    const binaryArgIndexes = new Set<number>();
     for (let i = 0; i < root.args.length; i++) {
       const arg = root.args[i];
       const found = this.collectAwaitExprsInExpr(arg);
@@ -6461,7 +6461,7 @@ class Emitter {
         callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: unwrapped, binaryArg: false });
         continue;
       }
-      if (unwrapped.kind !== "bin_op" || binaryAwaitArgIndex >= 0) {
+      if (unwrapped.kind !== "bin_op") {
         return undefined;
       }
       const events: Array<MultiAwaitLeafEvent> = [];
@@ -6471,13 +6471,13 @@ class Emitter {
         if (event.kind === "await") binaryAwaitCount++;
       }
       if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) return undefined;
-      binaryAwaitArgIndex = i;
+      binaryArgIndexes.add(i);
       for (const event of events) {
         if (event.kind === "await") {
           awaitedArgs.push({ argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
           callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
         } else if (event.kind === "snapshot") {
-          callArgEvents.push({ kind: "snapshot", expr: event.expr });
+          callArgEvents.push({ kind: "snapshot", argIndex: i, expr: event.expr });
         }
       }
     }
@@ -6487,25 +6487,24 @@ class Emitter {
     const plannedSteps: Array<MultiAwaitCallArgStepPlan> = [];
     if (receiverAwaitStep !== undefined) plannedSteps.push(receiverAwaitStep);
     const awaitedTempByArg = new Map<number, IdentExpr>();
-    let hasTransformedBinaryArg = false;
-    let transformedBinaryArg: Expr = root.args[awaitedArgs[0].argIndex];
-    if (binaryAwaitArgIndex >= 0) {
-      hasTransformedBinaryArg = true;
-      transformedBinaryArg = root.args[binaryAwaitArgIndex];
+    const transformedBinaryArgs = new Map<number, Expr>();
+    for (const argIndex of binaryArgIndexes) {
+      transformedBinaryArgs.set(argIndex, root.args[argIndex]);
     }
     const binarySnapshotsByAwait: Array<AwaitSnapshotsForAwait> = [];
-    if (binaryAwaitArgIndex >= 0) {
-      let pendingSnapshots: Array<Expr> = [];
+    if (binaryArgIndexes.size > 0) {
+      let pendingSnapshots: Array<{ argIndex: number; expr: Expr }> = [];
       let snapshotIndex = 0;
       for (const event of callArgEvents) {
         switch (event.kind) {
           case "snapshot": {
-            pendingSnapshots.push(event.expr);
+            pendingSnapshots.push({ argIndex: event.argIndex, expr: event.expr });
             break;
           }
           case "await": {
             const preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
-            for (const snapshotExpr of pendingSnapshots) {
+            for (const pendingSnapshot of pendingSnapshots) {
+              const snapshotExpr = pendingSnapshot.expr;
               const exprType = this.inferType(snapshotExpr);
               this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await call-argument binary snapshot value");
               const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
@@ -6517,13 +6516,18 @@ class Emitter {
                 pos: snapshotExpr.pos,
                 end: snapshotExpr.end,
               };
-              transformedBinaryArg = this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr);
+              const transformedBinaryArg = transformedBinaryArgs.get(pendingSnapshot.argIndex);
+              if (transformedBinaryArg === undefined) return undefined;
+              transformedBinaryArgs.set(
+                pendingSnapshot.argIndex,
+                this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr),
+              );
               preAwaitSnapshotTemps.push({ tempName, expr: snapshotExpr, exprType });
             }
             if (preAwaitSnapshotTemps.length > 0) {
               binarySnapshotsByAwait.push({ awaitExpr: event.awaitExpr, temps: preAwaitSnapshotTemps });
             }
-            const nextPendingSnapshots: Array<Expr> = [];
+            const nextPendingSnapshots: Array<{ argIndex: number; expr: Expr }> = [];
             pendingSnapshots = nextPendingSnapshots;
             break;
           }
@@ -6546,7 +6550,12 @@ class Emitter {
       };
       if (!awaited.binaryArg) awaitedTempByArg.set(awaited.argIndex, tempExpr);
       if (awaited.binaryArg) {
-        transformedBinaryArg = this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr);
+        const transformedBinaryArg = transformedBinaryArgs.get(awaited.argIndex);
+        if (transformedBinaryArg === undefined) return undefined;
+        transformedBinaryArgs.set(
+          awaited.argIndex,
+          this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr),
+        );
       }
       let preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
       for (const snapshotEntry of binarySnapshotsByAwait) {
@@ -6572,8 +6581,9 @@ class Emitter {
     const signatureArgs: Array<Expr> = [];
     for (let i = 0; i < root.args.length; i++) {
       const awaitedTemp = awaitedTempByArg.get(i);
+      const transformedBinaryArg = transformedBinaryArgs.get(i);
       if (awaitedTemp !== undefined) signatureArgs.push(awaitedTemp);
-      else if (binaryAwaitArgIndex === i && hasTransformedBinaryArg) signatureArgs.push(transformedBinaryArg);
+      else if (transformedBinaryArg !== undefined) signatureArgs.push(transformedBinaryArg);
       else signatureArgs.push(root.args[i]);
     }
     const signatureCall: CallExpr = {
@@ -6700,7 +6710,8 @@ class Emitter {
         transformedArgs.push(awaitedTemp);
         continue;
       }
-      if (binaryAwaitArgIndex === i && hasTransformedBinaryArg) {
+      const transformedBinaryArg = transformedBinaryArgs.get(i);
+      if (transformedBinaryArg !== undefined) {
         transformedArgs.push(transformedBinaryArg);
         continue;
       }
