@@ -258,13 +258,16 @@ type MultiAwaitCallArgAwait = {
   owner:
     | { kind: "outer_direct" }
     | { kind: "outer_binary" }
+    | { kind: "outer_assignment"; expr: AssignExpr }
     | { kind: "nested_receiver"; nestedIndex: number }
     | { kind: "nested_direct"; nestedIndex: number; nestedArgIndex: number }
-    | { kind: "nested_binary"; nestedIndex: number; nestedArgIndex: number };
+    | { kind: "nested_binary"; nestedIndex: number; nestedArgIndex: number }
+    | { kind: "nested_assignment"; nestedIndex: number; nestedArgIndex: number; expr: AssignExpr };
 };
 
 type MultiAwaitLeafEvent =
   | { kind: "await"; awaitExpr: AwaitExpr }
+  | { kind: "assign_await"; expr: AssignExpr; awaitExpr: AwaitExpr }
   | { kind: "pure"; expr: Expr }
   | { kind: "snapshot"; expr: Expr }
   | { kind: "nested_call"; expr: CallExpr };
@@ -6034,6 +6037,31 @@ class Emitter {
     return { transformedExpr, preAwaitReceiverTemps, preAwaitIndexTemps };
   }
 
+  private tryBuildAwaitedIdentifierAssignmentLeaf(
+    expr: AssignExpr,
+    awaitExpr: AwaitExpr,
+    awaitedTempExpr: IdentExpr,
+  ): { expr: AssignExpr; exprType: TopazType } | undefined {
+    if (expr.op !== "=") return undefined;
+    if (expr.target.kind !== "ident") return undefined;
+    if (this.collectAwaitExprsInExpr(expr.target).length > 0) return undefined;
+    const rhsAwaits = this.collectAwaitExprsInExpr(expr.value);
+    if (rhsAwaits.length !== 1) return undefined;
+    if (rhsAwaits[0].pos !== awaitExpr.pos || rhsAwaits[0].end !== awaitExpr.end) return undefined;
+    if (!this.simpleAwaitReplacementSupported(expr.value, awaitExpr)) return undefined;
+    const transformedExpr: AssignExpr = {
+      kind: "assign_expr",
+      op: expr.op,
+      target: expr.target,
+      value: this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr),
+      pos: expr.pos,
+      end: expr.end,
+    };
+    const exprType = this.inferType(transformedExpr);
+    this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
+    return { expr: transformedExpr, exprType };
+  }
+
   private isSafeArrayElementIndex(expr: Expr): boolean {
     if (expr.kind === "num_lit") return true;
     if (expr.kind === "ident") return true;
@@ -6797,7 +6825,7 @@ class Emitter {
       }
       let binaryAwaitCount = 0;
       for (const event of events) {
-        if (event.kind === "await") binaryAwaitCount++;
+        if (event.kind === "await" || event.kind === "assign_await") binaryAwaitCount++;
         else if (event.kind === "nested_call") binaryAwaitCount += this.collectAwaitExprsInExpr(event.expr).length;
       }
       if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) {
@@ -6814,6 +6842,24 @@ class Emitter {
             binaryArg: true,
             tempName,
             owner: { kind: "nested_binary", nestedIndex, nestedArgIndex },
+          });
+          nestedPlan.awaitedArgIndexes.push(awaitIndex);
+          nestedPlan.awaitedArgDependencies.push({ awaitIndex, argIndex: nestedArgIndex });
+          callArgEvents.push({
+            kind: "await",
+            argIndex: outerArgIndex,
+            awaitExpr: event.awaitExpr,
+            binaryArg: true,
+          });
+        } else if (event.kind === "assign_await") {
+          const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+          const awaitIndex = awaitedArgs.length;
+          awaitedArgs.push({
+            argIndex: outerArgIndex,
+            awaitExpr: event.awaitExpr,
+            binaryArg: true,
+            tempName,
+            owner: { kind: "nested_assignment", nestedIndex, nestedArgIndex, expr: event.expr },
           });
           nestedPlan.awaitedArgIndexes.push(awaitIndex);
           nestedPlan.awaitedArgDependencies.push({ awaitIndex, argIndex: nestedArgIndex });
@@ -7026,7 +7072,7 @@ class Emitter {
       }
       let binaryAwaitCount = 0;
       for (const event of events) {
-        if (event.kind === "await") binaryAwaitCount++;
+        if (event.kind === "await" || event.kind === "assign_await") binaryAwaitCount++;
         else if (event.kind === "nested_call") binaryAwaitCount += this.collectAwaitExprsInExpr(event.expr).length;
       }
       if (binaryAwaitCount !== found.length || binaryAwaitCount < 1) {
@@ -7042,6 +7088,16 @@ class Emitter {
             binaryArg: true,
             tempName,
             owner: { kind: "outer_binary" },
+          });
+          callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
+        } else if (event.kind === "assign_await") {
+          const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+          awaitedArgs.push({
+            argIndex: i,
+            awaitExpr: event.awaitExpr,
+            binaryArg: true,
+            tempName,
+            owner: { kind: "outer_assignment", expr: event.expr },
           });
           callArgEvents.push({ kind: "await", argIndex: i, awaitExpr: event.awaitExpr, binaryArg: true });
         } else if (event.kind === "snapshot") {
@@ -7180,6 +7236,7 @@ class Emitter {
         pos: awaited.awaitExpr.pos,
         end: awaited.awaitExpr.end,
       };
+      const postAwaitMaterializedTemps: Array<AwaitMaterializedTemp> = [];
       const owner = awaited.owner;
       switch (owner.kind) {
         case "outer_direct":
@@ -7194,6 +7251,36 @@ class Emitter {
             awaited.argIndex,
             this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr),
           );
+          break;
+        }
+        case "outer_assignment": {
+          const transformedBinaryArg = transformedBinaryArgs.get(awaited.argIndex);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          const materialized = this.tryBuildAwaitedIdentifierAssignmentLeaf(owner.expr, awaited.awaitExpr, tempExpr);
+          if (materialized === undefined) {
+            return undefined;
+          }
+          const materializedTempName = `${tempName}_assign`;
+          this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
+            pos: owner.expr.pos,
+          });
+          const materializedTempExpr: IdentExpr = {
+            kind: "ident",
+            name: materializedTempName,
+            pos: owner.expr.pos,
+            end: owner.expr.end,
+          };
+          transformedBinaryArgs.set(
+            awaited.argIndex,
+            this.replaceExactExprInExpr(transformedBinaryArg, owner.expr, materializedTempExpr),
+          );
+          postAwaitMaterializedTemps.push({
+            tempName: materializedTempName,
+            expr: materialized.expr,
+            exprType: materialized.exprType,
+          });
           break;
         }
         case "nested_receiver":
@@ -7215,6 +7302,37 @@ class Emitter {
           );
           break;
         }
+        case "nested_assignment": {
+          const nestedPlan = nestedCallArgs[owner.nestedIndex];
+          const transformedBinaryArg = nestedPlan.transformedBinaryArgs.get(owner.nestedArgIndex);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          const materialized = this.tryBuildAwaitedIdentifierAssignmentLeaf(owner.expr, awaited.awaitExpr, tempExpr);
+          if (materialized === undefined) {
+            return undefined;
+          }
+          const materializedTempName = `${tempName}_assign`;
+          this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
+            pos: owner.expr.pos,
+          });
+          const materializedTempExpr: IdentExpr = {
+            kind: "ident",
+            name: materializedTempName,
+            pos: owner.expr.pos,
+            end: owner.expr.end,
+          };
+          nestedPlan.transformedBinaryArgs.set(
+            owner.nestedArgIndex,
+            this.replaceExactExprInExpr(transformedBinaryArg, owner.expr, materializedTempExpr),
+          );
+          postAwaitMaterializedTemps.push({
+            tempName: materializedTempName,
+            expr: materialized.expr,
+            exprType: materialized.exprType,
+          });
+          break;
+        }
       }
       let preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
       for (const snapshotEntry of binarySnapshotsByAwait) {
@@ -7234,7 +7352,7 @@ class Emitter {
         preAwaitReceiverTemps: [],
         preAwaitArgTemps: [],
         preAwaitSnapshotTemps,
-        postAwaitMaterializedTemps: [],
+        postAwaitMaterializedTemps,
       });
     }
 
@@ -8088,6 +8206,17 @@ class Emitter {
     }
     if (root.kind === "call_expr" && this.collectAwaitExprsInExpr(root).length > 0) {
       out.push({ kind: "nested_call", expr: root });
+      return true;
+    }
+    if (root.kind === "assign_expr") {
+      if (root.op !== "=") return false;
+      if (root.target.kind !== "ident") return false;
+      if (this.collectAwaitExprsInExpr(root.target).length > 0) return false;
+      const rhsAwaits = this.collectAwaitExprsInExpr(root.value);
+      if (rhsAwaits.length !== 1) return false;
+      const awaitExpr = rhsAwaits[0];
+      if (!this.simpleAwaitReplacementSupported(root.value, awaitExpr)) return false;
+      out.push({ kind: "assign_await", expr: root, awaitExpr });
       return true;
     }
     if (this.isSnapshotMultiAwaitLeaf(root)) {
