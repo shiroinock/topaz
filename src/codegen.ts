@@ -145,6 +145,7 @@ type AwaitReturnInfo = {
   awaitExpr: AwaitExpr;
   returnExpr: Expr | undefined;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+  preAwaitIndexTemps: Array<AwaitIndexTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
@@ -175,9 +176,12 @@ type AwaitMaterializedTemp = {
   tempName: string;
   expr?: Expr;
   receiverTempName?: string;
+  indexTempName?: string;
   receiverType?: TopazType;
+  arrayType?: TopazType;
   fieldName?: string;
   fieldType?: TopazType;
+  elemType?: TopazType;
   value?: Expr;
   exprType: TopazType;
   pos?: number;
@@ -189,6 +193,7 @@ type AwaitedAssignmentLeaf =
       expr: AssignExpr;
       exprType: TopazType;
       preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     }
   | {
       kind: "interface_field_assignment";
@@ -200,6 +205,19 @@ type AwaitedAssignmentLeaf =
       exprType: TopazType;
       pos: number;
       preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+      preAwaitIndexTemps: Array<AwaitIndexTemp>;
+    }
+  | {
+      kind: "array_element_assignment";
+      receiverTempName: string;
+      indexTempName: string;
+      arrayType: TopazType;
+      elemType: TopazType;
+      value: Expr;
+      exprType: TopazType;
+      pos: number;
+      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     };
 
 type AwaitSnapshotsForAwait = {
@@ -226,6 +244,7 @@ type AwaitInitializerInfo = {
   initializer: Expr;
   transformedInitializer: Expr;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+  preAwaitIndexTemps: Array<AwaitIndexTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
@@ -266,6 +285,7 @@ type MultiAwaitCallArgStepPlan = {
   awaitedType: TopazType;
   tempName: string;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+  preAwaitIndexTemps: Array<AwaitIndexTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
@@ -5508,6 +5528,7 @@ class Emitter {
                     initializer: initMaybe,
                     transformedInitializer: multiAwait.transformedExpr,
                     preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
+                    preAwaitIndexTemps: planned.preAwaitIndexTemps,
                     preAwaitArgTemps: planned.preAwaitArgTemps,
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
@@ -5585,6 +5606,7 @@ class Emitter {
                 initializer: initMaybe,
                 transformedInitializer,
                 preAwaitReceiverTemps,
+                preAwaitIndexTemps: [],
                 preAwaitArgTemps,
                 preAwaitSnapshotTemps: [],
                 postAwaitMaterializedTemps: [],
@@ -5679,7 +5701,7 @@ class Emitter {
                     stmt: s,
                     awaitExpr: planned.awaitExpr,
                     preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
-                    preAwaitIndexTemps: [],
+                    preAwaitIndexTemps: planned.preAwaitIndexTemps,
                     preAwaitArgTemps: planned.preAwaitArgTemps,
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
@@ -5698,7 +5720,7 @@ class Emitter {
                     awaitExpr: planned.awaitExpr,
                     transformedExpr: transformedStatementExpr,
                     preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
-                    preAwaitIndexTemps: [],
+                    preAwaitIndexTemps: planned.preAwaitIndexTemps,
                     preAwaitArgTemps: planned.preAwaitArgTemps,
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
@@ -5811,6 +5833,7 @@ class Emitter {
                   awaitExpr: planned.awaitExpr,
                   returnExpr: multiAwait.transformedExpr,
                   preAwaitReceiverTemps: planned.preAwaitReceiverTemps,
+                  preAwaitIndexTemps: planned.preAwaitIndexTemps,
                   preAwaitArgTemps: planned.preAwaitArgTemps,
                   preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                   postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
@@ -5876,6 +5899,7 @@ class Emitter {
               awaitExpr,
               returnExpr,
               preAwaitReceiverTemps,
+              preAwaitIndexTemps: [],
               preAwaitArgTemps,
               preAwaitSnapshotTemps: [],
               postAwaitMaterializedTemps: [],
@@ -6077,6 +6101,7 @@ class Emitter {
     const target = this.unwrapParenExpr(expr.target);
     let transformedTarget: Expr = target;
     const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+    const preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
     if (target.kind === "ident") {
       transformedTarget = target;
     } else if (target.kind === "prop_access") {
@@ -6135,10 +6160,48 @@ class Emitter {
           exprType: fieldType,
           pos: expr.pos,
           preAwaitReceiverTemps,
+          preAwaitIndexTemps,
         };
       } else {
         return undefined;
       }
+    } else if (target.kind === "elem_access") {
+      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
+      if (!this.isSafeArrayElementIndex(target.index)) return undefined;
+      const receiverType = this.inferType(target.receiver);
+      if (!isArrayType(receiverType)) return undefined;
+      const elemType = arrayElem(receiverType);
+      if (elemType === undefined) return undefined;
+      this.expectType(target.index, T_NUMBER);
+      const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
+      this.expectType(transformedValue, elemType);
+      this.assertNotVoid(elemType, { pos: expr.pos }, "await call-argument assignment leaf");
+      const receiverTempName = `${awaitedTempExpr.name}_recv`;
+      const indexTempName = `${awaitedTempExpr.name}_index`;
+      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+      this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: target.receiver,
+        receiverType,
+      });
+      preAwaitIndexTemps.push({
+        tempName: indexTempName,
+        index: target.index,
+        indexType: T_NUMBER,
+      });
+      return {
+        kind: "array_element_assignment",
+        receiverTempName,
+        indexTempName,
+        arrayType: receiverType,
+        elemType,
+        value: transformedValue,
+        exprType: elemType,
+        pos: expr.pos,
+        preAwaitReceiverTemps,
+        preAwaitIndexTemps,
+      };
     } else {
       return undefined;
     }
@@ -6152,32 +6215,46 @@ class Emitter {
     };
     const exprType = this.inferType(transformedExpr);
     this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
-    return { kind: "expr", expr: transformedExpr, exprType, preAwaitReceiverTemps };
+    return { kind: "expr", expr: transformedExpr, exprType, preAwaitReceiverTemps, preAwaitIndexTemps };
   }
 
   private buildAwaitMaterializedTemp(
     tempName: string,
     materialized: AwaitedAssignmentLeaf,
   ): AwaitMaterializedTemp {
-    if (materialized.kind === "interface_field_assignment") {
-      return {
-        kind: "interface_field_assignment",
-        tempName,
-        receiverTempName: materialized.receiverTempName,
-        receiverType: materialized.receiverType,
-        fieldName: materialized.fieldName,
-        fieldType: materialized.fieldType,
-        value: materialized.value,
-        exprType: materialized.exprType,
-        pos: materialized.pos,
-      };
+    switch (materialized.kind) {
+      case "interface_field_assignment":
+        return {
+          kind: "interface_field_assignment",
+          tempName,
+          receiverTempName: materialized.receiverTempName,
+          receiverType: materialized.receiverType,
+          fieldName: materialized.fieldName,
+          fieldType: materialized.fieldType,
+          value: materialized.value,
+          exprType: materialized.exprType,
+          pos: materialized.pos,
+        };
+      case "array_element_assignment":
+        return {
+          kind: "array_element_assignment",
+          tempName,
+          receiverTempName: materialized.receiverTempName,
+          indexTempName: materialized.indexTempName,
+          arrayType: materialized.arrayType,
+          elemType: materialized.elemType,
+          value: materialized.value,
+          exprType: materialized.exprType,
+          pos: materialized.pos,
+        };
+      case "expr":
+        return {
+          kind: "expr",
+          tempName,
+          expr: materialized.expr,
+          exprType: materialized.exprType,
+        };
     }
-    return {
-      kind: "expr",
-      tempName,
-      expr: materialized.expr,
-      exprType: materialized.exprType,
-    };
   }
 
   private isSafeArrayElementIndex(expr: Expr): boolean {
@@ -7118,6 +7195,7 @@ class Emitter {
           awaitedType: operandInfo.awaitedType,
           tempName,
           preAwaitReceiverTemps: [],
+          preAwaitIndexTemps: [],
           preAwaitArgTemps: [],
           preAwaitSnapshotTemps: [],
           postAwaitMaterializedTemps: [],
@@ -7356,6 +7434,7 @@ class Emitter {
       };
       const postAwaitMaterializedTemps: Array<AwaitMaterializedTemp> = [];
       let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+      let preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
       const owner = awaited.owner;
       switch (owner.kind) {
         case "outer_direct":
@@ -7382,6 +7461,7 @@ class Emitter {
             return undefined;
           }
           preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
+          preAwaitIndexTemps = materialized.preAwaitIndexTemps;
           const materializedTempName = `${tempName}_assign`;
           this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
             pos: owner.expr.pos,
@@ -7429,6 +7509,7 @@ class Emitter {
             return undefined;
           }
           preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
+          preAwaitIndexTemps = materialized.preAwaitIndexTemps;
           const materializedTempName = `${tempName}_assign`;
           this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
             pos: owner.expr.pos,
@@ -7463,6 +7544,7 @@ class Emitter {
         awaitedType: operandInfo.awaitedType,
         tempName,
         preAwaitReceiverTemps,
+        preAwaitIndexTemps,
         preAwaitArgTemps: [],
         preAwaitSnapshotTemps,
         postAwaitMaterializedTemps,
@@ -8036,6 +8118,7 @@ class Emitter {
             awaitedType: operandInfo.awaitedType,
             tempName,
             preAwaitReceiverTemps: [],
+            preAwaitIndexTemps: [],
             preAwaitArgTemps: [],
             preAwaitSnapshotTemps,
             postAwaitMaterializedTemps: [],
@@ -8108,6 +8191,7 @@ class Emitter {
             awaitedType: operandInfo.awaitedType,
             tempName,
             preAwaitReceiverTemps: [],
+            preAwaitIndexTemps: [],
             preAwaitArgTemps: [],
             preAwaitSnapshotTemps,
             postAwaitMaterializedTemps: [],
@@ -8181,6 +8265,7 @@ class Emitter {
             awaitedType: operandInfo.awaitedType,
             tempName,
             preAwaitReceiverTemps: [],
+            preAwaitIndexTemps: [],
             preAwaitArgTemps: [],
             preAwaitSnapshotTemps,
             postAwaitMaterializedTemps: [],
@@ -8330,6 +8415,9 @@ class Emitter {
         // Local assignment leaves need no target snapshot.
       } else if (target.kind === "prop_access") {
         if (!this.isSafeLvalueBase(target.receiver)) return false;
+      } else if (target.kind === "elem_access") {
+        if (!this.isSafeLvalueBase(target.receiver)) return false;
+        if (!this.isSafeArrayElementIndex(target.index)) return false;
       } else {
         return false;
       }
@@ -8862,6 +8950,10 @@ class Emitter {
           const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
           lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
         }
+        for (const indexTemp of step.preAwaitIndexTemps) {
+          const indexExpr = this.emitWithExpected(indexTemp.index, indexTemp.indexType);
+          lines.push(`${indent}${frameRef}->${indexTemp.tempName} = ${indexExpr};`);
+        }
         this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
@@ -8869,6 +8961,10 @@ class Emitter {
         for (const receiverTemp of step.preAwaitReceiverTemps) {
           const receiverExpr = this.emitWithExpected(receiverTemp.receiver, receiverTemp.receiverType);
           lines.push(`${indent}${frameRef}->${receiverTemp.tempName} = ${receiverExpr};`);
+        }
+        for (const indexTemp of step.preAwaitIndexTemps) {
+          const indexExpr = this.emitWithExpected(indexTemp.index, indexTemp.indexType);
+          lines.push(`${indent}${frameRef}->${indexTemp.tempName} = ${indexExpr};`);
         }
         this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
@@ -8952,6 +9048,11 @@ class Emitter {
       if (pos === undefined) throwInternalCodegenError("interface assignment materialized temp missing position");
       return pos;
     }
+    if (temp.kind === "array_element_assignment") {
+      const pos = temp.pos;
+      if (pos === undefined) throwInternalCodegenError("array element assignment materialized temp missing position");
+      return pos;
+    }
     const expr = temp.expr;
     if (expr === undefined) throwInternalCodegenError("expression materialized temp missing expression");
     return expr.pos;
@@ -8970,6 +9071,22 @@ class Emitter {
       const valueTmp = `${temp.tempName}_value`;
       const valueExpr = this.emitWithExpected(value, fieldType);
       return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${receiverTempName}.vt->set_${fieldName}(${receiverTempName}.data, ${valueTmp}); ${valueTmp}; })`;
+    }
+    if (temp.kind === "array_element_assignment") {
+      const elemType = temp.elemType;
+      const arrayType = temp.arrayType;
+      const value = temp.value;
+      const receiverTempName = temp.receiverTempName;
+      const indexTempName = temp.indexTempName;
+      if (elemType === undefined) throwInternalCodegenError("array element assignment materialized temp missing element type");
+      if (arrayType === undefined) throwInternalCodegenError("array element assignment materialized temp missing array type");
+      if (value === undefined) throwInternalCodegenError("array element assignment materialized temp missing value");
+      if (receiverTempName === undefined) throwInternalCodegenError("array element assignment materialized temp missing receiver temp");
+      if (indexTempName === undefined) throwInternalCodegenError("array element assignment materialized temp missing index temp");
+      const valueTmp = `${temp.tempName}_value`;
+      const valueExpr = this.emitWithExpected(value, elemType);
+      const arrayName = arrayShortName(arrayType);
+      return `({ ${cTypeName(elemType)} ${valueTmp} = ${valueExpr}; topaz_array_${arrayName}_set(${receiverTempName}, ${indexTempName}, ${valueTmp}); ${valueTmp}; })`;
     }
     const expr = temp.expr;
     if (expr === undefined) throwInternalCodegenError("expression materialized temp missing expression");
@@ -9032,6 +9149,11 @@ class Emitter {
           lines.push(`${indent}${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
           lines.push(`${indent}(void)${receiverTemp.tempName};`);
         }
+        for (const indexTemp of step.preAwaitIndexTemps) {
+          this.scope.declareBinding(indexTemp.tempName, indexTemp.indexType, /* isConst */ true, { pos: indexTemp.index.pos });
+          lines.push(`${indent}${cTypeName(indexTemp.indexType)} ${indexTemp.tempName} = ctx->${indexTemp.tempName};`);
+          lines.push(`${indent}(void)${indexTemp.tempName};`);
+        }
         for (const temp of step.preAwaitArgTemps) {
           this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
           lines.push(`${indent}${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
@@ -9053,6 +9175,11 @@ class Emitter {
           this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
           lines.push(`${indent}${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
           lines.push(`${indent}(void)${receiverTemp.tempName};`);
+        }
+        for (const indexTemp of step.preAwaitIndexTemps) {
+          this.scope.declareBinding(indexTemp.tempName, indexTemp.indexType, /* isConst */ true, { pos: indexTemp.index.pos });
+          lines.push(`${indent}${cTypeName(indexTemp.indexType)} ${indexTemp.tempName} = ctx->${indexTemp.tempName};`);
+          lines.push(`${indent}(void)${indexTemp.tempName};`);
         }
         for (const temp of step.preAwaitArgTemps) {
           this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
@@ -9133,6 +9260,9 @@ class Emitter {
         for (const receiverTemp of binding.preAwaitReceiverTemps) {
           fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
         }
+        for (const indexTemp of binding.preAwaitIndexTemps) {
+          fields.push(`  ${cTypeName(indexTemp.indexType)} ${indexTemp.tempName};`);
+        }
         for (const temp of binding.preAwaitArgTemps) {
           fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
         }
@@ -9169,6 +9299,9 @@ class Emitter {
       } else if (binding.kind === "return") {
         for (const receiverTemp of binding.preAwaitReceiverTemps) {
           fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
+        }
+        for (const indexTemp of binding.preAwaitIndexTemps) {
+          fields.push(`  ${cTypeName(indexTemp.indexType)} ${indexTemp.tempName};`);
         }
         for (const temp of binding.preAwaitArgTemps) {
           fields.push(`  ${cTypeName(temp.argType)} ${temp.tempName};`);
@@ -9344,6 +9477,11 @@ class Emitter {
             lines.push(`        ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
             lines.push(`        (void)${receiverTemp.tempName};`);
           }
+          for (const indexTemp of current.preAwaitIndexTemps) {
+            this.scope.declareBinding(indexTemp.tempName, indexTemp.indexType, /* isConst */ true, { pos: indexTemp.index.pos });
+            lines.push(`        ${cTypeName(indexTemp.indexType)} ${indexTemp.tempName} = ctx->${indexTemp.tempName};`);
+            lines.push(`        (void)${indexTemp.tempName};`);
+          }
           for (const temp of current.preAwaitArgTemps) {
             this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
             lines.push(`        ${cTypeName(temp.argType)} ${temp.tempName} = ctx->${temp.tempName};`);
@@ -9381,6 +9519,11 @@ class Emitter {
             this.scope.declareBinding(receiverTemp.tempName, receiverTemp.receiverType, /* isConst */ true, { pos: receiverTemp.receiver.pos });
             lines.push(`        ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName} = ctx->${receiverTemp.tempName};`);
             lines.push(`        (void)${receiverTemp.tempName};`);
+          }
+          for (const indexTemp of current.preAwaitIndexTemps) {
+            this.scope.declareBinding(indexTemp.tempName, indexTemp.indexType, /* isConst */ true, { pos: indexTemp.index.pos });
+            lines.push(`        ${cTypeName(indexTemp.indexType)} ${indexTemp.tempName} = ctx->${indexTemp.tempName};`);
+            lines.push(`        (void)${indexTemp.tempName};`);
           }
           for (const temp of current.preAwaitArgTemps) {
             this.scope.declareBinding(temp.tempName, temp.argType, /* isConst */ true, { pos: temp.arg.pos });
