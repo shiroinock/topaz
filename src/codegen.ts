@@ -6037,29 +6037,65 @@ class Emitter {
     return { transformedExpr, preAwaitReceiverTemps, preAwaitIndexTemps };
   }
 
-  private tryBuildAwaitedIdentifierAssignmentLeaf(
+  private tryBuildAwaitedAssignmentLeaf(
     expr: AssignExpr,
     awaitExpr: AwaitExpr,
     awaitedTempExpr: IdentExpr,
-  ): { expr: AssignExpr; exprType: TopazType } | undefined {
+  ): { expr: AssignExpr; exprType: TopazType; preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> } | undefined {
     if (expr.op !== "=") return undefined;
-    if (expr.target.kind !== "ident") return undefined;
     if (this.collectAwaitExprsInExpr(expr.target).length > 0) return undefined;
     const rhsAwaits = this.collectAwaitExprsInExpr(expr.value);
     if (rhsAwaits.length !== 1) return undefined;
     if (rhsAwaits[0].pos !== awaitExpr.pos || rhsAwaits[0].end !== awaitExpr.end) return undefined;
     if (!this.simpleAwaitReplacementSupported(expr.value, awaitExpr)) return undefined;
+    const target = this.unwrapParenExpr(expr.target);
+    let transformedTarget: Expr = target;
+    const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+    if (target.kind === "ident") {
+      transformedTarget = target;
+    } else if (target.kind === "prop_access") {
+      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
+      const receiverType = this.inferType(target.receiver);
+      if (!isClassType(receiverType)) return undefined;
+      const className = classNameOf(receiverType);
+      if (className === undefined) return undefined;
+      const cls = this.classes.get(className);
+      if (cls === undefined || !cls.fields.has(target.name)) return undefined;
+      const receiverTempName = `${awaitedTempExpr.name}_recv`;
+      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+      preAwaitReceiverTemps.push({
+        tempName: receiverTempName,
+        receiver: target.receiver,
+        receiverType,
+      });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: target.receiver.pos,
+        end: target.receiver.end,
+      };
+      transformedTarget = {
+        kind: "prop_access",
+        receiver: receiverTempExpr,
+        name: target.name,
+        optional: false,
+        pos: target.pos,
+        end: target.end,
+      };
+    } else {
+      return undefined;
+    }
     const transformedExpr: AssignExpr = {
       kind: "assign_expr",
       op: expr.op,
-      target: expr.target,
+      target: transformedTarget,
       value: this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr),
       pos: expr.pos,
       end: expr.end,
     };
     const exprType = this.inferType(transformedExpr);
     this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
-    return { expr: transformedExpr, exprType };
+    return { expr: transformedExpr, exprType, preAwaitReceiverTemps };
   }
 
   private isSafeArrayElementIndex(expr: Expr): boolean {
@@ -7237,6 +7273,7 @@ class Emitter {
         end: awaited.awaitExpr.end,
       };
       const postAwaitMaterializedTemps: Array<AwaitMaterializedTemp> = [];
+      let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
       const owner = awaited.owner;
       switch (owner.kind) {
         case "outer_direct":
@@ -7258,10 +7295,11 @@ class Emitter {
           if (transformedBinaryArg === undefined) {
             return undefined;
           }
-          const materialized = this.tryBuildAwaitedIdentifierAssignmentLeaf(owner.expr, awaited.awaitExpr, tempExpr);
+          const materialized = this.tryBuildAwaitedAssignmentLeaf(owner.expr, awaited.awaitExpr, tempExpr);
           if (materialized === undefined) {
             return undefined;
           }
+          preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
           const materializedTempName = `${tempName}_assign`;
           this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
             pos: owner.expr.pos,
@@ -7308,10 +7346,11 @@ class Emitter {
           if (transformedBinaryArg === undefined) {
             return undefined;
           }
-          const materialized = this.tryBuildAwaitedIdentifierAssignmentLeaf(owner.expr, awaited.awaitExpr, tempExpr);
+          const materialized = this.tryBuildAwaitedAssignmentLeaf(owner.expr, awaited.awaitExpr, tempExpr);
           if (materialized === undefined) {
             return undefined;
           }
+          preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
           const materializedTempName = `${tempName}_assign`;
           this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
             pos: owner.expr.pos,
@@ -7349,7 +7388,7 @@ class Emitter {
         operandInfo,
         awaitedType: operandInfo.awaitedType,
         tempName,
-        preAwaitReceiverTemps: [],
+        preAwaitReceiverTemps,
         preAwaitArgTemps: [],
         preAwaitSnapshotTemps,
         postAwaitMaterializedTemps,
@@ -8210,8 +8249,15 @@ class Emitter {
     }
     if (root.kind === "assign_expr") {
       if (root.op !== "=") return false;
-      if (root.target.kind !== "ident") return false;
       if (this.collectAwaitExprsInExpr(root.target).length > 0) return false;
+      const target = this.unwrapParenExpr(root.target);
+      if (target.kind === "ident") {
+        // Local assignment leaves need no target snapshot.
+      } else if (target.kind === "prop_access") {
+        if (!this.isSafeLvalueBase(target.receiver)) return false;
+      } else {
+        return false;
+      }
       const rhsAwaits = this.collectAwaitExprsInExpr(root.value);
       if (rhsAwaits.length !== 1) return false;
       const awaitExpr = rhsAwaits[0];
