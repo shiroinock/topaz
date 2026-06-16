@@ -13,10 +13,16 @@ function combine(sum: number, right: number, currentValue: number): number {
   return sum * 100 + right * 10 + currentValue;
 }
 
+async function mutateBeforeDelta(values: Array<number>): Promise<number> {
+  console.log("assign");
+  values[0] = 40;
+  return 2;
+}
+
 async function answer(): Promise<number> {
   const values: Array<number> = [1];
   return combine(
-    await Promise.resolve(mark("left", 1)) + (values[0] += await Promise.resolve(mark("assign", 2))),
+    await Promise.resolve(mark("left", 1)) + (values[0] += await mutateBeforeDelta(values)),
     await Promise.resolve(mark("right", 3)),
     values[0],
   );

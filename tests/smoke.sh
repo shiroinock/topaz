@@ -3121,7 +3121,7 @@ run_case await_call_arg_multiple_deferred_fail $'left\nsync tail\nassign\nright\
 run_case await_call_arg_assignment_property_deferred_fail $'left\nsync tail\nrhs replace\nright\ncombine\n3\n3\n2\n100\nthen\n3420'
 run_case await_call_arg_assignment_interface_deferred_fail $'left\nsync tail\nrhs replace\nright\ncombine\n3\n3\n2\n100\nthen\n3420'
 run_case await_call_arg_assignment_array_element_deferred_fail $'left\nsync tail\nassign\nright\ncombine\n3\n3\n2\n0\n50\n60\n1\nthen\n119'
-run_fail_case await_call_arg_assignment_array_element_compound_deferred_fail examples/await_call_arg_assignment_array_element_compound_deferred_fail.ts "await expression lowering is deferred"
+run_case await_call_arg_assignment_array_element_compound_deferred_fail $'left\nsync tail\nassign\nright\ncombine\n4\n3\n3\nthen\n433'
 run_fail_case await_call_arg_nested_snapshot_array_spread_conditional_source_deferred_fail examples/await_call_arg_nested_snapshot_array_spread_conditional_source_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_builtin_deferred_fail examples/await_call_arg_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_fs_write_deferred_fail examples/await_call_arg_fs_write_deferred_fail.ts "writeFileSync returns void and cannot be used as a value"

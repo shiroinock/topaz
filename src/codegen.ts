@@ -177,6 +177,8 @@ type AwaitMaterializedTemp = {
   expr?: Expr;
   receiverTempName?: string;
   indexTempName?: string;
+  oldValueTempName?: string;
+  op?: string;
   receiverType?: TopazType;
   arrayType?: TopazType;
   fieldName?: string;
@@ -211,6 +213,20 @@ type AwaitedAssignmentLeaf =
       kind: "array_element_assignment";
       receiverTempName: string;
       indexTempName: string;
+      arrayType: TopazType;
+      elemType: TopazType;
+      value: Expr;
+      exprType: TopazType;
+      pos: number;
+      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+      preAwaitIndexTemps: Array<AwaitIndexTemp>;
+    }
+  | {
+      kind: "array_element_compound_assignment";
+      receiverTempName: string;
+      indexTempName: string;
+      oldValueTempName: string;
+      op: string;
       arrayType: TopazType;
       elemType: TopazType;
       value: Expr;
@@ -6092,13 +6108,86 @@ class Emitter {
     awaitExpr: AwaitExpr,
     awaitedTempExpr: IdentExpr,
   ): AwaitedAssignmentLeaf | undefined {
-    if (expr.op !== "=") return undefined;
     if (this.collectAwaitExprsInExpr(expr.target).length > 0) return undefined;
     const rhsAwaits = this.collectAwaitExprsInExpr(expr.value);
     if (rhsAwaits.length !== 1) return undefined;
     if (rhsAwaits[0].pos !== awaitExpr.pos || rhsAwaits[0].end !== awaitExpr.end) return undefined;
     if (!this.simpleAwaitReplacementSupported(expr.value, awaitExpr)) return undefined;
     const target = this.unwrapParenExpr(expr.target);
+    if (expr.op !== "=") {
+      if (!this.isAwaitLowerableCompoundAssignmentOp(expr.op)) return undefined;
+      if (target.kind !== "elem_access") return undefined;
+      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
+      if (!this.isSafeArrayElementIndex(target.index)) return undefined;
+      this.checkAssignTarget(target, { pos: expr.pos });
+      const receiverType = this.inferType(target.receiver);
+      if (!isArrayType(receiverType)) return undefined;
+      const elemType = arrayElem(receiverType);
+      if (elemType === undefined) return undefined;
+      this.expectType(target.index, T_NUMBER);
+      const receiverTempName = `${awaitedTempExpr.name}_recv`;
+      const indexTempName = `${awaitedTempExpr.name}_index`;
+      const oldValueTempName = `${awaitedTempExpr.name}_old`;
+      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+      this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
+      const receiverTempExpr: IdentExpr = {
+        kind: "ident",
+        name: receiverTempName,
+        pos: target.receiver.pos,
+        end: target.receiver.end,
+      };
+      const indexTempExpr: IdentExpr = {
+        kind: "ident",
+        name: indexTempName,
+        pos: target.index.pos,
+        end: target.index.end,
+      };
+      const transformedTarget: ElemAccessExpr = {
+        kind: "elem_access",
+        receiver: receiverTempExpr,
+        index: indexTempExpr,
+        optional: false,
+        pos: target.pos,
+        end: target.end,
+      };
+      const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
+      const transformedExpr: AssignExpr = {
+        kind: "assign_expr",
+        op: expr.op,
+        target: transformedTarget,
+        value: transformedValue,
+        pos: expr.pos,
+        end: expr.end,
+      };
+      const exprType = this.inferType(transformedExpr);
+      this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
+      return {
+        kind: "array_element_compound_assignment",
+        receiverTempName,
+        indexTempName,
+        oldValueTempName,
+        op: expr.op,
+        arrayType: receiverType,
+        elemType,
+        value: transformedValue,
+        exprType,
+        pos: expr.pos,
+        preAwaitReceiverTemps: [
+          {
+            tempName: receiverTempName,
+            receiver: target.receiver,
+            receiverType,
+          },
+        ],
+        preAwaitIndexTemps: [
+          {
+            tempName: indexTempName,
+            index: target.index,
+            indexType: T_NUMBER,
+          },
+        ],
+      };
+    }
     let transformedTarget: Expr = target;
     const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
     const preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
@@ -6241,6 +6330,20 @@ class Emitter {
           tempName,
           receiverTempName: materialized.receiverTempName,
           indexTempName: materialized.indexTempName,
+          arrayType: materialized.arrayType,
+          elemType: materialized.elemType,
+          value: materialized.value,
+          exprType: materialized.exprType,
+          pos: materialized.pos,
+        };
+      case "array_element_compound_assignment":
+        return {
+          kind: "array_element_compound_assignment",
+          tempName,
+          receiverTempName: materialized.receiverTempName,
+          indexTempName: materialized.indexTempName,
+          oldValueTempName: materialized.oldValueTempName,
+          op: materialized.op,
           arrayType: materialized.arrayType,
           elemType: materialized.elemType,
           value: materialized.value,
@@ -8408,9 +8511,10 @@ class Emitter {
       return true;
     }
     if (root.kind === "assign_expr") {
-      if (root.op !== "=") return false;
+      if (root.op !== "=" && !this.isAwaitLowerableCompoundAssignmentOp(root.op)) return false;
       if (this.collectAwaitExprsInExpr(root.target).length > 0) return false;
       const target = this.unwrapParenExpr(root.target);
+      if (root.op !== "=" && target.kind !== "elem_access") return false;
       if (target.kind === "ident") {
         // Local assignment leaves need no target snapshot.
       } else if (target.kind === "prop_access") {
@@ -8954,6 +9058,7 @@ class Emitter {
           const indexExpr = this.emitWithExpected(indexTemp.index, indexTemp.indexType);
           lines.push(`${indent}${frameRef}->${indexTemp.tempName} = ${indexExpr};`);
         }
+        this.emitAwaitMaterializedTempPreAwaitStores(step.postAwaitMaterializedTemps, frameRef, lines, indent);
         this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
@@ -8966,6 +9071,7 @@ class Emitter {
           const indexExpr = this.emitWithExpected(indexTemp.index, indexTemp.indexType);
           lines.push(`${indent}${frameRef}->${indexTemp.tempName} = ${indexExpr};`);
         }
+        this.emitAwaitMaterializedTempPreAwaitStores(step.postAwaitMaterializedTemps, frameRef, lines, indent);
         this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
@@ -8978,6 +9084,7 @@ class Emitter {
           const indexExpr = this.emitWithExpected(indexTemp.index, indexTemp.indexType);
           lines.push(`${indent}${frameRef}->${indexTemp.tempName} = ${indexExpr};`);
         }
+        this.emitAwaitMaterializedTempPreAwaitStores(step.postAwaitMaterializedTemps, frameRef, lines, indent);
         this.emitAwaitArgAndSnapshotTempStores(step.preAwaitArgTemps, step.preAwaitSnapshotTemps, frameRef, lines, indent);
         return;
       }
@@ -9013,6 +9120,52 @@ class Emitter {
     }
   }
 
+  private addAwaitMaterializedTempFrameFields(fields: string[], temp: AwaitMaterializedTemp): void {
+    if (temp.kind === "array_element_compound_assignment") {
+      const oldValueTempName = temp.oldValueTempName;
+      const elemType = temp.elemType;
+      if (oldValueTempName === undefined) {
+        throwInternalCodegenError("array element compound assignment materialized temp missing old-value temp");
+      }
+      if (elemType === undefined) {
+        throwInternalCodegenError("array element compound assignment materialized temp missing element type");
+      }
+      fields.push(`  ${cTypeName(elemType)} ${oldValueTempName};`);
+    }
+    fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
+  }
+
+  private emitAwaitMaterializedTempPreAwaitStores(
+    temps: Array<AwaitMaterializedTemp>,
+    frameRef: string,
+    lines: string[],
+    indent: string,
+  ): void {
+    for (const temp of temps) {
+      if (temp.kind !== "array_element_compound_assignment") continue;
+      const oldValueTempName = temp.oldValueTempName;
+      const receiverTempName = temp.receiverTempName;
+      const indexTempName = temp.indexTempName;
+      const arrayType = temp.arrayType;
+      if (oldValueTempName === undefined) {
+        throwInternalCodegenError("array element compound assignment materialized temp missing old-value temp");
+      }
+      if (receiverTempName === undefined) {
+        throwInternalCodegenError("array element compound assignment materialized temp missing receiver temp");
+      }
+      if (indexTempName === undefined) {
+        throwInternalCodegenError("array element compound assignment materialized temp missing index temp");
+      }
+      if (arrayType === undefined) {
+        throwInternalCodegenError("array element compound assignment materialized temp missing array type");
+      }
+      const arrayName = arrayShortName(arrayType);
+      lines.push(
+        `${indent}${frameRef}->${oldValueTempName} = topaz_array_${arrayName}_at(${frameRef}->${receiverTempName}, ${frameRef}->${indexTempName});`,
+      );
+    }
+  }
+
   private emitAwaitSnapshotTempRestores(
     temps: Array<AwaitSnapshotTemp>,
     lines: string[],
@@ -9032,7 +9185,7 @@ class Emitter {
     indent: string,
   ): void {
     for (const temp of temps) {
-      const expr = this.emitAwaitMaterializedTempExpression(temp);
+      const expr = this.emitAwaitMaterializedTempExpression(temp, frameRef);
       this.scope.declareBinding(temp.tempName, temp.exprType, /* isConst */ true, {
         pos: this.awaitMaterializedTempPos(temp),
       });
@@ -9053,12 +9206,17 @@ class Emitter {
       if (pos === undefined) throwInternalCodegenError("array element assignment materialized temp missing position");
       return pos;
     }
+    if (temp.kind === "array_element_compound_assignment") {
+      const pos = temp.pos;
+      if (pos === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing position");
+      return pos;
+    }
     const expr = temp.expr;
     if (expr === undefined) throwInternalCodegenError("expression materialized temp missing expression");
     return expr.pos;
   }
 
-  private emitAwaitMaterializedTempExpression(temp: AwaitMaterializedTemp): string {
+  private emitAwaitMaterializedTempExpression(temp: AwaitMaterializedTemp, frameRef: string): string {
     if (temp.kind === "interface_field_assignment") {
       const fieldType = temp.fieldType;
       const value = temp.value;
@@ -9087,6 +9245,31 @@ class Emitter {
       const valueExpr = this.emitWithExpected(value, elemType);
       const arrayName = arrayShortName(arrayType);
       return `({ ${cTypeName(elemType)} ${valueTmp} = ${valueExpr}; topaz_array_${arrayName}_set(${receiverTempName}, ${indexTempName}, ${valueTmp}); ${valueTmp}; })`;
+    }
+    if (temp.kind === "array_element_compound_assignment") {
+      const elemType = temp.elemType;
+      const arrayType = temp.arrayType;
+      const value = temp.value;
+      const receiverTempName = temp.receiverTempName;
+      const indexTempName = temp.indexTempName;
+      const oldValueTempName = temp.oldValueTempName;
+      const op = temp.op;
+      const pos = temp.pos;
+      if (elemType === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing element type");
+      if (arrayType === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing array type");
+      if (value === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing value");
+      if (receiverTempName === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing receiver temp");
+      if (indexTempName === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing index temp");
+      if (oldValueTempName === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing old-value temp");
+      if (op === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing operator");
+      if (pos === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing position");
+      const arrayName = arrayShortName(arrayType);
+      const valueTmp = `${temp.tempName}_value`;
+      const nextTmp = `${temp.tempName}_next`;
+      const valueExpr = this.emitWithExpected(value, elemType);
+      const oldValueExpr = `${frameRef}->${oldValueTempName}`;
+      const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldValueExpr, valueTmp, elemType, { pos });
+      return `({ ${cTypeName(elemType)} ${valueTmp} = ${valueExpr}; ${cTypeName(elemType)} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${receiverTempName}, ${indexTempName}, ${nextTmp}); ${nextTmp}; })`;
     }
     const expr = temp.expr;
     if (expr === undefined) throwInternalCodegenError("expression materialized temp missing expression");
@@ -9269,9 +9452,7 @@ class Emitter {
         for (const temp of binding.preAwaitSnapshotTemps) {
           fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
         }
-        for (const temp of binding.postAwaitMaterializedTemps) {
-          fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
-        }
+        for (const temp of binding.postAwaitMaterializedTemps) this.addAwaitMaterializedTempFrameFields(fields, temp);
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
         }
@@ -9289,9 +9470,7 @@ class Emitter {
           for (const temp of binding.preAwaitSnapshotTemps) {
             fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
           }
-          for (const temp of binding.postAwaitMaterializedTemps) {
-            fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
-          }
+          for (const temp of binding.postAwaitMaterializedTemps) this.addAwaitMaterializedTempFrameFields(fields, temp);
           if (binding.awaitedType.kind !== "void") {
             fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
           }
@@ -9309,9 +9488,7 @@ class Emitter {
         for (const temp of binding.preAwaitSnapshotTemps) {
           fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
         }
-        for (const temp of binding.postAwaitMaterializedTemps) {
-          fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
-        }
+        for (const temp of binding.postAwaitMaterializedTemps) this.addAwaitMaterializedTempFrameFields(fields, temp);
         if (binding.awaitedType.kind !== "void") {
           fields.push(`  ${cTypeName(binding.awaitedType)} ${binding.tempName};`);
         }
@@ -14413,6 +14590,26 @@ class Emitter {
     return top;
   }
 
+  private emitCompoundAssignmentNextExpression(
+    op: string,
+    oldExpr: string,
+    rhsExpr: string,
+    valueType: TopazType,
+    anchor: { pos: number },
+  ): string {
+    if (!this.isAwaitLowerableCompoundAssignmentOp(op)) {
+      throw new CodegenError(anchor, `unsupported assignment operator '${op}'`);
+    }
+    if (op === "+=" && valueType.kind === "string") {
+      return this.emitRuntimePreludeStringConcat(oldExpr, rhsExpr, anchor);
+    }
+    if (op === "%=") {
+      return `topaz_fmod(${oldExpr}, ${rhsExpr})`;
+    }
+    const binOp = op.slice(0, -1);
+    return `${oldExpr} ${binOp} ${rhsExpr}`;
+  }
+
   private emitInterfaceFieldCompoundAssignment(
     target: PropAccessExpr,
     op: string,
@@ -14432,16 +14629,7 @@ class Emitter {
     const rhsStr = this.emitWithExpected(value, fieldType);
     const fieldC = cTypeName(fieldType);
     const getter = `${baseTmp}.vt->get_${target.name}(${baseTmp}.data)`;
-    if (op === "+=" && fieldType.kind === "string") {
-      const nextExpr = this.emitRuntimePreludeStringConcat(oldTmp, rhsStr, anchor);
-      return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
-    }
-    if (op === "%=") {
-      const nextExpr = `topaz_fmod(${oldTmp}, ${rhsStr})`;
-      return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
-    }
-    const binOp = op.slice(0, -1);
-    const nextExpr = `${oldTmp} ${binOp} ${rhsStr}`;
+    const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldTmp, rhsStr, fieldType, anchor);
     return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
   }
 
@@ -14468,16 +14656,7 @@ class Emitter {
     const elemC = cTypeName(elemType);
     const baseC = cTypeName(baseType);
     const oldExpr = `topaz_array_${arrayName}_at(${baseTmp}, ${indexTmp})`;
-    if (op === "+=" && elemType.kind === "string") {
-      const nextExpr = this.emitRuntimePreludeStringConcat(oldTmp, rhsStr, anchor);
-      return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); })`;
-    }
-    if (op === "%=") {
-      const nextExpr = `topaz_fmod(${oldTmp}, ${rhsStr})`;
-      return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); })`;
-    }
-    const binOp = op.slice(0, -1);
-    const nextExpr = `${oldTmp} ${binOp} ${rhsStr}`;
+    const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldTmp, rhsStr, elemType, anchor);
     return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); })`;
   }
 
