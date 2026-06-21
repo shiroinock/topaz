@@ -8591,7 +8591,7 @@ class Emitter {
     }
 
     const statementDiscardMaterializationType = statementDiscardMaterialization
-      ? this.synthesizeStatementDiscardObjectMaterializationType(rootMaybe, transformedExpr)
+      ? this.synthesizeStatementDiscardObjectMaterializationType(transformedExpr)
       : undefined;
     return { transformedExpr, steps, statementDiscardMaterializationType };
   }
@@ -8623,23 +8623,40 @@ class Emitter {
         }
         continue;
       }
-      if (value.kind === "object_lit") return undefined;
+      if (value.kind === "object_lit") {
+        const objectEvents: Array<MultiAwaitLeafEvent> = [];
+        if (!this.collectMultiAwaitObjectLiteralLeaves(
+          value,
+          /* allowPureLeaves */ true,
+          objectEvents,
+          /* allowSnapshots */ false,
+        )) {
+          return undefined;
+        }
+        for (const event of objectEvents) {
+          events.push(event);
+        }
+        continue;
+      }
       if (!this.isSideEffectFreeMultiAwaitLeaf(value)) return undefined;
       events.push({ kind: "pure", expr: value });
     }
     return events;
   }
 
-  private synthesizeStatementDiscardObjectMaterializationType(
-    root: ObjectLitExpr,
-    transformedExpr: Expr,
-  ): TopazType {
+  private synthesizeStatementDiscardObjectMaterializationType(transformedExpr: Expr): TopazType {
     const transformedRoot = this.unwrapParenExpr(transformedExpr);
     if (transformedRoot.kind !== "object_lit") {
       throwInternalCodegenError("statement-discard object materialization requires object literal root");
     }
+    return this.synthesizeStatementDiscardObjectLiteralMaterializationType(transformedRoot);
+  }
+
+  private synthesizeStatementDiscardObjectLiteralMaterializationType(
+    expr: ObjectLitExpr,
+  ): TopazType {
     const fields = new Map<string, TopazType>();
-    for (const prop of transformedRoot.props) {
+    for (const prop of expr.props) {
       let fname = "";
       let value: Expr = { kind: "ident", name: "", pos: prop.pos, end: prop.end };
       if (prop.kind === "prop_kv") {
@@ -8654,23 +8671,32 @@ class Emitter {
       if (fields.has(fname)) {
         throw new CodegenError({ pos: prop.pos }, `duplicate property '${fname}' in object literal`);
       }
-      const fieldType = this.inferType(value);
-      if (fieldType.kind === "undefined") {
-        throw new CodegenError(
-          { pos: value.pos },
-          "statement-discard object materialization cannot infer a standalone `undefined` property type",
-        );
-      }
-      this.assertNotVoid(fieldType, { pos: value.pos }, "statement-discard object materialization property");
+      const fieldType = this.synthesizeStatementDiscardObjectMaterializationFieldType(value);
       fields.set(fname, fieldType);
     }
     const anchor: TypeLiteralNode = {
       kind: "type_literal",
       members: [],
-      pos: root.pos,
-      end: root.end,
+      pos: expr.pos,
+      end: expr.end,
     };
     return classOf(this.recordAnonClass(fields, new Set<string>(), anchor));
+  }
+
+  private synthesizeStatementDiscardObjectMaterializationFieldType(value: Expr): TopazType {
+    const unwrapped = this.unwrapParenExpr(value);
+    if (unwrapped.kind === "object_lit") {
+      return this.synthesizeStatementDiscardObjectLiteralMaterializationType(unwrapped);
+    }
+    const fieldType = this.inferType(value);
+    if (fieldType.kind === "undefined") {
+      throw new CodegenError(
+        { pos: value.pos },
+        "statement-discard object materialization cannot infer a standalone `undefined` property type",
+      );
+    }
+    this.assertNotVoid(fieldType, { pos: value.pos }, "statement-discard object materialization property");
+    return fieldType;
   }
 
   private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<MultiAwaitLeafEvent> | undefined {
