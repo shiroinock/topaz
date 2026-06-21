@@ -8638,6 +8638,10 @@ class Emitter {
         }
         continue;
       }
+      if (this.isSnapshotMultiAwaitLeaf(value)) {
+        events.push({ kind: "snapshot", expr: value });
+        continue;
+      }
       if (!this.isSideEffectFreeMultiAwaitLeaf(value)) return undefined;
       events.push({ kind: "pure", expr: value });
     }

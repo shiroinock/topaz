@@ -3095,7 +3095,7 @@ run_case async_call_arg_contextual_object_array_object_snapshot_leaf_descriptor_
 run_case async_call_arg_contextual_object_array_spread_snapshot_leaf_descriptor_await $'left\nsync tail\ninner\nnested\n2\nreadBox\n12\nsnapshot\n112\nright\ncombine\n123\n3\nthen\n1126'
 run_case await_call_arg_nested_snapshot_array_spread_call_source_leaf $'left\nsync tail\ninner\nitems\n2\nreadBox\n12\nsnapshot\n112\nright\ncombine\n123\n3\nthen\n1126'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_object_literal_mixed_side_effect_deferred_fail examples/await_object_literal_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_case await_object_literal_mixed_side_effect_deferred_fail $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
 run_fail_case await_object_literal_nested_array_side_effect_deferred_fail examples/await_object_literal_nested_array_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_object_literal_nested_object_side_effect_deferred_fail examples/await_object_literal_nested_object_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_case await_object_literal_statement_mixed_pure $'left\nsync tail\nright\ndone\nthen'
@@ -3116,7 +3116,7 @@ run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail
 run_fail_case await_binary_mixed_side_effect_deferred_fail examples/await_binary_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_array_literal_mixed_side_effect_deferred_fail examples/await_array_literal_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_object_literal_statement_deferred_fail examples/await_object_literal_statement_deferred_fail.ts "await expression lowering is deferred"
+run_case await_object_literal_statement_deferred_fail "middle"
 run_case await_call_arg_multiple_deferred_fail $'left\nsync tail\nassign\nright\nread counter\n2\ncombine\n3\n3\n2\nthen\n332'
 run_case await_call_arg_assignment_property_deferred_fail $'left\nsync tail\nrhs replace\nright\ncombine\n3\n3\n2\n100\nthen\n3420'
 run_case await_call_arg_assignment_interface_deferred_fail $'left\nsync tail\nrhs replace\nright\ncombine\n3\n3\n2\n100\nthen\n3420'
