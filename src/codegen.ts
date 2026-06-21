@@ -8871,7 +8871,8 @@ class Emitter {
       if (expr.op !== "=") return false;
       const target = this.unwrapParenExpr(expr.target);
       if (target.kind === "ident") return true;
-      return target.kind === "prop_access" && this.isClassFieldSnapshotAssignmentTarget(target);
+      if (target.kind === "prop_access") return this.isClassFieldSnapshotAssignmentTarget(target);
+      return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
     }
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
@@ -8890,6 +8891,15 @@ class Emitter {
     if (className === undefined) return false;
     const cls = this.classes.get(className);
     return cls !== undefined && cls.fields.has(target.name);
+  }
+
+  private isArrayElementSnapshotAssignmentTarget(target: ElemAccessExpr): boolean {
+    if (!this.isSafeLvalueBase(target.receiver)) return false;
+    if (!this.isSafeArrayElementIndex(target.index)) return false;
+    const receiverType = this.inferType(target.receiver);
+    if (!isArrayType(receiverType)) return false;
+    this.expectType(target.index, T_NUMBER);
+    return true;
   }
 
   private isSideEffectFreeMultiAwaitLeaf(expr: Expr): boolean {
