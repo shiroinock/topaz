@@ -8613,7 +8613,17 @@ class Emitter {
         events.push({ kind: "await", awaitExpr: value });
         continue;
       }
-      if (value.kind === "array_lit" || value.kind === "object_lit") return undefined;
+      if (value.kind === "array_lit") {
+        const arrayEvents: Array<MultiAwaitLeafEvent> = [];
+        if (!this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, /* allowSnapshots */ false)) {
+          return undefined;
+        }
+        for (const event of arrayEvents) {
+          events.push(event);
+        }
+        continue;
+      }
+      if (value.kind === "object_lit") return undefined;
       if (!this.isSideEffectFreeMultiAwaitLeaf(value)) return undefined;
       events.push({ kind: "pure", expr: value });
     }
