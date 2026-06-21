@@ -8872,7 +8872,7 @@ class Emitter {
       if (this.isAwaitLowerableCompoundAssignmentOp(expr.op)) {
         if (target.kind === "ident") return true;
         if (target.kind === "prop_access") return this.isClassFieldSnapshotAssignmentTarget(target);
-        return false;
+        return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
       }
       if (expr.op !== "=") return false;
       if (target.kind === "ident") return true;
@@ -15135,7 +15135,7 @@ class Emitter {
     const baseC = cTypeName(baseType);
     const oldExpr = `topaz_array_${arrayName}_at(${baseTmp}, ${indexTmp})`;
     const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldTmp, rhsStr, elemType, anchor);
-    return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); })`;
+    return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); ${nextTmp}; })`;
   }
 
   private emitExpression(expr: Expr): string {
