@@ -175,6 +175,7 @@ type AwaitMaterializedTemp = {
   kind: string;
   tempName: string;
   expr?: Expr;
+  targetName?: string;
   receiverTempName?: string;
   indexTempName?: string;
   oldValueTempName?: string;
@@ -215,6 +216,45 @@ type AwaitedAssignmentLeaf =
       indexTempName: string;
       arrayType: TopazType;
       elemType: TopazType;
+      value: Expr;
+      exprType: TopazType;
+      pos: number;
+      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+      preAwaitIndexTemps: Array<AwaitIndexTemp>;
+    }
+  | {
+      kind: "identifier_compound_assignment";
+      targetName: string;
+      oldValueTempName: string;
+      op: string;
+      value: Expr;
+      exprType: TopazType;
+      pos: number;
+      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+      preAwaitIndexTemps: Array<AwaitIndexTemp>;
+    }
+  | {
+      kind: "class_field_compound_assignment";
+      receiverTempName: string;
+      receiverType: TopazType;
+      fieldName: string;
+      fieldType: TopazType;
+      oldValueTempName: string;
+      op: string;
+      value: Expr;
+      exprType: TopazType;
+      pos: number;
+      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
+      preAwaitIndexTemps: Array<AwaitIndexTemp>;
+    }
+  | {
+      kind: "interface_field_compound_assignment";
+      receiverTempName: string;
+      receiverType: TopazType;
+      fieldName: string;
+      fieldType: TopazType;
+      oldValueTempName: string;
+      op: string;
       value: Expr;
       exprType: TopazType;
       pos: number;
@@ -6116,77 +6156,191 @@ class Emitter {
     const target = this.unwrapParenExpr(expr.target);
     if (expr.op !== "=") {
       if (!this.isAwaitLowerableCompoundAssignmentOp(expr.op)) return undefined;
-      if (target.kind !== "elem_access") return undefined;
-      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
-      if (!this.isSafeArrayElementIndex(target.index)) return undefined;
-      this.checkAssignTarget(target, { pos: expr.pos });
-      const receiverType = this.inferType(target.receiver);
-      if (!isArrayType(receiverType)) return undefined;
-      const elemType = arrayElem(receiverType);
-      if (elemType === undefined) return undefined;
-      this.expectType(target.index, T_NUMBER);
-      const receiverTempName = `${awaitedTempExpr.name}_recv`;
-      const indexTempName = `${awaitedTempExpr.name}_index`;
       const oldValueTempName = `${awaitedTempExpr.name}_old`;
-      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
-      this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
-      const receiverTempExpr: IdentExpr = {
-        kind: "ident",
-        name: receiverTempName,
-        pos: target.receiver.pos,
-        end: target.receiver.end,
-      };
-      const indexTempExpr: IdentExpr = {
-        kind: "ident",
-        name: indexTempName,
-        pos: target.index.pos,
-        end: target.index.end,
-      };
-      const transformedTarget: ElemAccessExpr = {
-        kind: "elem_access",
-        receiver: receiverTempExpr,
-        index: indexTempExpr,
-        optional: false,
-        pos: target.pos,
-        end: target.end,
-      };
       const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
-      const transformedExpr: AssignExpr = {
-        kind: "assign_expr",
-        op: expr.op,
-        target: transformedTarget,
-        value: transformedValue,
-        pos: expr.pos,
-        end: expr.end,
-      };
-      const exprType = this.inferType(transformedExpr);
-      this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
-      return {
-        kind: "array_element_compound_assignment",
-        receiverTempName,
-        indexTempName,
-        oldValueTempName,
-        op: expr.op,
-        arrayType: receiverType,
-        elemType,
-        value: transformedValue,
-        exprType,
-        pos: expr.pos,
-        preAwaitReceiverTemps: [
-          {
-            tempName: receiverTempName,
-            receiver: target.receiver,
+      if (target.kind === "ident") {
+        this.checkAssignTarget(target, { pos: expr.pos });
+        const transformedExpr: AssignExpr = {
+          kind: "assign_expr",
+          op: expr.op,
+          target,
+          value: transformedValue,
+          pos: expr.pos,
+          end: expr.end,
+        };
+        const exprType = this.inferType(transformedExpr);
+        this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
+        return {
+          kind: "identifier_compound_assignment",
+          targetName: target.name,
+          oldValueTempName,
+          op: expr.op,
+          value: transformedValue,
+          exprType,
+          pos: expr.pos,
+          preAwaitReceiverTemps: [],
+          preAwaitIndexTemps: [],
+        };
+      }
+      if (target.kind === "prop_access") {
+        if (!this.isSafeLvalueBase(target.receiver)) return undefined;
+        this.checkAssignTarget(target, { pos: expr.pos });
+        const receiverType = this.inferType(target.receiver);
+        const receiverTempName = `${awaitedTempExpr.name}_recv`;
+        this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: receiverTempName,
+          pos: target.receiver.pos,
+          end: target.receiver.end,
+        };
+        const transformedTarget: PropAccessExpr = {
+          kind: "prop_access",
+          receiver: receiverTempExpr,
+          name: target.name,
+          optional: false,
+          pos: target.pos,
+          end: target.end,
+        };
+        const transformedExpr: AssignExpr = {
+          kind: "assign_expr",
+          op: expr.op,
+          target: transformedTarget,
+          value: transformedValue,
+          pos: expr.pos,
+          end: expr.end,
+        };
+        const exprType = this.inferType(transformedExpr);
+        this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
+        if (isClassType(receiverType)) {
+          const className = classNameOf(receiverType);
+          if (className === undefined) return undefined;
+          const cls = this.classes.get(className);
+          if (cls === undefined) return undefined;
+          const fieldType = cls.fields.get(target.name);
+          if (fieldType === undefined) return undefined;
+          return {
+            kind: "class_field_compound_assignment",
+            receiverTempName,
             receiverType,
-          },
-        ],
-        preAwaitIndexTemps: [
-          {
-            tempName: indexTempName,
-            index: target.index,
-            indexType: T_NUMBER,
-          },
-        ],
-      };
+            fieldName: target.name,
+            fieldType,
+            oldValueTempName,
+            op: expr.op,
+            value: transformedValue,
+            exprType,
+            pos: expr.pos,
+            preAwaitReceiverTemps: [
+              {
+                tempName: receiverTempName,
+                receiver: target.receiver,
+                receiverType,
+              },
+            ],
+            preAwaitIndexTemps: [],
+          };
+        }
+        if (isInterfaceType(receiverType)) {
+          const interfaceName = interfaceNameOf(receiverType);
+          if (interfaceName === undefined) return undefined;
+          const iface = this.interfaces.get(interfaceName);
+          if (iface === undefined) return undefined;
+          const fieldType = iface.fields.get(target.name);
+          if (fieldType === undefined) return undefined;
+          return {
+            kind: "interface_field_compound_assignment",
+            receiverTempName,
+            receiverType,
+            fieldName: target.name,
+            fieldType,
+            oldValueTempName,
+            op: expr.op,
+            value: transformedValue,
+            exprType,
+            pos: expr.pos,
+            preAwaitReceiverTemps: [
+              {
+                tempName: receiverTempName,
+                receiver: target.receiver,
+                receiverType,
+              },
+            ],
+            preAwaitIndexTemps: [],
+          };
+        }
+        return undefined;
+      }
+      if (target.kind === "elem_access") {
+        if (!this.isSafeLvalueBase(target.receiver)) return undefined;
+        if (!this.isSafeArrayElementIndex(target.index)) return undefined;
+        this.checkAssignTarget(target, { pos: expr.pos });
+        const receiverType = this.inferType(target.receiver);
+        if (!isArrayType(receiverType)) return undefined;
+        const elemType = arrayElem(receiverType);
+        if (elemType === undefined) return undefined;
+        this.expectType(target.index, T_NUMBER);
+        const receiverTempName = `${awaitedTempExpr.name}_recv`;
+        const indexTempName = `${awaitedTempExpr.name}_index`;
+        this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+        this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
+        const receiverTempExpr: IdentExpr = {
+          kind: "ident",
+          name: receiverTempName,
+          pos: target.receiver.pos,
+          end: target.receiver.end,
+        };
+        const indexTempExpr: IdentExpr = {
+          kind: "ident",
+          name: indexTempName,
+          pos: target.index.pos,
+          end: target.index.end,
+        };
+        const transformedTarget: ElemAccessExpr = {
+          kind: "elem_access",
+          receiver: receiverTempExpr,
+          index: indexTempExpr,
+          optional: false,
+          pos: target.pos,
+          end: target.end,
+        };
+        const transformedExpr: AssignExpr = {
+          kind: "assign_expr",
+          op: expr.op,
+          target: transformedTarget,
+          value: transformedValue,
+          pos: expr.pos,
+          end: expr.end,
+        };
+        const exprType = this.inferType(transformedExpr);
+        this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
+        return {
+          kind: "array_element_compound_assignment",
+          receiverTempName,
+          indexTempName,
+          oldValueTempName,
+          op: expr.op,
+          arrayType: receiverType,
+          elemType,
+          value: transformedValue,
+          exprType,
+          pos: expr.pos,
+          preAwaitReceiverTemps: [
+            {
+              tempName: receiverTempName,
+              receiver: target.receiver,
+              receiverType,
+            },
+          ],
+          preAwaitIndexTemps: [
+            {
+              tempName: indexTempName,
+              index: target.index,
+              indexType: T_NUMBER,
+            },
+          ],
+        };
+      }
+      return undefined;
     }
     let transformedTarget: Expr = target;
     const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
@@ -6312,6 +6466,45 @@ class Emitter {
     materialized: AwaitedAssignmentLeaf,
   ): AwaitMaterializedTemp {
     switch (materialized.kind) {
+      case "identifier_compound_assignment":
+        return {
+          kind: "identifier_compound_assignment",
+          tempName,
+          targetName: materialized.targetName,
+          oldValueTempName: materialized.oldValueTempName,
+          op: materialized.op,
+          value: materialized.value,
+          exprType: materialized.exprType,
+          pos: materialized.pos,
+        };
+      case "class_field_compound_assignment":
+        return {
+          kind: "class_field_compound_assignment",
+          tempName,
+          receiverTempName: materialized.receiverTempName,
+          receiverType: materialized.receiverType,
+          fieldName: materialized.fieldName,
+          fieldType: materialized.fieldType,
+          oldValueTempName: materialized.oldValueTempName,
+          op: materialized.op,
+          value: materialized.value,
+          exprType: materialized.exprType,
+          pos: materialized.pos,
+        };
+      case "interface_field_compound_assignment":
+        return {
+          kind: "interface_field_compound_assignment",
+          tempName,
+          receiverTempName: materialized.receiverTempName,
+          receiverType: materialized.receiverType,
+          fieldName: materialized.fieldName,
+          fieldType: materialized.fieldType,
+          oldValueTempName: materialized.oldValueTempName,
+          op: materialized.op,
+          value: materialized.value,
+          exprType: materialized.exprType,
+          pos: materialized.pos,
+        };
       case "interface_field_assignment":
         return {
           kind: "interface_field_assignment",
@@ -8514,7 +8707,6 @@ class Emitter {
       if (root.op !== "=" && !this.isAwaitLowerableCompoundAssignmentOp(root.op)) return false;
       if (this.collectAwaitExprsInExpr(root.target).length > 0) return false;
       const target = this.unwrapParenExpr(root.target);
-      if (root.op !== "=" && target.kind !== "elem_access") return false;
       if (target.kind === "ident") {
         // Local assignment leaves need no target snapshot.
       } else if (target.kind === "prop_access") {
@@ -9121,16 +9313,17 @@ class Emitter {
   }
 
   private addAwaitMaterializedTempFrameFields(fields: string[], temp: AwaitMaterializedTemp): void {
-    if (temp.kind === "array_element_compound_assignment") {
+    if (
+      temp.kind === "identifier_compound_assignment" ||
+      temp.kind === "class_field_compound_assignment" ||
+      temp.kind === "interface_field_compound_assignment" ||
+      temp.kind === "array_element_compound_assignment"
+    ) {
       const oldValueTempName = temp.oldValueTempName;
-      const elemType = temp.elemType;
       if (oldValueTempName === undefined) {
-        throwInternalCodegenError("array element compound assignment materialized temp missing old-value temp");
+        throwInternalCodegenError("compound assignment materialized temp missing old-value temp");
       }
-      if (elemType === undefined) {
-        throwInternalCodegenError("array element compound assignment materialized temp missing element type");
-      }
-      fields.push(`  ${cTypeName(elemType)} ${oldValueTempName};`);
+      fields.push(`  ${cTypeName(temp.exprType)} ${oldValueTempName};`);
     }
     fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
   }
@@ -9142,17 +9335,48 @@ class Emitter {
     indent: string,
   ): void {
     for (const temp of temps) {
-      if (temp.kind !== "array_element_compound_assignment") continue;
+      if (
+        temp.kind !== "identifier_compound_assignment" &&
+        temp.kind !== "class_field_compound_assignment" &&
+        temp.kind !== "interface_field_compound_assignment" &&
+        temp.kind !== "array_element_compound_assignment"
+      ) continue;
       const oldValueTempName = temp.oldValueTempName;
+      if (oldValueTempName === undefined) {
+        throwInternalCodegenError("compound assignment materialized temp missing old-value temp");
+      }
+      if (temp.kind === "identifier_compound_assignment") {
+        const targetName = temp.targetName;
+        if (targetName === undefined) {
+          throwInternalCodegenError("identifier compound assignment materialized temp missing target name");
+        }
+        lines.push(`${indent}${frameRef}->${oldValueTempName} = ${targetName};`);
+        continue;
+      }
       const receiverTempName = temp.receiverTempName;
+      if (receiverTempName === undefined) {
+        throwInternalCodegenError("compound assignment materialized temp missing receiver temp");
+      }
+      if (temp.kind === "class_field_compound_assignment") {
+        const fieldName = temp.fieldName;
+        if (fieldName === undefined) {
+          throwInternalCodegenError("class field compound assignment materialized temp missing field name");
+        }
+        lines.push(`${indent}${frameRef}->${oldValueTempName} = ${frameRef}->${receiverTempName}->${fieldName};`);
+        continue;
+      }
+      if (temp.kind === "interface_field_compound_assignment") {
+        const fieldName = temp.fieldName;
+        if (fieldName === undefined) {
+          throwInternalCodegenError("interface field compound assignment materialized temp missing field name");
+        }
+        lines.push(
+          `${indent}${frameRef}->${oldValueTempName} = ${frameRef}->${receiverTempName}.vt->get_${fieldName}(${frameRef}->${receiverTempName}.data);`,
+        );
+        continue;
+      }
       const indexTempName = temp.indexTempName;
       const arrayType = temp.arrayType;
-      if (oldValueTempName === undefined) {
-        throwInternalCodegenError("array element compound assignment materialized temp missing old-value temp");
-      }
-      if (receiverTempName === undefined) {
-        throwInternalCodegenError("array element compound assignment materialized temp missing receiver temp");
-      }
       if (indexTempName === undefined) {
         throwInternalCodegenError("array element compound assignment materialized temp missing index temp");
       }
@@ -9196,6 +9420,21 @@ class Emitter {
   }
 
   private awaitMaterializedTempPos(temp: AwaitMaterializedTemp): number {
+    if (temp.kind === "identifier_compound_assignment") {
+      const pos = temp.pos;
+      if (pos === undefined) throwInternalCodegenError("identifier compound assignment materialized temp missing position");
+      return pos;
+    }
+    if (temp.kind === "class_field_compound_assignment") {
+      const pos = temp.pos;
+      if (pos === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing position");
+      return pos;
+    }
+    if (temp.kind === "interface_field_compound_assignment") {
+      const pos = temp.pos;
+      if (pos === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing position");
+      return pos;
+    }
     if (temp.kind === "interface_field_assignment") {
       const pos = temp.pos;
       if (pos === undefined) throwInternalCodegenError("interface assignment materialized temp missing position");
@@ -9217,6 +9456,68 @@ class Emitter {
   }
 
   private emitAwaitMaterializedTempExpression(temp: AwaitMaterializedTemp, frameRef: string): string {
+    if (temp.kind === "identifier_compound_assignment") {
+      const targetName = temp.targetName;
+      const value = temp.value;
+      const oldValueTempName = temp.oldValueTempName;
+      const op = temp.op;
+      const pos = temp.pos;
+      if (targetName === undefined) throwInternalCodegenError("identifier compound assignment materialized temp missing target name");
+      if (value === undefined) throwInternalCodegenError("identifier compound assignment materialized temp missing value");
+      if (oldValueTempName === undefined) throwInternalCodegenError("identifier compound assignment materialized temp missing old-value temp");
+      if (op === undefined) throwInternalCodegenError("identifier compound assignment materialized temp missing operator");
+      if (pos === undefined) throwInternalCodegenError("identifier compound assignment materialized temp missing position");
+      const valueTmp = `${temp.tempName}_value`;
+      const nextTmp = `${temp.tempName}_next`;
+      const valueExpr = this.emitWithExpected(value, temp.exprType);
+      const oldValueExpr = `${frameRef}->${oldValueTempName}`;
+      const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldValueExpr, valueTmp, temp.exprType, { pos });
+      return `({ ${cTypeName(temp.exprType)} ${valueTmp} = ${valueExpr}; ${cTypeName(temp.exprType)} ${nextTmp} = ${nextExpr}; ${targetName} = ${nextTmp}; ${nextTmp}; })`;
+    }
+    if (temp.kind === "class_field_compound_assignment") {
+      const fieldType = temp.fieldType;
+      const value = temp.value;
+      const receiverTempName = temp.receiverTempName;
+      const fieldName = temp.fieldName;
+      const oldValueTempName = temp.oldValueTempName;
+      const op = temp.op;
+      const pos = temp.pos;
+      if (fieldType === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing field type");
+      if (value === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing value");
+      if (receiverTempName === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing receiver temp");
+      if (fieldName === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing field name");
+      if (oldValueTempName === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing old-value temp");
+      if (op === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing operator");
+      if (pos === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing position");
+      const valueTmp = `${temp.tempName}_value`;
+      const nextTmp = `${temp.tempName}_next`;
+      const valueExpr = this.emitWithExpected(value, fieldType);
+      const oldValueExpr = `${frameRef}->${oldValueTempName}`;
+      const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldValueExpr, valueTmp, fieldType, { pos });
+      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${cTypeName(fieldType)} ${nextTmp} = ${nextExpr}; ${receiverTempName}->${fieldName} = ${nextTmp}; ${nextTmp}; })`;
+    }
+    if (temp.kind === "interface_field_compound_assignment") {
+      const fieldType = temp.fieldType;
+      const value = temp.value;
+      const receiverTempName = temp.receiverTempName;
+      const fieldName = temp.fieldName;
+      const oldValueTempName = temp.oldValueTempName;
+      const op = temp.op;
+      const pos = temp.pos;
+      if (fieldType === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing field type");
+      if (value === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing value");
+      if (receiverTempName === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing receiver temp");
+      if (fieldName === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing field name");
+      if (oldValueTempName === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing old-value temp");
+      if (op === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing operator");
+      if (pos === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing position");
+      const valueTmp = `${temp.tempName}_value`;
+      const nextTmp = `${temp.tempName}_next`;
+      const valueExpr = this.emitWithExpected(value, fieldType);
+      const oldValueExpr = `${frameRef}->${oldValueTempName}`;
+      const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldValueExpr, valueTmp, fieldType, { pos });
+      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${cTypeName(fieldType)} ${nextTmp} = ${nextExpr}; ${receiverTempName}.vt->set_${fieldName}(${receiverTempName}.data, ${nextTmp}); ${nextTmp}; })`;
+    }
     if (temp.kind === "interface_field_assignment") {
       const fieldType = temp.fieldType;
       const value = temp.value;
