@@ -3097,9 +3097,9 @@ run_case await_call_arg_nested_snapshot_array_spread_call_source_leaf $'left\nsy
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_case await_object_literal_mixed_side_effect_deferred_fail $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
 run_case await_object_literal_nested_array_side_effect_deferred_fail $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
-run_fail_case await_object_literal_nested_object_side_effect_deferred_fail examples/await_object_literal_nested_object_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_case await_object_literal_nested_object_side_effect_deferred_fail "2"
 run_case await_object_literal_statement_nested_object_side_effect_snapshot $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
-run_fail_case await_object_literal_statement_nested_object_assignment_deferred_fail examples/await_object_literal_statement_nested_object_assignment_deferred_fail.ts "await expression lowering is deferred"
+run_case await_object_literal_statement_nested_object_assignment_deferred_fail "2"
 run_case await_object_literal_statement_mixed_pure $'left\nsync tail\nright\ndone\nthen'
 run_case await_object_literal_statement_shorthand_deferred_fail $'left\nsync tail\nright\ndone\nthen'
 run_case await_object_literal_statement_nested_array_deferred_fail $'left\nsync tail\nmiddle\nright\ndone\nthen'
@@ -3115,8 +3115,8 @@ run_fail_case async_await_array_element_compound_assignment_type_mismatch_fail e
 run_fail_case await_expression_deferred_fail examples/await_expression_deferred_fail.ts "\`await\` requires an async function"
 run_fail_case await_non_promise_fail examples/await_non_promise_fail.ts "await operand must be Promise<T>, got topaz_number"
 run_fail_case await_multiple_deferred_fail examples/await_multiple_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_binary_mixed_side_effect_deferred_fail examples/await_binary_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_array_literal_mixed_side_effect_deferred_fail examples/await_array_literal_mixed_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_case await_binary_mixed_side_effect_deferred_fail "middle"
+run_case await_array_literal_mixed_side_effect_deferred_fail "middle"
 run_fail_case await_initializer_multiple_deferred_fail examples/await_initializer_multiple_deferred_fail.ts "await expression lowering is deferred"
 run_case await_object_literal_statement_deferred_fail "middle"
 run_case await_call_arg_multiple_deferred_fail $'left\nsync tail\nassign\nright\nread counter\n2\ncombine\n3\n3\n2\nthen\n332'
@@ -3128,9 +3128,9 @@ run_case await_call_arg_assignment_non_array_compound $'local rhs\nsync tail\nlo
 run_fail_case await_call_arg_nested_snapshot_array_spread_conditional_source_deferred_fail examples/await_call_arg_nested_snapshot_array_spread_conditional_source_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_builtin_deferred_fail examples/await_call_arg_builtin_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_fs_write_deferred_fail examples/await_call_arg_fs_write_deferred_fail.ts "writeFileSync returns void and cannot be used as a value"
-run_fail_case await_call_arg_string_static_deferred_fail examples/await_call_arg_string_static_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_call_arg_nested_flat_builtin_deferred_fail examples/await_call_arg_nested_flat_builtin_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_call_arg_path_variadic_deferred_fail examples/await_call_arg_path_variadic_deferred_fail.ts "await expression lowering is deferred"
+run_case await_call_arg_string_static_deferred_fail $'mixed\npost'
+run_case await_call_arg_nested_flat_builtin_deferred_fail $'mixed\npost'
+run_case await_call_arg_path_variadic_deferred_fail $'mixed\npost'
 run_fail_case await_call_arg_pre_sibling_mirror_deferred_fail examples/await_call_arg_pre_sibling_mirror_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_child_process_deferred_fail examples/await_call_arg_child_process_deferred_fail.ts "execFileSync returns void and cannot be used as a value"
 run_fail_case await_call_arg_process_write_deferred_fail examples/await_call_arg_process_write_deferred_fail.ts "process.stdout.write returns void and cannot be used as a value"
@@ -3141,8 +3141,9 @@ run_case await_collection_receiver_arg_nested_deferred_fail $'decl recv\nreturn 
 run_fail_case await_collection_receiver_arg_conditional_deferred_fail examples/await_collection_receiver_arg_conditional_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_call_arg_array_push_deferred_fail examples/await_call_arg_array_push_deferred_fail.ts "Array.push returns void in this dialect and cannot be used as a value"
 run_fail_case await_promise_reject_no_context_fail examples/await_promise_reject_no_context_fail.ts "Promise.reject requires a contextual Promise<T> target"
-run_fail_case await_return_expr_deferred_fail examples/await_return_expr_deferred_fail.ts "await expression lowering is deferred"
-run_fail_case await_expression_statement_deferred_fail examples/await_expression_statement_deferred_fail.ts "await expression lowering is deferred"
+run_case await_return_expr_deferred_fail "middle"
+run_case await_expression_statement_deferred_fail $'middle\n6'
+run_fail_case await_binary_property_assignment_side_effect_deferred_fail examples/await_binary_property_assignment_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_fail_case await_try_deferred_fail examples/await_try_deferred_fail.ts "await inside try/catch/finally is deferred"
 run_fail_case async_function_wrong_return_fail examples/async_function_wrong_return_fail.ts "async function return annotation must be Promise<T>"
 run_fail_case async_function_return_promise_fail examples/async_function_return_promise_fail.ts "type mismatch: expected topaz_number, got topaz_promise_number"

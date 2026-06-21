@@ -9,6 +9,7 @@ async function answer(): Promise<void> {
       right: await Promise.resolve(3),
     },
   });
+  console.log(side);
 }
 
 answer();

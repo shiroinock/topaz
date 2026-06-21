@@ -11,6 +11,7 @@ async function answer(): Promise<number> {
       right: await Promise.resolve(3),
     },
   };
+  console.log(side);
   return payload.nested.middle;
 }
 

@@ -8832,6 +8832,10 @@ class Emitter {
       out.push({ kind: "nested_call", expr: root });
       return true;
     }
+    if (this.isSnapshotMultiAwaitLeaf(root)) {
+      out.push({ kind: "snapshot", expr: root });
+      return true;
+    }
     if (root.kind === "assign_expr") {
       if (root.op !== "=" && !this.isAwaitLowerableCompoundAssignmentOp(root.op)) return false;
       if (this.collectAwaitExprsInExpr(root.target).length > 0) return false;
@@ -8853,10 +8857,6 @@ class Emitter {
       out.push({ kind: "assign_await", expr: root, awaitExpr });
       return true;
     }
-    if (this.isSnapshotMultiAwaitLeaf(root)) {
-      out.push({ kind: "snapshot", expr: root });
-      return true;
-    }
     if (root.kind !== "bin_op") return false;
     if (root.op === "&&" || root.op === "||" || root.op === "??") return false;
     return (
@@ -8867,6 +8867,11 @@ class Emitter {
 
   private isSnapshotMultiAwaitLeaf(expr: Expr): boolean {
     if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
+    if (expr.kind === "assign_expr") {
+      if (expr.op !== "=") return false;
+      const target = this.unwrapParenExpr(expr.target);
+      return target.kind === "ident";
+    }
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
     if (this.firstSpreadArg(expr.args) !== undefined) return false;
@@ -9527,6 +9532,11 @@ class Emitter {
     for (const temp of temps) {
       this.scope.declareBinding(temp.tempName, temp.exprType, /* isConst */ true, { pos: temp.expr.pos });
       lines.push(`${indent}${cTypeName(temp.exprType)} ${temp.tempName} = ctx->${temp.tempName};`);
+      const snapshotExpr = this.unwrapParenExpr(temp.expr);
+      if (snapshotExpr.kind === "assign_expr" && snapshotExpr.op === "=") {
+        const target = this.unwrapParenExpr(snapshotExpr.target);
+        if (target.kind === "ident") lines.push(`${indent}${target.name} = ${temp.tempName};`);
+      }
       lines.push(`${indent}(void)${temp.tempName};`);
     }
   }
