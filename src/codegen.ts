@@ -8602,6 +8602,10 @@ class Emitter {
     if (expr.props.length === 0) return undefined;
     const events: Array<MultiAwaitLeafEvent> = [];
     for (const prop of expr.props) {
+      if (prop.kind === "prop_shorthand") {
+        events.push({ kind: "pure", expr: { kind: "ident", name: prop.name, pos: prop.pos, end: prop.end } });
+        continue;
+      }
       if (prop.kind !== "prop_kv") return undefined;
       const value = this.unwrapParenExpr(prop.value);
       if (value.kind === "await_expr") {
@@ -8626,21 +8630,29 @@ class Emitter {
     }
     const fields = new Map<string, TopazType>();
     for (const prop of transformedRoot.props) {
-      if (prop.kind !== "prop_kv") {
-        throwInternalCodegenError("statement-discard object materialization requires prop_kv fields");
+      let fname = "";
+      let value: Expr = { kind: "ident", name: "", pos: prop.pos, end: prop.end };
+      if (prop.kind === "prop_kv") {
+        fname = prop.name;
+        value = prop.value;
+      } else if (prop.kind === "prop_shorthand") {
+        fname = prop.name;
+        value = { kind: "ident", name: prop.name, pos: prop.pos, end: prop.end };
+      } else {
+        throwInternalCodegenError("statement-discard object materialization requires plain object fields");
       }
-      if (fields.has(prop.name)) {
-        throw new CodegenError({ pos: prop.pos }, `duplicate property '${prop.name}' in object literal`);
+      if (fields.has(fname)) {
+        throw new CodegenError({ pos: prop.pos }, `duplicate property '${fname}' in object literal`);
       }
-      const fieldType = this.inferType(prop.value);
+      const fieldType = this.inferType(value);
       if (fieldType.kind === "undefined") {
         throw new CodegenError(
-          { pos: prop.value.pos },
+          { pos: value.pos },
           "statement-discard object materialization cannot infer a standalone `undefined` property type",
         );
       }
-      this.assertNotVoid(fieldType, { pos: prop.value.pos }, "statement-discard object materialization property");
-      fields.set(prop.name, fieldType);
+      this.assertNotVoid(fieldType, { pos: value.pos }, "statement-discard object materialization property");
+      fields.set(fname, fieldType);
     }
     const anchor: TypeLiteralNode = {
       kind: "type_literal",
