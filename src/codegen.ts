@@ -8615,7 +8615,7 @@ class Emitter {
       }
       if (value.kind === "array_lit") {
         const arrayEvents: Array<MultiAwaitLeafEvent> = [];
-        if (!this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, /* allowSnapshots */ false)) {
+        if (!this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, /* allowSnapshots */ true)) {
           return undefined;
         }
         for (const event of arrayEvents) {

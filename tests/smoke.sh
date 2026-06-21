@@ -3096,7 +3096,7 @@ run_case async_call_arg_contextual_object_array_spread_snapshot_leaf_descriptor_
 run_case await_call_arg_nested_snapshot_array_spread_call_source_leaf $'left\nsync tail\ninner\nitems\n2\nreadBox\n12\nsnapshot\n112\nright\ncombine\n123\n3\nthen\n1126'
 run_fail_case async_function_deferred_fail examples/async_function_deferred_fail.ts "await expression lowering is deferred"
 run_case await_object_literal_mixed_side_effect_deferred_fail $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
-run_fail_case await_object_literal_nested_array_side_effect_deferred_fail examples/await_object_literal_nested_array_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_case await_object_literal_nested_array_side_effect_deferred_fail $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
 run_fail_case await_object_literal_nested_object_side_effect_deferred_fail examples/await_object_literal_nested_object_side_effect_deferred_fail.ts "await expression lowering is deferred"
 run_case await_object_literal_statement_mixed_pure $'left\nsync tail\nright\ndone\nthen'
 run_case await_object_literal_statement_shorthand_deferred_fail $'left\nsync tail\nright\ndone\nthen'
