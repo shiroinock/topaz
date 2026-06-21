@@ -8868,8 +8868,9 @@ class Emitter {
   private isSnapshotMultiAwaitLeaf(expr: Expr): boolean {
     if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
     if (expr.kind === "assign_expr") {
-      if (expr.op !== "=") return false;
       const target = this.unwrapParenExpr(expr.target);
+      if (this.isAwaitLowerableCompoundAssignmentOp(expr.op)) return target.kind === "ident";
+      if (expr.op !== "=") return false;
       if (target.kind === "ident") return true;
       if (target.kind === "prop_access") return this.isClassFieldSnapshotAssignmentTarget(target);
       return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
@@ -9555,7 +9556,10 @@ class Emitter {
       this.scope.declareBinding(temp.tempName, temp.exprType, /* isConst */ true, { pos: temp.expr.pos });
       lines.push(`${indent}${cTypeName(temp.exprType)} ${temp.tempName} = ctx->${temp.tempName};`);
       const snapshotExpr = this.unwrapParenExpr(temp.expr);
-      if (snapshotExpr.kind === "assign_expr" && snapshotExpr.op === "=") {
+      if (
+        snapshotExpr.kind === "assign_expr" &&
+        (snapshotExpr.op === "=" || this.isAwaitLowerableCompoundAssignmentOp(snapshotExpr.op))
+      ) {
         const target = this.unwrapParenExpr(snapshotExpr.target);
         if (target.kind === "ident") lines.push(`${indent}${target.name} = ${temp.tempName};`);
       }
