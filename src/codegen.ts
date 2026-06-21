@@ -319,6 +319,7 @@ type AwaitStatementInfo = {
   stmt: ExprStmt;
   awaitExpr: AwaitExpr;
   transformedExpr?: Expr;
+  statementDiscardMaterializationType?: TopazType | undefined;
   preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
   preAwaitIndexTemps: Array<AwaitIndexTemp>;
   preAwaitArgTemps: Array<AwaitCallArgTemp>;
@@ -350,6 +351,7 @@ type MultiAwaitCallArgStepPlan = {
 type MultiAwaitCallArgPlan = {
   transformedExpr: Expr;
   steps: Array<MultiAwaitCallArgStepPlan>;
+  statementDiscardMaterializationType?: TopazType | undefined;
 };
 
 type MultiAwaitCallArgAwait = {
@@ -5547,6 +5549,7 @@ class Emitter {
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
                     expectedInitializerType !== undefined,
+                    false,
                   ) ??
                   this.tryBuildMultiAwaitCallArgExpression(
                     initMaybe,
@@ -5731,6 +5734,13 @@ class Emitter {
                   s.expr,
                   `__topaz_stmt_await_${steps.length}`,
                   false,
+                  false,
+                ) ??
+                this.tryBuildMultiAwaitObjectLiteralExpression(
+                  s.expr,
+                  `__topaz_stmt_await_${steps.length}`,
+                  true,
+                  true,
                 ) ??
                 this.tryBuildMultiAwaitCallArgExpression(
                   s.expr,
@@ -5745,7 +5755,11 @@ class Emitter {
                 );
               }
               let transformedStatementExpr: Expr | undefined = multiAwait.transformedExpr;
-              if (this.unwrapParenExpr(multiAwait.transformedExpr).kind === "object_lit") {
+              const statementDiscardMaterializationType = multiAwait.statementDiscardMaterializationType;
+              if (
+                statementDiscardMaterializationType === undefined &&
+                this.unwrapParenExpr(multiAwait.transformedExpr).kind === "object_lit"
+              ) {
                 transformedStatementExpr = undefined;
               }
               for (let multiIndex = 0; multiIndex < multiAwait.steps.length; multiIndex++) {
@@ -5786,6 +5800,7 @@ class Emitter {
                     sourcePromiseType: planned.operandInfo.sourcePromiseType,
                     awaitedType: planned.awaitedType,
                     tempName: planned.tempName,
+                    statementDiscardMaterializationType,
                     deferStatementCompletion: multiIndex + 1 < multiAwait.steps.length,
                   });
                 }
@@ -5861,6 +5876,7 @@ class Emitter {
                   valueMaybe,
                   `__topaz_return_await_${steps.length}`,
                   true,
+                  false,
                 ) ??
                 this.tryBuildMultiAwaitCallArgExpression(
                   valueMaybe,
@@ -8504,10 +8520,13 @@ class Emitter {
     expr: Expr,
     tempPrefix: string,
     allowPureLeaves: boolean,
+    statementDiscardMaterialization: boolean,
   ): MultiAwaitCallArgPlan | undefined {
     const rootMaybe = this.unwrapParenExpr(expr);
     if (rootMaybe.kind !== "object_lit") return undefined;
-    const events = this.collectMultiAwaitObjectLiteralProperties(rootMaybe, allowPureLeaves);
+    const events = statementDiscardMaterialization
+      ? this.collectStatementDiscardObjectLiteralProperties(rootMaybe)
+      : this.collectMultiAwaitObjectLiteralProperties(rootMaybe, allowPureLeaves);
     if (events === undefined) return undefined;
     const awaitCount = events.filter((event) => event.kind === "await").length;
     if (awaitCount < 2) return undefined;
@@ -8571,7 +8590,65 @@ class Emitter {
       }
     }
 
-    return { transformedExpr, steps };
+    const statementDiscardMaterializationType = statementDiscardMaterialization
+      ? this.synthesizeStatementDiscardObjectMaterializationType(rootMaybe, transformedExpr)
+      : undefined;
+    return { transformedExpr, steps, statementDiscardMaterializationType };
+  }
+
+  private collectStatementDiscardObjectLiteralProperties(
+    expr: ObjectLitExpr,
+  ): Array<MultiAwaitLeafEvent> | undefined {
+    if (expr.props.length === 0) return undefined;
+    const events: Array<MultiAwaitLeafEvent> = [];
+    for (const prop of expr.props) {
+      if (prop.kind !== "prop_kv") return undefined;
+      const value = this.unwrapParenExpr(prop.value);
+      if (value.kind === "await_expr") {
+        if (this.collectAwaitExprsInExpr(value.operand).length > 0) return undefined;
+        events.push({ kind: "await", awaitExpr: value });
+        continue;
+      }
+      if (value.kind === "array_lit" || value.kind === "object_lit") return undefined;
+      if (!this.isSideEffectFreeMultiAwaitLeaf(value)) return undefined;
+      events.push({ kind: "pure", expr: value });
+    }
+    return events;
+  }
+
+  private synthesizeStatementDiscardObjectMaterializationType(
+    root: ObjectLitExpr,
+    transformedExpr: Expr,
+  ): TopazType {
+    const transformedRoot = this.unwrapParenExpr(transformedExpr);
+    if (transformedRoot.kind !== "object_lit") {
+      throwInternalCodegenError("statement-discard object materialization requires object literal root");
+    }
+    const fields = new Map<string, TopazType>();
+    for (const prop of transformedRoot.props) {
+      if (prop.kind !== "prop_kv") {
+        throwInternalCodegenError("statement-discard object materialization requires prop_kv fields");
+      }
+      if (fields.has(prop.name)) {
+        throw new CodegenError({ pos: prop.pos }, `duplicate property '${prop.name}' in object literal`);
+      }
+      const fieldType = this.inferType(prop.value);
+      if (fieldType.kind === "undefined") {
+        throw new CodegenError(
+          { pos: prop.value.pos },
+          "statement-discard object materialization cannot infer a standalone `undefined` property type",
+        );
+      }
+      this.assertNotVoid(fieldType, { pos: prop.value.pos }, "statement-discard object materialization property");
+      fields.set(prop.name, fieldType);
+    }
+    const anchor: TypeLiteralNode = {
+      kind: "type_literal",
+      members: [],
+      pos: root.pos,
+      end: root.end,
+    };
+    return classOf(this.recordAnonClass(fields, new Set<string>(), anchor));
   }
 
   private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<MultiAwaitLeafEvent> | undefined {
@@ -10050,7 +10127,15 @@ class Emitter {
               lines.push(`        (void)${current.tempName};`);
             }
             this.emitAwaitMaterializedTempStores(current.postAwaitMaterializedTemps, "ctx", lines, "        ");
-            lines.push(`        ${this.emitExpression(transformedExpr)};`);
+            const materializationType = current.statementDiscardMaterializationType;
+            if (materializationType !== undefined) {
+              const materializedTmp = `${current.tempName}_object`;
+              const materializedExpr = this.emitWithExpected(this.unwrapParenExpr(transformedExpr), materializationType);
+              lines.push(`        ${cTypeName(materializationType)} ${materializedTmp} = ${materializedExpr};`);
+              lines.push(`        (void)${materializedTmp};`);
+            } else {
+              lines.push(`        ${this.emitExpression(transformedExpr)};`);
+            }
           }
           // Plain awaited expression statements intentionally discard the
           // fulfilled payload; transformed call statements discard the call
