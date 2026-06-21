@@ -8889,6 +8889,11 @@ class Emitter {
       }
       return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
     }
+    if (expr.kind === "prefix_op" && (expr.op === "++" || expr.op === "--")) {
+      const target = this.unwrapParenExpr(expr.operand);
+      if (target.kind === "ident") return true;
+      return target.kind === "prop_access" && this.isClassFieldSnapshotAssignmentTarget(target);
+    }
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
     if (this.firstSpreadArg(expr.args) !== undefined) return false;
@@ -9586,6 +9591,9 @@ class Emitter {
         (snapshotExpr.op === "=" || this.isAwaitLowerableCompoundAssignmentOp(snapshotExpr.op))
       ) {
         const target = this.unwrapParenExpr(snapshotExpr.target);
+        if (target.kind === "ident") lines.push(`${indent}${target.name} = ${temp.tempName};`);
+      } else if (snapshotExpr.kind === "prefix_op" && (snapshotExpr.op === "++" || snapshotExpr.op === "--")) {
+        const target = this.unwrapParenExpr(snapshotExpr.operand);
         if (target.kind === "ident") lines.push(`${indent}${target.name} = ${temp.tempName};`);
       }
       lines.push(`${indent}(void)${temp.tempName};`);
