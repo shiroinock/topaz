@@ -8869,7 +8869,11 @@ class Emitter {
     if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
     if (expr.kind === "assign_expr") {
       const target = this.unwrapParenExpr(expr.target);
-      if (this.isAwaitLowerableCompoundAssignmentOp(expr.op)) return target.kind === "ident";
+      if (this.isAwaitLowerableCompoundAssignmentOp(expr.op)) {
+        if (target.kind === "ident") return true;
+        if (target.kind === "prop_access") return this.isClassFieldSnapshotAssignmentTarget(target);
+        return false;
+      }
       if (expr.op !== "=") return false;
       if (target.kind === "ident") return true;
       if (target.kind === "prop_access") return this.isClassFieldSnapshotAssignmentTarget(target);

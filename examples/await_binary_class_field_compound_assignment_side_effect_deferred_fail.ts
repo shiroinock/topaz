@@ -9,7 +9,11 @@ class Box {
 
 async function answer(): Promise<number> {
   const box = new Box(1);
-  return await Promise.resolve(10) + (box.value += 2) + await Promise.resolve(30);
+  const total = await Promise.resolve(10) + (box.value += 2) + await Promise.resolve(30);
+  console.log(box.value);
+  return total;
 }
 
-answer();
+answer().then((value: number): void => {
+  console.log(value);
+});
