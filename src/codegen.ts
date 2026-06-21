@@ -8870,7 +8870,8 @@ class Emitter {
     if (expr.kind === "assign_expr") {
       if (expr.op !== "=") return false;
       const target = this.unwrapParenExpr(expr.target);
-      return target.kind === "ident";
+      if (target.kind === "ident") return true;
+      return target.kind === "prop_access" && this.isClassFieldSnapshotAssignmentTarget(target);
     }
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
@@ -8878,6 +8879,17 @@ class Emitter {
     const callee = expr.callee;
     if (callee.kind === "prop_access" && callee.optional) return false;
     return true;
+  }
+
+  private isClassFieldSnapshotAssignmentTarget(target: PropAccessExpr): boolean {
+    if (target.optional) return false;
+    if (!this.isSafeLvalueBase(target.receiver)) return false;
+    const receiverType = this.inferType(target.receiver);
+    if (!isClassType(receiverType)) return false;
+    const className = classNameOf(receiverType);
+    if (className === undefined) return false;
+    const cls = this.classes.get(className);
+    return cls !== undefined && cls.fields.has(target.name);
   }
 
   private isSideEffectFreeMultiAwaitLeaf(expr: Expr): boolean {
