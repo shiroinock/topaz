@@ -3098,6 +3098,8 @@ run_fail_case async_function_deferred_fail examples/async_function_deferred_fail
 run_case await_object_literal_mixed_side_effect_deferred_fail $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
 run_case await_object_literal_nested_array_side_effect_deferred_fail $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
 run_fail_case await_object_literal_nested_object_side_effect_deferred_fail examples/await_object_literal_nested_object_side_effect_deferred_fail.ts "await expression lowering is deferred"
+run_case await_object_literal_statement_nested_object_side_effect_snapshot $'left\nsync tail\nmiddle\nright\ntail\ndone\nthen'
+run_fail_case await_object_literal_statement_nested_object_assignment_deferred_fail examples/await_object_literal_statement_nested_object_assignment_deferred_fail.ts "await expression lowering is deferred"
 run_case await_object_literal_statement_mixed_pure $'left\nsync tail\nright\ndone\nthen'
 run_case await_object_literal_statement_shorthand_deferred_fail $'left\nsync tail\nright\ndone\nthen'
 run_case await_object_literal_statement_nested_array_deferred_fail $'left\nsync tail\nmiddle\nright\ndone\nthen'

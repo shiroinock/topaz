@@ -8629,7 +8629,7 @@ class Emitter {
           value,
           /* allowPureLeaves */ true,
           objectEvents,
-          /* allowSnapshots */ false,
+          /* allowSnapshots */ true,
         )) {
           return undefined;
         }
