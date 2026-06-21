@@ -13,7 +13,11 @@ class Box implements Slot {
 
 async function answer(): Promise<number> {
   const slot: Slot = new Box(1);
-  return await Promise.resolve(10) + (slot.value += 2) + await Promise.resolve(30);
+  const total = await Promise.resolve(10) + (slot.value += 2) + await Promise.resolve(30);
+  console.log(slot.value);
+  return total;
 }
 
-answer();
+answer().then((value: number): void => {
+  console.log(value);
+});

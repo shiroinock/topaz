@@ -8871,12 +8871,22 @@ class Emitter {
       const target = this.unwrapParenExpr(expr.target);
       if (this.isAwaitLowerableCompoundAssignmentOp(expr.op)) {
         if (target.kind === "ident") return true;
-        if (target.kind === "prop_access") return this.isClassFieldSnapshotAssignmentTarget(target);
+        if (target.kind === "prop_access") {
+          return (
+            this.isClassFieldSnapshotAssignmentTarget(target) ||
+            this.isInterfaceFieldSnapshotAssignmentTarget(target)
+          );
+        }
         return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
       }
       if (expr.op !== "=") return false;
       if (target.kind === "ident") return true;
-      if (target.kind === "prop_access") return this.isClassFieldSnapshotAssignmentTarget(target);
+      if (target.kind === "prop_access") {
+        return (
+          this.isClassFieldSnapshotAssignmentTarget(target) ||
+          this.isInterfaceFieldSnapshotAssignmentTarget(target)
+        );
+      }
       return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
     }
     if (expr.kind !== "call_expr") return false;
@@ -8896,6 +8906,17 @@ class Emitter {
     if (className === undefined) return false;
     const cls = this.classes.get(className);
     return cls !== undefined && cls.fields.has(target.name);
+  }
+
+  private isInterfaceFieldSnapshotAssignmentTarget(target: PropAccessExpr): boolean {
+    if (target.optional) return false;
+    if (!this.isSafeLvalueBase(target.receiver)) return false;
+    const receiverType = this.inferType(target.receiver);
+    if (!isInterfaceType(receiverType)) return false;
+    const interfaceName = interfaceNameOf(receiverType);
+    if (interfaceName === undefined) return false;
+    const iface = this.interfaces.get(interfaceName);
+    return iface !== undefined && iface.fields.has(target.name);
   }
 
   private isArrayElementSnapshotAssignmentTarget(target: ElemAccessExpr): boolean {
@@ -15108,7 +15129,7 @@ class Emitter {
     const fieldC = cTypeName(fieldType);
     const getter = `${baseTmp}.vt->get_${target.name}(${baseTmp}.data)`;
     const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldTmp, rhsStr, fieldType, anchor);
-    return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); })`;
+    return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); ${nextTmp}; })`;
   }
 
   private emitArrayElementCompoundAssignment(
@@ -15480,12 +15501,10 @@ class Emitter {
           }
           const id = this.tmpCounter++;
           const tmp = `__topaz_ib_${id}`;
+          const valueTmp = `__topaz_if_value_${id}`;
           const baseStr = this.emitExpression(target.receiver);
           const rhsStr = this.emitWithExpected(expr.value, ftype);
-          // The vtable setter returns void, so this expression's value is
-          // void. Chained assignment (`x = (iface.field = v)`) is therefore
-          // unsupported — acceptable for now since it's a rare pattern.
-          return `({ ${cTypeName(baseT)} ${tmp} = ${baseStr}; ${tmp}.vt->set_${fname}(${tmp}.data, ${rhsStr}); })`;
+          return `({ ${cTypeName(baseT)} ${tmp} = ${baseStr}; ${cTypeName(ftype)} ${valueTmp} = ${rhsStr}; ${tmp}.vt->set_${fname}(${tmp}.data, ${valueTmp}); ${valueTmp}; })`;
         }
       }
       // Plain assignment with rhs coercion (covers `let a: Shape = ...; a = new Circle(...)`
