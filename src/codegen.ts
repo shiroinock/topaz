@@ -186,6 +186,8 @@ type AwaitMaterializedTemp = {
   fieldType?: TopazType;
   elemType?: TopazType;
   value?: Expr;
+  receiverCapturedBeforeAwait: boolean;
+  oldValueCapturedBeforeAwait: boolean;
   exprType: TopazType;
   pos?: number;
 };
@@ -236,6 +238,13 @@ type AwaitedAssignmentLeaf =
       expr: AssignExpr;
       exprType: TopazType;
       targetRef: AwaitTargetRef;
+    }
+  | {
+      kind: "class_field_assignment";
+      targetRef: AwaitClassFieldTargetRef;
+      value: Expr;
+      exprType: TopazType;
+      pos: number;
     }
   | {
       kind: "interface_field_assignment";
@@ -5549,6 +5558,10 @@ class Emitter {
                   expectedInitializerType = annotatedInitializerType;
                 }
                 const multiAwait =
+                  this.tryBuildMultiAwaitAssignmentExpression(
+                    initMaybe,
+                    `__topaz_init_await_${steps.length}`,
+                  ) ??
                   this.tryBuildMultiAwaitBinaryExpression(
                     initMaybe,
                     `__topaz_init_await_${steps.length}`,
@@ -5734,6 +5747,10 @@ class Emitter {
           if (statementAwaits.length > 0) {
             if (statementAwaits.length > 1) {
               const multiAwait =
+                this.tryBuildMultiAwaitAssignmentExpression(
+                  s.expr,
+                  `__topaz_stmt_await_${steps.length}`,
+                ) ??
                 this.tryBuildMultiAwaitBinaryExpression(
                   s.expr,
                   `__topaz_stmt_await_${steps.length}`,
@@ -5876,6 +5893,10 @@ class Emitter {
           if (returnAwaits.length > 0) {
             if (returnAwaits.length > 1) {
               const multiAwait =
+                this.tryBuildMultiAwaitAssignmentExpression(
+                  valueMaybe,
+                  `__topaz_return_await_${steps.length}`,
+                ) ??
                 this.tryBuildMultiAwaitBinaryExpression(
                   valueMaybe,
                   `__topaz_return_await_${steps.length}`,
@@ -6332,6 +6353,8 @@ class Emitter {
     switch (materialized.kind) {
       case "expr":
         return materialized.targetRef;
+      case "class_field_assignment":
+        return materialized.targetRef;
       case "interface_field_assignment":
         return materialized.targetRef;
       case "array_element_assignment":
@@ -6362,8 +6385,35 @@ class Emitter {
     const target = this.unwrapParenExpr(expr.target);
     const targetRef = this.tryBuildAwaitAssignmentTargetRef(target, awaitedTempExpr.name);
     if (targetRef === undefined) return undefined;
+    return this.buildAwaitedAssignmentLeafWithValue(
+      expr,
+      target,
+      targetRef,
+      this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr),
+      `${awaitedTempExpr.name}_old`,
+    );
+  }
+
+  private buildAwaitedAssignmentLeafWithValue(
+    expr: AssignExpr,
+    target: Expr,
+    targetRef: AwaitTargetRef,
+    transformedValue: Expr,
+    oldValueTempName: string,
+  ): AwaitedAssignmentLeaf {
     this.checkAssignTarget(target, { pos: expr.pos });
-    const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
+
+    if (expr.op === "=" && targetRef.kind === "class_field") {
+      this.expectType(transformedValue, targetRef.fieldType);
+      this.assertNotVoid(targetRef.fieldType, { pos: expr.pos }, "await call-argument assignment leaf");
+      return {
+        kind: "class_field_assignment",
+        targetRef,
+        value: transformedValue,
+        exprType: targetRef.fieldType,
+        pos: expr.pos,
+      };
+    }
 
     if (expr.op === "=" && targetRef.kind === "interface_field") {
       this.expectType(transformedValue, targetRef.fieldType);
@@ -6402,7 +6452,6 @@ class Emitter {
       return { kind: "expr", expr: transformedExpr, exprType, targetRef };
     }
 
-    const oldValueTempName = `${awaitedTempExpr.name}_old`;
     switch (targetRef.kind) {
       case "identifier":
         return {
@@ -6456,6 +6505,8 @@ class Emitter {
         return {
           kind: "identifier_compound_assignment",
           tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
           targetName: materialized.targetRef.targetName,
           oldValueTempName: materialized.oldValueTempName,
           op: materialized.op,
@@ -6467,6 +6518,8 @@ class Emitter {
         return {
           kind: "class_field_compound_assignment",
           tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
           receiverTempName: materialized.targetRef.receiverTemp.tempName,
           receiverType: materialized.targetRef.receiverType,
           fieldName: materialized.targetRef.fieldName,
@@ -6481,6 +6534,8 @@ class Emitter {
         return {
           kind: "interface_field_compound_assignment",
           tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
           receiverTempName: materialized.targetRef.receiverTemp.tempName,
           receiverType: materialized.targetRef.receiverType,
           fieldName: materialized.targetRef.fieldName,
@@ -6491,10 +6546,26 @@ class Emitter {
           exprType: materialized.exprType,
           pos: materialized.pos,
         };
+      case "class_field_assignment":
+        return {
+          kind: "class_field_assignment",
+          tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
+          receiverTempName: materialized.targetRef.receiverTemp.tempName,
+          receiverType: materialized.targetRef.receiverType,
+          fieldName: materialized.targetRef.fieldName,
+          fieldType: materialized.targetRef.fieldType,
+          value: materialized.value,
+          exprType: materialized.exprType,
+          pos: materialized.pos,
+        };
       case "interface_field_assignment":
         return {
           kind: "interface_field_assignment",
           tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
           receiverTempName: materialized.targetRef.receiverTemp.tempName,
           receiverType: materialized.targetRef.receiverType,
           fieldName: materialized.targetRef.fieldName,
@@ -6507,6 +6578,8 @@ class Emitter {
         return {
           kind: "array_element_assignment",
           tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
           receiverTempName: materialized.targetRef.receiverTemp.tempName,
           indexTempName: materialized.targetRef.indexTemp.tempName,
           arrayType: materialized.targetRef.arrayType,
@@ -6519,6 +6592,8 @@ class Emitter {
         return {
           kind: "array_element_compound_assignment",
           tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
           receiverTempName: materialized.targetRef.receiverTemp.tempName,
           indexTempName: materialized.targetRef.indexTemp.tempName,
           oldValueTempName: materialized.oldValueTempName,
@@ -6533,6 +6608,8 @@ class Emitter {
         return {
           kind: "expr",
           tempName,
+          receiverCapturedBeforeAwait: false,
+          oldValueCapturedBeforeAwait: false,
           expr: materialized.expr,
           exprType: materialized.exprType,
         };
@@ -7737,6 +7814,8 @@ class Emitter {
       materializeStep.postAwaitMaterializedTemps.push({
         kind: "expr",
         tempName: nestedPlan.resultTempName,
+        receiverCapturedBeforeAwait: false,
+        oldValueCapturedBeforeAwait: false,
         expr: transformedCall,
         exprType: resultType,
       });
@@ -8361,6 +8440,120 @@ class Emitter {
       kind === "path_join" ||
       kind === "url_file_url_to_path"
     );
+  }
+
+  private tryBuildMultiAwaitAssignmentExpression(
+    expr: Expr,
+    tempPrefix: string,
+  ): MultiAwaitCallArgPlan | undefined {
+    const root = this.unwrapParenExpr(expr);
+    if (root.kind !== "assign_expr") return undefined;
+    if (root.op !== "=" && !this.isAwaitLowerableCompoundAssignmentOp(root.op)) return undefined;
+    if (this.collectAwaitExprsInExpr(root.target).length > 0) return undefined;
+    const target = this.unwrapParenExpr(root.target);
+    const targetRef = this.tryBuildAwaitAssignmentTargetRef(target, `${tempPrefix}_assign`);
+    if (targetRef === undefined) return undefined;
+
+    const events: Array<MultiAwaitLeafEvent> = [];
+    if (!this.collectMultiAwaitBinaryLeafEvents(root.value, events)) return undefined;
+    const awaitCount = events.filter((event) => event.kind === "await").length;
+    if (awaitCount < 2) return undefined;
+
+    let transformedValue: Expr = root.value;
+    const steps: Array<MultiAwaitCallArgStepPlan> = [];
+    let pendingSnapshots: Array<AwaitSnapshotTemp> = [];
+    let snapshotIndex = 0;
+    for (const event of events) {
+      switch (event.kind) {
+        case "pure":
+          break;
+        case "snapshot": {
+          const snapshotExpr = event.expr;
+          const exprType = this.inferType(snapshotExpr);
+          this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await assignment RHS snapshot value");
+          if (steps.length < awaitCount) {
+            const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
+            snapshotIndex++;
+            this.scope.declareBinding(tempName, exprType, /* isConst */ true, { pos: snapshotExpr.pos });
+            const tempExpr: IdentExpr = {
+              kind: "ident",
+              name: tempName,
+              pos: snapshotExpr.pos,
+              end: snapshotExpr.end,
+            };
+            transformedValue = this.replaceExactExprInExpr(transformedValue, snapshotExpr, tempExpr);
+            pendingSnapshots.push({ tempName, expr: snapshotExpr, exprType });
+          }
+          break;
+        }
+        case "await": {
+          const awaitExpr = event.awaitExpr;
+          const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
+          if (operandInfo.awaitedType.kind === "void") return undefined;
+          const tempName = `${tempPrefix}_${steps.length}`;
+          this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
+          const tempExpr: IdentExpr = {
+            kind: "ident",
+            name: tempName,
+            pos: awaitExpr.pos,
+            end: awaitExpr.end,
+          };
+          transformedValue = this.replaceAwaitExprInExpr(transformedValue, awaitExpr, tempExpr);
+          const preAwaitSnapshotTemps = pendingSnapshots;
+          const nextPendingSnapshots: Array<AwaitSnapshotTemp> = [];
+          pendingSnapshots = nextPendingSnapshots;
+          steps.push({
+            awaitExpr,
+            operandInfo,
+            awaitedType: operandInfo.awaitedType,
+            tempName,
+            preAwaitReceiverTemps: [],
+            preAwaitIndexTemps: [],
+            preAwaitArgTemps: [],
+            preAwaitSnapshotTemps,
+            postAwaitMaterializedTemps: [],
+          });
+          break;
+        }
+      }
+    }
+
+    this.checkAssignTarget(target, { pos: root.pos });
+    const firstStep = steps[0];
+    firstStep.preAwaitReceiverTemps = this.awaitTargetRefReceiverTemps(targetRef);
+    firstStep.preAwaitIndexTemps = this.awaitTargetRefIndexTemps(targetRef);
+    const oldValueTempName = `${tempPrefix}_assign_old`;
+    if (root.op !== "=") {
+      const oldValueType = this.inferType(target);
+      this.scope.declareBinding(oldValueTempName, oldValueType, /* isConst */ true, { pos: target.pos });
+      const firstSnapshots: Array<AwaitSnapshotTemp> = [
+        { tempName: oldValueTempName, expr: target, exprType: oldValueType },
+      ];
+      for (const snapshot of firstStep.preAwaitSnapshotTemps) firstSnapshots.push(snapshot);
+      firstStep.preAwaitSnapshotTemps = firstSnapshots;
+    }
+
+    const materialized = this.buildAwaitedAssignmentLeafWithValue(
+      root,
+      target,
+      targetRef,
+      transformedValue,
+      oldValueTempName,
+    );
+    const materializedTempName = `${tempPrefix}_assign_value`;
+    this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, { pos: root.pos });
+    const materializedTemp = this.buildAwaitMaterializedTemp(materializedTempName, materialized);
+    materializedTemp.receiverCapturedBeforeAwait = true;
+    if (root.op !== "=") materializedTemp.oldValueCapturedBeforeAwait = true;
+    steps[steps.length - 1].postAwaitMaterializedTemps.push(materializedTemp);
+
+    const transformedExpr: IdentExpr = {
+      kind: "ident",
+      name: materializedTempName,
+      pos: root.pos,
+      end: root.end,
+    };
+    return { transformedExpr, steps };
   }
 
   private tryBuildMultiAwaitBinaryExpression(
@@ -9752,7 +9945,9 @@ class Emitter {
       if (oldValueTempName === undefined) {
         throwInternalCodegenError("compound assignment materialized temp missing old-value temp");
       }
-      fields.push(`  ${cTypeName(temp.exprType)} ${oldValueTempName};`);
+      if (temp.oldValueCapturedBeforeAwait !== true) {
+        fields.push(`  ${cTypeName(temp.exprType)} ${oldValueTempName};`);
+      }
     }
     fields.push(`  ${cTypeName(temp.exprType)} ${temp.tempName};`);
   }
@@ -9770,6 +9965,7 @@ class Emitter {
         temp.kind !== "interface_field_compound_assignment" &&
         temp.kind !== "array_element_compound_assignment"
       ) continue;
+      if (temp.oldValueCapturedBeforeAwait === true) continue;
       const oldValueTempName = temp.oldValueTempName;
       if (oldValueTempName === undefined) {
         throwInternalCodegenError("compound assignment materialized temp missing old-value temp");
@@ -9881,6 +10077,11 @@ class Emitter {
       if (pos === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing position");
       return pos;
     }
+    if (temp.kind === "class_field_assignment") {
+      const pos = temp.pos;
+      if (pos === undefined) throwInternalCodegenError("class assignment materialized temp missing position");
+      return pos;
+    }
     if (temp.kind === "interface_field_assignment") {
       const pos = temp.pos;
       if (pos === undefined) throwInternalCodegenError("interface assignment materialized temp missing position");
@@ -9937,10 +10138,11 @@ class Emitter {
       if (pos === undefined) throwInternalCodegenError("class field compound assignment materialized temp missing position");
       const valueTmp = `${temp.tempName}_value`;
       const nextTmp = `${temp.tempName}_next`;
+      const receiverExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${receiverTempName}` : receiverTempName;
       const valueExpr = this.emitWithExpected(value, fieldType);
       const oldValueExpr = `${frameRef}->${oldValueTempName}`;
       const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldValueExpr, valueTmp, fieldType, { pos });
-      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${cTypeName(fieldType)} ${nextTmp} = ${nextExpr}; ${receiverTempName}->${fieldName} = ${nextTmp}; ${nextTmp}; })`;
+      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${cTypeName(fieldType)} ${nextTmp} = ${nextExpr}; ${receiverExpr}->${fieldName} = ${nextTmp}; ${nextTmp}; })`;
     }
     if (temp.kind === "interface_field_compound_assignment") {
       const fieldType = temp.fieldType;
@@ -9959,10 +10161,25 @@ class Emitter {
       if (pos === undefined) throwInternalCodegenError("interface field compound assignment materialized temp missing position");
       const valueTmp = `${temp.tempName}_value`;
       const nextTmp = `${temp.tempName}_next`;
+      const receiverExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${receiverTempName}` : receiverTempName;
       const valueExpr = this.emitWithExpected(value, fieldType);
       const oldValueExpr = `${frameRef}->${oldValueTempName}`;
       const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldValueExpr, valueTmp, fieldType, { pos });
-      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${cTypeName(fieldType)} ${nextTmp} = ${nextExpr}; ${receiverTempName}.vt->set_${fieldName}(${receiverTempName}.data, ${nextTmp}); ${nextTmp}; })`;
+      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${cTypeName(fieldType)} ${nextTmp} = ${nextExpr}; ${receiverExpr}.vt->set_${fieldName}(${receiverExpr}.data, ${nextTmp}); ${nextTmp}; })`;
+    }
+    if (temp.kind === "class_field_assignment") {
+      const fieldType = temp.fieldType;
+      const value = temp.value;
+      const receiverTempName = temp.receiverTempName;
+      const fieldName = temp.fieldName;
+      if (fieldType === undefined) throwInternalCodegenError("class assignment materialized temp missing field type");
+      if (value === undefined) throwInternalCodegenError("class assignment materialized temp missing value");
+      if (receiverTempName === undefined) throwInternalCodegenError("class assignment materialized temp missing receiver temp");
+      if (fieldName === undefined) throwInternalCodegenError("class assignment materialized temp missing field name");
+      const receiverExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${receiverTempName}` : receiverTempName;
+      const valueTmp = `${temp.tempName}_value`;
+      const valueExpr = this.emitWithExpected(value, fieldType);
+      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${receiverExpr}->${fieldName} = ${valueTmp}; ${valueTmp}; })`;
     }
     if (temp.kind === "interface_field_assignment") {
       const fieldType = temp.fieldType;
@@ -9973,9 +10190,10 @@ class Emitter {
       if (value === undefined) throwInternalCodegenError("interface assignment materialized temp missing value");
       if (receiverTempName === undefined) throwInternalCodegenError("interface assignment materialized temp missing receiver temp");
       if (fieldName === undefined) throwInternalCodegenError("interface assignment materialized temp missing field name");
+      const receiverExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${receiverTempName}` : receiverTempName;
       const valueTmp = `${temp.tempName}_value`;
       const valueExpr = this.emitWithExpected(value, fieldType);
-      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${receiverTempName}.vt->set_${fieldName}(${receiverTempName}.data, ${valueTmp}); ${valueTmp}; })`;
+      return `({ ${cTypeName(fieldType)} ${valueTmp} = ${valueExpr}; ${receiverExpr}.vt->set_${fieldName}(${receiverExpr}.data, ${valueTmp}); ${valueTmp}; })`;
     }
     if (temp.kind === "array_element_assignment") {
       const elemType = temp.elemType;
@@ -9988,10 +10206,12 @@ class Emitter {
       if (value === undefined) throwInternalCodegenError("array element assignment materialized temp missing value");
       if (receiverTempName === undefined) throwInternalCodegenError("array element assignment materialized temp missing receiver temp");
       if (indexTempName === undefined) throwInternalCodegenError("array element assignment materialized temp missing index temp");
+      const receiverExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${receiverTempName}` : receiverTempName;
+      const indexExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${indexTempName}` : indexTempName;
       const valueTmp = `${temp.tempName}_value`;
       const valueExpr = this.emitWithExpected(value, elemType);
       const arrayName = arrayShortName(arrayType);
-      return `({ ${cTypeName(elemType)} ${valueTmp} = ${valueExpr}; topaz_array_${arrayName}_set(${receiverTempName}, ${indexTempName}, ${valueTmp}); ${valueTmp}; })`;
+      return `({ ${cTypeName(elemType)} ${valueTmp} = ${valueExpr}; topaz_array_${arrayName}_set(${receiverExpr}, ${indexExpr}, ${valueTmp}); ${valueTmp}; })`;
     }
     if (temp.kind === "array_element_compound_assignment") {
       const elemType = temp.elemType;
@@ -10011,12 +10231,14 @@ class Emitter {
       if (op === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing operator");
       if (pos === undefined) throwInternalCodegenError("array element compound assignment materialized temp missing position");
       const arrayName = arrayShortName(arrayType);
+      const receiverExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${receiverTempName}` : receiverTempName;
+      const indexExpr = temp.receiverCapturedBeforeAwait === true ? `${frameRef}->${indexTempName}` : indexTempName;
       const valueTmp = `${temp.tempName}_value`;
       const nextTmp = `${temp.tempName}_next`;
       const valueExpr = this.emitWithExpected(value, elemType);
       const oldValueExpr = `${frameRef}->${oldValueTempName}`;
       const nextExpr = this.emitCompoundAssignmentNextExpression(op, oldValueExpr, valueTmp, elemType, { pos });
-      return `({ ${cTypeName(elemType)} ${valueTmp} = ${valueExpr}; ${cTypeName(elemType)} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${receiverTempName}, ${indexTempName}, ${nextTmp}); ${nextTmp}; })`;
+      return `({ ${cTypeName(elemType)} ${valueTmp} = ${valueExpr}; ${cTypeName(elemType)} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${receiverExpr}, ${indexExpr}, ${nextTmp}); ${nextTmp}; })`;
     }
     const expr = temp.expr;
     if (expr === undefined) throwInternalCodegenError("expression materialized temp missing expression");
