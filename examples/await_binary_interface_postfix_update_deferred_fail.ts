@@ -12,8 +12,26 @@ class Box implements Slot {
 }
 
 async function answer(): Promise<number> {
-  const slot: Slot = new Box(1);
-  return await Promise.resolve(10) + (slot.value++) + await Promise.resolve(30);
+  const incrementSlot: Slot = new Box(1);
+  const decrementSlot: Slot = new Box(5);
+
+  const normalIncrement = incrementSlot.value++;
+  const normalDecrement = decrementSlot.value--;
+  console.log(normalIncrement);
+  console.log(incrementSlot.value);
+  console.log(normalDecrement);
+  console.log(decrementSlot.value);
+
+  const total =
+    await Promise.resolve(100) +
+    (incrementSlot.value++) +
+    (decrementSlot.value--) +
+    await Promise.resolve(1000);
+  console.log(incrementSlot.value);
+  console.log(decrementSlot.value);
+  return total;
 }
 
-answer();
+answer().then((value: number): void => {
+  console.log(value);
+});
