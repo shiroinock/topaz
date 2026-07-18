@@ -8892,7 +8892,13 @@ class Emitter {
     if (expr.kind === "prefix_op" && (expr.op === "++" || expr.op === "--")) {
       const target = this.unwrapParenExpr(expr.operand);
       if (target.kind === "ident") return true;
-      return target.kind === "prop_access" && this.isClassFieldSnapshotAssignmentTarget(target);
+      if (target.kind === "prop_access") {
+        return (
+          this.isClassFieldSnapshotAssignmentTarget(target) ||
+          this.isInterfaceFieldSnapshotAssignmentTarget(target)
+        );
+      }
+      return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
     }
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
@@ -15167,6 +15173,52 @@ class Emitter {
     return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); ${nextTmp}; })`;
   }
 
+  private emitPrefixUpdateNextExpression(op: string, oldExpr: string, anchor: { pos: number }): string {
+    if (op === "++") return `${oldExpr} + 1.0`;
+    if (op === "--") return `${oldExpr} - 1.0`;
+    throw new CodegenError(anchor, `unsupported prefix update operator '${op}'`);
+  }
+
+  private emitInterfaceFieldPrefixUpdate(
+    target: PropAccessExpr,
+    op: string,
+    baseType: TopazType,
+    fieldType: TopazType,
+    anchor: { pos: number },
+  ): string {
+    const id = this.tmpCounter++;
+    const baseTmp = `__topaz_ib_${id}`;
+    const oldTmp = `__topaz_if_old_${id}`;
+    const nextTmp = `__topaz_if_next_${id}`;
+    const baseStr = this.emitExpression(target.receiver);
+    const fieldC = cTypeName(fieldType);
+    const getter = `${baseTmp}.vt->get_${target.name}(${baseTmp}.data)`;
+    const nextExpr = this.emitPrefixUpdateNextExpression(op, oldTmp, anchor);
+    return `({ ${cTypeName(baseType)} ${baseTmp} = ${baseStr}; ${fieldC} ${oldTmp} = ${getter}; ${fieldC} ${nextTmp} = ${nextExpr}; ${baseTmp}.vt->set_${target.name}(${baseTmp}.data, ${nextTmp}); ${nextTmp}; })`;
+  }
+
+  private emitArrayElementPrefixUpdate(
+    target: ElemAccessExpr,
+    op: string,
+    baseType: TopazType,
+    elemType: TopazType,
+    anchor: { pos: number },
+  ): string {
+    const id = this.tmpCounter++;
+    const arrayName = arrayShortName(baseType);
+    const baseTmp = `__topaz_ab_${id}`;
+    const indexTmp = `__topaz_ai_${id}`;
+    const oldTmp = `__topaz_ae_old_${id}`;
+    const nextTmp = `__topaz_ae_next_${id}`;
+    const baseStr = this.emitExpression(target.receiver);
+    const indexStr = this.emitWithExpected(target.index, T_NUMBER);
+    const elemC = cTypeName(elemType);
+    const baseC = cTypeName(baseType);
+    const oldExpr = `topaz_array_${arrayName}_at(${baseTmp}, ${indexTmp})`;
+    const nextExpr = this.emitPrefixUpdateNextExpression(op, oldTmp, anchor);
+    return `({ ${baseC} ${baseTmp} = ${baseStr}; topaz_number ${indexTmp} = ${indexStr}; ${elemC} ${oldTmp} = ${oldExpr}; ${elemC} ${nextTmp} = ${nextExpr}; topaz_array_${arrayName}_set(${baseTmp}, ${indexTmp}, ${nextTmp}); ${nextTmp}; })`;
+  }
+
   private emitExpression(expr: Expr): string {
     if (expr.kind === "num_lit") {
       return emitNumberLiteralText(expr.text, expr.value);
@@ -15419,11 +15471,50 @@ class Emitter {
       if (expr.op === "-" && this.inferType(expr.operand).kind === "bigint") {
         return this.emitRuntimePreludeBigIntNeg(this.emitExpression(expr.operand), { pos: expr.pos });
       }
+      if (expr.op === "++" || expr.op === "--") {
+        const target = this.unwrapParenExpr(expr.operand);
+        if (target.kind === "elem_access") {
+          const baseType = this.inferType(target.receiver);
+          const elem = arrayElem(baseType);
+          if (elem === undefined) {
+            throw new CodegenError({ pos: expr.pos }, "internal error: validated array prefix update target missing element type");
+          }
+          return this.emitArrayElementPrefixUpdate(target, expr.op, baseType, elem, { pos: expr.pos });
+        }
+        if (target.kind === "prop_access") {
+          const baseType = this.inferType(target.receiver);
+          if (isInterfaceType(baseType)) {
+            const iname = interfaceNameOf(baseType);
+            if (iname === undefined) {
+              throw new CodegenError({ pos: expr.pos }, "internal error: validated interface prefix update target missing interface name");
+            }
+            const iface = this.interfaces.get(iname);
+            if (iface === undefined) {
+              throw new CodegenError({ pos: expr.pos }, `internal error: interface '${iname}' not registered`);
+            }
+            const fieldType = iface.fields.get(target.name);
+            if (fieldType === undefined) {
+              throw new CodegenError({ pos: expr.pos }, `internal error: validated interface prefix update target missing field '${target.name}'`);
+            }
+            return this.emitInterfaceFieldPrefixUpdate(target, expr.op, baseType, fieldType, { pos: expr.pos });
+          }
+        }
+      }
       const op = this.prefixOp(expr);
       return `(${op}${this.emitExpression(expr.operand)})`;
     }
     if (expr.kind === "postfix_op") {
       this.inferType(expr);
+      const target = this.unwrapParenExpr(expr.operand);
+      if (target.kind === "elem_access") {
+        throw new CodegenError({ pos: expr.pos }, "postfix update on array element targets is unsupported; prefix update is supported");
+      }
+      if (target.kind === "prop_access") {
+        const baseType = this.inferType(target.receiver);
+        if (isInterfaceType(baseType)) {
+          throw new CodegenError({ pos: expr.pos }, "postfix update on interface field targets is unsupported; prefix update is supported");
+        }
+      }
       const op = this.postfixOp(expr);
       return `(${this.emitExpression(expr.operand)}${op})`;
     }
