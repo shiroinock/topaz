@@ -8900,6 +8900,11 @@ class Emitter {
       }
       return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
     }
+    if (expr.kind === "postfix_op" && (expr.op === "++" || expr.op === "--")) {
+      const target = this.unwrapParenExpr(expr.operand);
+      if (target.kind === "ident") return true;
+      return target.kind === "prop_access" && this.isClassFieldSnapshotAssignmentTarget(target);
+    }
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
     if (this.firstSpreadArg(expr.args) !== undefined) return false;
@@ -9601,6 +9606,12 @@ class Emitter {
       } else if (snapshotExpr.kind === "prefix_op" && (snapshotExpr.op === "++" || snapshotExpr.op === "--")) {
         const target = this.unwrapParenExpr(snapshotExpr.operand);
         if (target.kind === "ident") lines.push(`${indent}${target.name} = ${temp.tempName};`);
+      } else if (snapshotExpr.kind === "postfix_op" && (snapshotExpr.op === "++" || snapshotExpr.op === "--")) {
+        const target = this.unwrapParenExpr(snapshotExpr.operand);
+        if (target.kind === "ident") {
+          const delta = snapshotExpr.op === "++" ? "+ 1.0" : "- 1.0";
+          lines.push(`${indent}${target.name} = ${temp.tempName} ${delta};`);
+        }
       }
       lines.push(`${indent}(void)${temp.tempName};`);
     }
