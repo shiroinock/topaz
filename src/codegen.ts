@@ -8472,7 +8472,15 @@ class Emitter {
     if (rootMaybe.kind !== "array_lit") return undefined;
     const events = this.collectMultiAwaitArrayLiteralElements(rootMaybe);
     if (events === undefined) return undefined;
+    return this.tryBuildMultiAwaitLiteralPlan(expr, tempPrefix, events, "await array snapshot value");
+  }
 
+  private tryBuildMultiAwaitLiteralPlan(
+    expr: Expr,
+    tempPrefix: string,
+    events: Array<MultiAwaitLeafEvent>,
+    snapshotValueLabel: string,
+  ): MultiAwaitCallArgPlan | undefined {
     let transformedExpr: Expr = expr;
     const awaitedArgs: Array<MultiAwaitCallArgAwait> = [];
     const callArgEvents: Array<MultiAwaitCallArgEvent> = [];
@@ -8542,7 +8550,7 @@ class Emitter {
           for (const pendingSnapshot of pendingSnapshots) {
             const snapshotExpr = pendingSnapshot.expr;
             const exprType = this.inferType(snapshotExpr);
-            this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await array snapshot value");
+            this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, snapshotValueLabel);
             const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
             snapshotIndex++;
             this.scope.declareBinding(tempName, exprType, /* isConst */ true, { pos: snapshotExpr.pos });
@@ -8709,6 +8717,9 @@ class Emitter {
       ? this.collectStatementDiscardObjectLiteralProperties(rootMaybe)
       : this.collectMultiAwaitObjectLiteralProperties(rootMaybe, allowPureLeaves);
     if (events === undefined) return undefined;
+    if (!statementDiscardMaterialization) {
+      return this.tryBuildMultiAwaitLiteralPlan(expr, tempPrefix, events, "await object snapshot value");
+    }
     const awaitCount = events.filter((event) => event.kind === "await").length;
     if (awaitCount < 2) return undefined;
 
@@ -8818,6 +8829,7 @@ class Emitter {
           /* allowPureLeaves */ true,
           objectEvents,
           /* allowSnapshots */ true,
+          /* allowAwaitedSpreadCallSources */ false,
         )) {
           return undefined;
         }
@@ -8965,7 +8977,7 @@ class Emitter {
     allowPureLeaves: boolean,
   ): Array<MultiAwaitLeafEvent> | undefined {
     const events: Array<MultiAwaitLeafEvent> = [];
-    if (!this.collectMultiAwaitObjectLiteralLeaves(expr, allowPureLeaves, events, allowPureLeaves)) return undefined;
+    if (!this.collectMultiAwaitObjectLiteralLeaves(expr, allowPureLeaves, events, allowPureLeaves, true)) return undefined;
     return events;
   }
 
@@ -8974,6 +8986,7 @@ class Emitter {
     allowPureLeaves: boolean,
     out: Array<MultiAwaitLeafEvent>,
     allowSnapshots: boolean,
+    allowAwaitedSpreadCallSources: boolean,
   ): boolean {
     if (expr.props.length === 0) return false;
     for (const prop of expr.props) {
@@ -8996,21 +9009,30 @@ class Emitter {
             value,
             arrayEvents,
             allowSnapshots,
-            /* allowAwaitedSpreadCallSources */ false,
+            allowAwaitedSpreadCallSources,
           )
         ) {
           return false;
         }
         for (const event of arrayEvents) {
-          if (allowSnapshots || event.kind === "await") out.push(event);
+          if (allowSnapshots || event.kind === "await" || event.kind === "nested_call") out.push(event);
         }
         continue;
       }
       if (value.kind === "object_lit") {
         const objectEvents: Array<MultiAwaitLeafEvent> = [];
-        if (!allowPureLeaves || !this.collectMultiAwaitObjectLiteralLeaves(value, allowPureLeaves, objectEvents, allowSnapshots)) return false;
+        if (
+          !allowPureLeaves ||
+          !this.collectMultiAwaitObjectLiteralLeaves(
+            value,
+            allowPureLeaves,
+            objectEvents,
+            allowSnapshots,
+            allowAwaitedSpreadCallSources,
+          )
+        ) return false;
         for (const event of objectEvents) {
-          if (allowSnapshots || event.kind === "await") out.push(event);
+          if (allowSnapshots || event.kind === "await" || event.kind === "nested_call") out.push(event);
         }
         continue;
       }

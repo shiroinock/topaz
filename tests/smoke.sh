@@ -3121,6 +3121,7 @@ run_case await_initializer_multiple_deferred_fail "0"
 run_case await_array_literal_spread_steps $'prefix\nawait one\nsync tail\nmiddle\nawait two\ntail\n5\n10\nthen\n2'
 run_case await_array_literal_spread_await_source_deferred_fail "0"
 run_case await_array_literal_spread_call_source_order $'prefix\nspread await\nsync tail\nitems\n1\nlater await\nafter spread\ntail\n5\n20\nthen\n11'
+run_case await_object_literal_nested_array_spread_call_source $'prefix\nspread await\nsync tail\nitems\n2\nafter spread\ntail await\nthen\nreadBox\n1\n12\n3\n4\n20'
 run_case await_object_literal_statement_deferred_fail "middle"
 run_case await_call_arg_multiple_deferred_fail $'left\nsync tail\nassign\nright\nread counter\n2\ncombine\n3\n3\n2\nthen\n332'
 run_case await_call_arg_assignment_property_deferred_fail $'left\nsync tail\nrhs replace\nright\ncombine\n3\n3\n2\n100\nthen\n3420'
