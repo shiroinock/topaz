@@ -190,90 +190,102 @@ type AwaitMaterializedTemp = {
   pos?: number;
 };
 
+type AwaitIdentifierTargetRef = {
+  kind: "identifier";
+  target: IdentExpr;
+  targetName: string;
+  targetType: TopazType;
+};
+
+type AwaitClassFieldTargetRef = {
+  kind: "class_field";
+  target: PropAccessExpr;
+  receiverTemp: AwaitCallReceiverTemp;
+  receiverType: TopazType;
+  fieldName: string;
+  fieldType: TopazType;
+};
+
+type AwaitInterfaceFieldTargetRef = {
+  kind: "interface_field";
+  target: PropAccessExpr;
+  receiverTemp: AwaitCallReceiverTemp;
+  receiverType: TopazType;
+  fieldName: string;
+  fieldType: TopazType;
+};
+
+type AwaitArrayElementTargetRef = {
+  kind: "array_element";
+  target: ElemAccessExpr;
+  receiverTemp: AwaitCallReceiverTemp;
+  indexTemp: AwaitIndexTemp;
+  arrayType: TopazType;
+  elemType: TopazType;
+};
+
+type AwaitTargetRef =
+  | AwaitIdentifierTargetRef
+  | AwaitClassFieldTargetRef
+  | AwaitInterfaceFieldTargetRef
+  | AwaitArrayElementTargetRef;
+
 type AwaitedAssignmentLeaf =
   | {
       kind: "expr";
       expr: AssignExpr;
       exprType: TopazType;
-      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
-      preAwaitIndexTemps: Array<AwaitIndexTemp>;
+      targetRef: AwaitTargetRef;
     }
   | {
       kind: "interface_field_assignment";
-      receiverTempName: string;
-      receiverType: TopazType;
-      fieldName: string;
-      fieldType: TopazType;
+      targetRef: AwaitInterfaceFieldTargetRef;
       value: Expr;
       exprType: TopazType;
       pos: number;
-      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
-      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     }
   | {
       kind: "array_element_assignment";
-      receiverTempName: string;
-      indexTempName: string;
-      arrayType: TopazType;
-      elemType: TopazType;
+      targetRef: AwaitArrayElementTargetRef;
       value: Expr;
       exprType: TopazType;
       pos: number;
-      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
-      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     }
   | {
       kind: "identifier_compound_assignment";
-      targetName: string;
+      targetRef: AwaitIdentifierTargetRef;
       oldValueTempName: string;
       op: string;
       value: Expr;
       exprType: TopazType;
       pos: number;
-      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
-      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     }
   | {
       kind: "class_field_compound_assignment";
-      receiverTempName: string;
-      receiverType: TopazType;
-      fieldName: string;
-      fieldType: TopazType;
+      targetRef: AwaitClassFieldTargetRef;
       oldValueTempName: string;
       op: string;
       value: Expr;
       exprType: TopazType;
       pos: number;
-      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
-      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     }
   | {
       kind: "interface_field_compound_assignment";
-      receiverTempName: string;
-      receiverType: TopazType;
-      fieldName: string;
-      fieldType: TopazType;
+      targetRef: AwaitInterfaceFieldTargetRef;
       oldValueTempName: string;
       op: string;
       value: Expr;
       exprType: TopazType;
       pos: number;
-      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
-      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     }
   | {
       kind: "array_element_compound_assignment";
-      receiverTempName: string;
-      indexTempName: string;
+      targetRef: AwaitArrayElementTargetRef;
       oldValueTempName: string;
       op: string;
-      arrayType: TopazType;
-      elemType: TopazType;
       value: Expr;
       exprType: TopazType;
       pos: number;
-      preAwaitReceiverTemps: Array<AwaitCallReceiverTemp>;
-      preAwaitIndexTemps: Array<AwaitIndexTemp>;
     };
 
 type AwaitSnapshotsForAwait = {
@@ -6159,6 +6171,182 @@ class Emitter {
     return { transformedExpr, preAwaitReceiverTemps, preAwaitIndexTemps };
   }
 
+  private tryBuildAwaitAssignmentTargetRef(
+    target: Expr,
+    awaitedTempName: string,
+  ): AwaitTargetRef | undefined {
+    if (target.kind === "ident") {
+      return { kind: "identifier", target, targetName: target.name, targetType: this.inferType(target) };
+    }
+    if (target.kind === "prop_access") {
+      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
+      const receiverType = this.inferType(target.receiver);
+      const receiverTempName = `${awaitedTempName}_recv`;
+      let kind: "class_field" | "interface_field" = "class_field";
+      let fieldType: TopazType | undefined = undefined;
+      if (isClassType(receiverType)) {
+        kind = "class_field";
+        const className = classNameOf(receiverType);
+        if (className === undefined) return undefined;
+        const cls = this.classes.get(className);
+        if (cls === undefined) return undefined;
+        fieldType = cls.fields.get(target.name);
+      } else if (isInterfaceType(receiverType)) {
+        kind = "interface_field";
+        const interfaceName = interfaceNameOf(receiverType);
+        if (interfaceName === undefined) return undefined;
+        const iface = this.interfaces.get(interfaceName);
+        if (iface === undefined) return undefined;
+        fieldType = iface.fields.get(target.name);
+      } else {
+        return undefined;
+      }
+      if (fieldType === undefined) return undefined;
+      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
+      const receiverTemp: AwaitCallReceiverTemp = {
+        tempName: receiverTempName,
+        receiver: target.receiver,
+        receiverType,
+      };
+      const transformedTarget: PropAccessExpr = {
+        kind: "prop_access",
+        receiver: {
+          kind: "ident",
+          name: receiverTempName,
+          pos: target.receiver.pos,
+          end: target.receiver.end,
+        },
+        name: target.name,
+        optional: false,
+        pos: target.pos,
+        end: target.end,
+      };
+      if (kind === "class_field") {
+        return {
+          kind: "class_field",
+          target: transformedTarget,
+          receiverTemp,
+          receiverType,
+          fieldName: target.name,
+          fieldType,
+        };
+      }
+      return {
+        kind: "interface_field",
+        target: transformedTarget,
+        receiverTemp,
+        receiverType,
+        fieldName: target.name,
+        fieldType,
+      };
+    }
+    if (target.kind === "elem_access") {
+      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
+      if (!this.isSafeArrayElementIndex(target.index)) return undefined;
+      const arrayType = this.inferType(target.receiver);
+      if (!isArrayType(arrayType)) return undefined;
+      const elemType = arrayElem(arrayType);
+      if (elemType === undefined) return undefined;
+      this.expectType(target.index, T_NUMBER);
+      const receiverTempName = `${awaitedTempName}_recv`;
+      const indexTempName = `${awaitedTempName}_index`;
+      this.scope.declareBinding(receiverTempName, arrayType, /* isConst */ true, { pos: target.receiver.pos });
+      this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
+      const receiverTemp: AwaitCallReceiverTemp = {
+        tempName: receiverTempName,
+        receiver: target.receiver,
+        receiverType: arrayType,
+      };
+      const indexTemp: AwaitIndexTemp = {
+        tempName: indexTempName,
+        index: target.index,
+        indexType: T_NUMBER,
+      };
+      return {
+        kind: "array_element",
+        target: {
+          kind: "elem_access",
+          receiver: {
+            kind: "ident",
+            name: receiverTempName,
+            pos: target.receiver.pos,
+            end: target.receiver.end,
+          },
+          index: {
+            kind: "ident",
+            name: indexTempName,
+            pos: target.index.pos,
+            end: target.index.end,
+          },
+          optional: false,
+          pos: target.pos,
+          end: target.end,
+        },
+        receiverTemp,
+        indexTemp,
+        arrayType,
+        elemType,
+      };
+    }
+    return undefined;
+  }
+
+  private awaitTargetRefReceiverTemps(targetRef: AwaitTargetRef): Array<AwaitCallReceiverTemp> {
+    switch (targetRef.kind) {
+      case "identifier":
+        return [];
+      case "class_field":
+        return [targetRef.receiverTemp];
+      case "interface_field":
+        return [targetRef.receiverTemp];
+      case "array_element":
+        return [targetRef.receiverTemp];
+    }
+  }
+
+  private awaitTargetRefIndexTemps(targetRef: AwaitTargetRef): Array<AwaitIndexTemp> {
+    switch (targetRef.kind) {
+      case "identifier":
+      case "class_field":
+      case "interface_field":
+        return [];
+      case "array_element":
+        return [targetRef.indexTemp];
+    }
+  }
+
+  private awaitTargetRefExpr(targetRef: AwaitTargetRef): Expr {
+    switch (targetRef.kind) {
+      case "identifier":
+        return targetRef.target;
+      case "class_field":
+        return targetRef.target;
+      case "interface_field":
+        return targetRef.target;
+      case "array_element":
+        return targetRef.target;
+    }
+  }
+
+  private awaitedAssignmentTargetRef(materialized: AwaitedAssignmentLeaf): AwaitTargetRef {
+    switch (materialized.kind) {
+      case "expr":
+        return materialized.targetRef;
+      case "interface_field_assignment":
+        return materialized.targetRef;
+      case "array_element_assignment":
+        return materialized.targetRef;
+      case "identifier_compound_assignment":
+        return materialized.targetRef;
+      case "class_field_compound_assignment":
+        return materialized.targetRef;
+      case "interface_field_compound_assignment":
+        return materialized.targetRef;
+      case "array_element_compound_assignment":
+        return materialized.targetRef;
+    }
+  }
+
   private tryBuildAwaitedAssignmentLeaf(
     expr: AssignExpr,
     awaitExpr: AwaitExpr,
@@ -6169,312 +6357,94 @@ class Emitter {
     if (rhsAwaits.length !== 1) return undefined;
     if (rhsAwaits[0].pos !== awaitExpr.pos || rhsAwaits[0].end !== awaitExpr.end) return undefined;
     if (!this.simpleAwaitReplacementSupported(expr.value, awaitExpr)) return undefined;
+    if (expr.op !== "=" && !this.isAwaitLowerableCompoundAssignmentOp(expr.op)) return undefined;
+
     const target = this.unwrapParenExpr(expr.target);
-    if (expr.op !== "=") {
-      if (!this.isAwaitLowerableCompoundAssignmentOp(expr.op)) return undefined;
-      const oldValueTempName = `${awaitedTempExpr.name}_old`;
-      const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
-      if (target.kind === "ident") {
-        this.checkAssignTarget(target, { pos: expr.pos });
-        const transformedExpr: AssignExpr = {
-          kind: "assign_expr",
-          op: expr.op,
-          target,
-          value: transformedValue,
-          pos: expr.pos,
-          end: expr.end,
-        };
-        const exprType = this.inferType(transformedExpr);
-        this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
-        return {
-          kind: "identifier_compound_assignment",
-          targetName: target.name,
-          oldValueTempName,
-          op: expr.op,
-          value: transformedValue,
-          exprType,
-          pos: expr.pos,
-          preAwaitReceiverTemps: [],
-          preAwaitIndexTemps: [],
-        };
-      }
-      if (target.kind === "prop_access") {
-        if (!this.isSafeLvalueBase(target.receiver)) return undefined;
-        this.checkAssignTarget(target, { pos: expr.pos });
-        const receiverType = this.inferType(target.receiver);
-        const receiverTempName = `${awaitedTempExpr.name}_recv`;
-        this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
-        const receiverTempExpr: IdentExpr = {
-          kind: "ident",
-          name: receiverTempName,
-          pos: target.receiver.pos,
-          end: target.receiver.end,
-        };
-        const transformedTarget: PropAccessExpr = {
-          kind: "prop_access",
-          receiver: receiverTempExpr,
-          name: target.name,
-          optional: false,
-          pos: target.pos,
-          end: target.end,
-        };
-        const transformedExpr: AssignExpr = {
-          kind: "assign_expr",
-          op: expr.op,
-          target: transformedTarget,
-          value: transformedValue,
-          pos: expr.pos,
-          end: expr.end,
-        };
-        const exprType = this.inferType(transformedExpr);
-        this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
-        if (isClassType(receiverType)) {
-          const className = classNameOf(receiverType);
-          if (className === undefined) return undefined;
-          const cls = this.classes.get(className);
-          if (cls === undefined) return undefined;
-          const fieldType = cls.fields.get(target.name);
-          if (fieldType === undefined) return undefined;
-          return {
-            kind: "class_field_compound_assignment",
-            receiverTempName,
-            receiverType,
-            fieldName: target.name,
-            fieldType,
-            oldValueTempName,
-            op: expr.op,
-            value: transformedValue,
-            exprType,
-            pos: expr.pos,
-            preAwaitReceiverTemps: [
-              {
-                tempName: receiverTempName,
-                receiver: target.receiver,
-                receiverType,
-              },
-            ],
-            preAwaitIndexTemps: [],
-          };
-        }
-        if (isInterfaceType(receiverType)) {
-          const interfaceName = interfaceNameOf(receiverType);
-          if (interfaceName === undefined) return undefined;
-          const iface = this.interfaces.get(interfaceName);
-          if (iface === undefined) return undefined;
-          const fieldType = iface.fields.get(target.name);
-          if (fieldType === undefined) return undefined;
-          return {
-            kind: "interface_field_compound_assignment",
-            receiverTempName,
-            receiverType,
-            fieldName: target.name,
-            fieldType,
-            oldValueTempName,
-            op: expr.op,
-            value: transformedValue,
-            exprType,
-            pos: expr.pos,
-            preAwaitReceiverTemps: [
-              {
-                tempName: receiverTempName,
-                receiver: target.receiver,
-                receiverType,
-              },
-            ],
-            preAwaitIndexTemps: [],
-          };
-        }
-        return undefined;
-      }
-      if (target.kind === "elem_access") {
-        if (!this.isSafeLvalueBase(target.receiver)) return undefined;
-        if (!this.isSafeArrayElementIndex(target.index)) return undefined;
-        this.checkAssignTarget(target, { pos: expr.pos });
-        const receiverType = this.inferType(target.receiver);
-        if (!isArrayType(receiverType)) return undefined;
-        const elemType = arrayElem(receiverType);
-        if (elemType === undefined) return undefined;
-        this.expectType(target.index, T_NUMBER);
-        const receiverTempName = `${awaitedTempExpr.name}_recv`;
-        const indexTempName = `${awaitedTempExpr.name}_index`;
-        this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
-        this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
-        const receiverTempExpr: IdentExpr = {
-          kind: "ident",
-          name: receiverTempName,
-          pos: target.receiver.pos,
-          end: target.receiver.end,
-        };
-        const indexTempExpr: IdentExpr = {
-          kind: "ident",
-          name: indexTempName,
-          pos: target.index.pos,
-          end: target.index.end,
-        };
-        const transformedTarget: ElemAccessExpr = {
-          kind: "elem_access",
-          receiver: receiverTempExpr,
-          index: indexTempExpr,
-          optional: false,
-          pos: target.pos,
-          end: target.end,
-        };
-        const transformedExpr: AssignExpr = {
-          kind: "assign_expr",
-          op: expr.op,
-          target: transformedTarget,
-          value: transformedValue,
-          pos: expr.pos,
-          end: expr.end,
-        };
-        const exprType = this.inferType(transformedExpr);
-        this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
-        return {
-          kind: "array_element_compound_assignment",
-          receiverTempName,
-          indexTempName,
-          oldValueTempName,
-          op: expr.op,
-          arrayType: receiverType,
-          elemType,
-          value: transformedValue,
-          exprType,
-          pos: expr.pos,
-          preAwaitReceiverTemps: [
-            {
-              tempName: receiverTempName,
-              receiver: target.receiver,
-              receiverType,
-            },
-          ],
-          preAwaitIndexTemps: [
-            {
-              tempName: indexTempName,
-              index: target.index,
-              indexType: T_NUMBER,
-            },
-          ],
-        };
-      }
-      return undefined;
+    const targetRef = this.tryBuildAwaitAssignmentTargetRef(target, awaitedTempExpr.name);
+    if (targetRef === undefined) return undefined;
+    this.checkAssignTarget(target, { pos: expr.pos });
+    const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
+
+    if (expr.op === "=" && targetRef.kind === "interface_field") {
+      this.expectType(transformedValue, targetRef.fieldType);
+      this.assertNotVoid(targetRef.fieldType, { pos: expr.pos }, "await call-argument assignment leaf");
+      return {
+        kind: "interface_field_assignment",
+        targetRef,
+        value: transformedValue,
+        exprType: targetRef.fieldType,
+        pos: expr.pos,
+      };
     }
-    let transformedTarget: Expr = target;
-    const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
-    const preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
-    if (target.kind === "ident") {
-      transformedTarget = target;
-    } else if (target.kind === "prop_access") {
-      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
-      const receiverType = this.inferType(target.receiver);
-      const receiverTempName = `${awaitedTempExpr.name}_recv`;
-      if (isClassType(receiverType)) {
-        const className = classNameOf(receiverType);
-        if (className === undefined) return undefined;
-        const cls = this.classes.get(className);
-        if (cls === undefined || !cls.fields.has(target.name)) return undefined;
-        this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
-        preAwaitReceiverTemps.push({
-          tempName: receiverTempName,
-          receiver: target.receiver,
-          receiverType,
-        });
-        const receiverTempExpr: IdentExpr = {
-          kind: "ident",
-          name: receiverTempName,
-          pos: target.receiver.pos,
-          end: target.receiver.end,
-        };
-        transformedTarget = {
-          kind: "prop_access",
-          receiver: receiverTempExpr,
-          name: target.name,
-          optional: false,
-          pos: target.pos,
-          end: target.end,
-        };
-      } else if (isInterfaceType(receiverType)) {
-        this.checkAssignTarget(target, { pos: expr.pos });
-        const interfaceName = interfaceNameOf(receiverType);
-        if (interfaceName === undefined) return undefined;
-        const iface = this.interfaces.get(interfaceName);
-        if (iface === undefined) return undefined;
-        const fieldType = iface.fields.get(target.name);
-        if (fieldType === undefined) return undefined;
-        this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
-        preAwaitReceiverTemps.push({
-          tempName: receiverTempName,
-          receiver: target.receiver,
-          receiverType,
-        });
-        const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
-        this.expectType(transformedValue, fieldType);
-        this.assertNotVoid(fieldType, { pos: expr.pos }, "await call-argument assignment leaf");
-        return {
-          kind: "interface_field_assignment",
-          receiverTempName,
-          receiverType,
-          fieldName: target.name,
-          fieldType,
-          value: transformedValue,
-          exprType: fieldType,
-          pos: expr.pos,
-          preAwaitReceiverTemps,
-          preAwaitIndexTemps,
-        };
-      } else {
-        return undefined;
-      }
-    } else if (target.kind === "elem_access") {
-      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
-      if (!this.isSafeArrayElementIndex(target.index)) return undefined;
-      const receiverType = this.inferType(target.receiver);
-      if (!isArrayType(receiverType)) return undefined;
-      const elemType = arrayElem(receiverType);
-      if (elemType === undefined) return undefined;
-      this.expectType(target.index, T_NUMBER);
-      const transformedValue = this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr);
-      this.expectType(transformedValue, elemType);
-      this.assertNotVoid(elemType, { pos: expr.pos }, "await call-argument assignment leaf");
-      const receiverTempName = `${awaitedTempExpr.name}_recv`;
-      const indexTempName = `${awaitedTempExpr.name}_index`;
-      this.scope.declareBinding(receiverTempName, receiverType, /* isConst */ true, { pos: target.receiver.pos });
-      this.scope.declareBinding(indexTempName, T_NUMBER, /* isConst */ true, { pos: target.index.pos });
-      preAwaitReceiverTemps.push({
-        tempName: receiverTempName,
-        receiver: target.receiver,
-        receiverType,
-      });
-      preAwaitIndexTemps.push({
-        tempName: indexTempName,
-        index: target.index,
-        indexType: T_NUMBER,
-      });
+    if (expr.op === "=" && targetRef.kind === "array_element") {
+      this.expectType(transformedValue, targetRef.elemType);
+      this.assertNotVoid(targetRef.elemType, { pos: expr.pos }, "await call-argument assignment leaf");
       return {
         kind: "array_element_assignment",
-        receiverTempName,
-        indexTempName,
-        arrayType: receiverType,
-        elemType,
+        targetRef,
         value: transformedValue,
-        exprType: elemType,
+        exprType: targetRef.elemType,
         pos: expr.pos,
-        preAwaitReceiverTemps,
-        preAwaitIndexTemps,
       };
-    } else {
-      return undefined;
     }
+
     const transformedExpr: AssignExpr = {
       kind: "assign_expr",
       op: expr.op,
-      target: transformedTarget,
-      value: this.replaceAwaitExprInExpr(expr.value, awaitExpr, awaitedTempExpr),
+      target: this.awaitTargetRefExpr(targetRef),
+      value: transformedValue,
       pos: expr.pos,
       end: expr.end,
     };
     const exprType = this.inferType(transformedExpr);
     this.assertNotVoid(exprType, { pos: expr.pos }, "await call-argument assignment leaf");
-    return { kind: "expr", expr: transformedExpr, exprType, preAwaitReceiverTemps, preAwaitIndexTemps };
+    if (expr.op === "=") {
+      return { kind: "expr", expr: transformedExpr, exprType, targetRef };
+    }
+
+    const oldValueTempName = `${awaitedTempExpr.name}_old`;
+    switch (targetRef.kind) {
+      case "identifier":
+        return {
+          kind: "identifier_compound_assignment",
+          targetRef,
+          oldValueTempName,
+          op: expr.op,
+          value: transformedValue,
+          exprType,
+          pos: expr.pos,
+        };
+      case "class_field":
+        return {
+          kind: "class_field_compound_assignment",
+          targetRef,
+          oldValueTempName,
+          op: expr.op,
+          value: transformedValue,
+          exprType,
+          pos: expr.pos,
+        };
+      case "interface_field":
+        return {
+          kind: "interface_field_compound_assignment",
+          targetRef,
+          oldValueTempName,
+          op: expr.op,
+          value: transformedValue,
+          exprType,
+          pos: expr.pos,
+        };
+      case "array_element":
+        return {
+          kind: "array_element_compound_assignment",
+          targetRef,
+          oldValueTempName,
+          op: expr.op,
+          value: transformedValue,
+          exprType,
+          pos: expr.pos,
+        };
+    }
   }
 
   private buildAwaitMaterializedTemp(
@@ -6486,7 +6456,7 @@ class Emitter {
         return {
           kind: "identifier_compound_assignment",
           tempName,
-          targetName: materialized.targetName,
+          targetName: materialized.targetRef.targetName,
           oldValueTempName: materialized.oldValueTempName,
           op: materialized.op,
           value: materialized.value,
@@ -6497,10 +6467,10 @@ class Emitter {
         return {
           kind: "class_field_compound_assignment",
           tempName,
-          receiverTempName: materialized.receiverTempName,
-          receiverType: materialized.receiverType,
-          fieldName: materialized.fieldName,
-          fieldType: materialized.fieldType,
+          receiverTempName: materialized.targetRef.receiverTemp.tempName,
+          receiverType: materialized.targetRef.receiverType,
+          fieldName: materialized.targetRef.fieldName,
+          fieldType: materialized.targetRef.fieldType,
           oldValueTempName: materialized.oldValueTempName,
           op: materialized.op,
           value: materialized.value,
@@ -6511,10 +6481,10 @@ class Emitter {
         return {
           kind: "interface_field_compound_assignment",
           tempName,
-          receiverTempName: materialized.receiverTempName,
-          receiverType: materialized.receiverType,
-          fieldName: materialized.fieldName,
-          fieldType: materialized.fieldType,
+          receiverTempName: materialized.targetRef.receiverTemp.tempName,
+          receiverType: materialized.targetRef.receiverType,
+          fieldName: materialized.targetRef.fieldName,
+          fieldType: materialized.targetRef.fieldType,
           oldValueTempName: materialized.oldValueTempName,
           op: materialized.op,
           value: materialized.value,
@@ -6525,10 +6495,10 @@ class Emitter {
         return {
           kind: "interface_field_assignment",
           tempName,
-          receiverTempName: materialized.receiverTempName,
-          receiverType: materialized.receiverType,
-          fieldName: materialized.fieldName,
-          fieldType: materialized.fieldType,
+          receiverTempName: materialized.targetRef.receiverTemp.tempName,
+          receiverType: materialized.targetRef.receiverType,
+          fieldName: materialized.targetRef.fieldName,
+          fieldType: materialized.targetRef.fieldType,
           value: materialized.value,
           exprType: materialized.exprType,
           pos: materialized.pos,
@@ -6537,10 +6507,10 @@ class Emitter {
         return {
           kind: "array_element_assignment",
           tempName,
-          receiverTempName: materialized.receiverTempName,
-          indexTempName: materialized.indexTempName,
-          arrayType: materialized.arrayType,
-          elemType: materialized.elemType,
+          receiverTempName: materialized.targetRef.receiverTemp.tempName,
+          indexTempName: materialized.targetRef.indexTemp.tempName,
+          arrayType: materialized.targetRef.arrayType,
+          elemType: materialized.targetRef.elemType,
           value: materialized.value,
           exprType: materialized.exprType,
           pos: materialized.pos,
@@ -6549,12 +6519,12 @@ class Emitter {
         return {
           kind: "array_element_compound_assignment",
           tempName,
-          receiverTempName: materialized.receiverTempName,
-          indexTempName: materialized.indexTempName,
+          receiverTempName: materialized.targetRef.receiverTemp.tempName,
+          indexTempName: materialized.targetRef.indexTemp.tempName,
           oldValueTempName: materialized.oldValueTempName,
           op: materialized.op,
-          arrayType: materialized.arrayType,
-          elemType: materialized.elemType,
+          arrayType: materialized.targetRef.arrayType,
+          elemType: materialized.targetRef.elemType,
           value: materialized.value,
           exprType: materialized.exprType,
           pos: materialized.pos,
@@ -8101,8 +8071,9 @@ class Emitter {
           if (materialized === undefined) {
             return undefined;
           }
-          preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
-          preAwaitIndexTemps = materialized.preAwaitIndexTemps;
+          const targetRef = this.awaitedAssignmentTargetRef(materialized);
+          preAwaitReceiverTemps = this.awaitTargetRefReceiverTemps(targetRef);
+          preAwaitIndexTemps = this.awaitTargetRefIndexTemps(targetRef);
           const materializedTempName = `${tempName}_assign`;
           this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
             pos: owner.expr.pos,
@@ -8149,8 +8120,9 @@ class Emitter {
           if (materialized === undefined) {
             return undefined;
           }
-          preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
-          preAwaitIndexTemps = materialized.preAwaitIndexTemps;
+          const targetRef = this.awaitedAssignmentTargetRef(materialized);
+          preAwaitReceiverTemps = this.awaitTargetRefReceiverTemps(targetRef);
+          preAwaitIndexTemps = this.awaitTargetRefIndexTemps(targetRef);
           const materializedTempName = `${tempName}_assign`;
           this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
             pos: owner.expr.pos,
@@ -8644,8 +8616,9 @@ class Emitter {
           if (materialized === undefined) {
             return undefined;
           }
-          preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
-          preAwaitIndexTemps = materialized.preAwaitIndexTemps;
+          const targetRef = this.awaitedAssignmentTargetRef(materialized);
+          preAwaitReceiverTemps = this.awaitTargetRefReceiverTemps(targetRef);
+          preAwaitIndexTemps = this.awaitTargetRefIndexTemps(targetRef);
           const materializedTempName = `${tempName}_assign`;
           this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
             pos: owner.expr.pos,
