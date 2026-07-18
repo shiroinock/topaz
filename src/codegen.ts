@@ -8716,7 +8716,12 @@ class Emitter {
   ): boolean {
     if (expr.elems.length === 0) return false;
     for (const elem of expr.elems) {
-      if (elem.kind !== "elem") return false;
+      if (elem.kind === "spread") {
+        const source = this.unwrapParenExpr(elem.expr);
+        if (!allowSnapshots || !this.isSafeMultiAwaitArraySpreadSource(source)) return false;
+        out.push({ kind: "snapshot", expr: source });
+        continue;
+      }
       const value = this.unwrapParenExpr(elem.expr);
       if (value.kind === "array_lit") {
         if (!this.collectMultiAwaitArrayLiteralLeaves(value, out, allowSnapshots)) return false;
@@ -8738,6 +8743,16 @@ class Emitter {
       return false;
     }
     return true;
+  }
+
+  private isSafeMultiAwaitArraySpreadSource(expr: Expr): boolean {
+    if (this.collectAwaitExprsInExpr(expr).length > 0) return false;
+    const source = this.unwrapParenExpr(expr);
+    return (
+      source.kind === "array_lit" ||
+      this.isSideEffectFreeMultiAwaitLeaf(source) ||
+      this.isSnapshotMultiAwaitLeaf(source)
+    );
   }
 
   private collectMultiAwaitObjectLiteralProperties(
