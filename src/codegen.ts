@@ -7446,6 +7446,335 @@ class Emitter {
     return false;
   }
 
+  private materializeNestedMultiAwaitCallArgPlans(
+    nestedCallArgs: Array<MultiAwaitNestedCallArgPlan>,
+    awaitedArgs: Array<MultiAwaitCallArgAwait>,
+    callArgEvents: Array<MultiAwaitCallArgEvent>,
+    plannedSteps: Array<MultiAwaitCallArgStepPlan>,
+    argStepOffset: number,
+  ): Map<number, IdentExpr> | undefined {
+    const nestedResultByArg = new Map<number, IdentExpr>();
+    const stepForAwaitIndex = (awaitIndex: number): MultiAwaitCallArgStepPlan => {
+      return plannedSteps[awaitIndex + argStepOffset];
+    };
+    for (let nestedIndex = nestedCallArgs.length - 1; nestedIndex >= 0; nestedIndex--) {
+      const nestedPlan = nestedCallArgs[nestedIndex];
+      const firstNestedAwaitIndex = nestedPlan.awaitedArgIndexes[0];
+      const firstNestedAwait = awaitedArgs[firstNestedAwaitIndex];
+
+      const signatureNestedArgs: Array<Expr> = [];
+      for (let nestedArgIndex = 0; nestedArgIndex < nestedPlan.root.args.length; nestedArgIndex++) {
+        const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
+        const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
+        const objectArg = nestedPlan.transformedObjectArgs.get(nestedArgIndex);
+        const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
+        if (directArg !== undefined) signatureNestedArgs.push(directArg);
+        else if (binaryArg !== undefined) signatureNestedArgs.push(binaryArg);
+        else if (objectArg !== undefined) signatureNestedArgs.push(objectArg);
+        else if (childArg !== undefined) signatureNestedArgs.push(childArg);
+        else signatureNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
+      }
+      const signatureNestedCall: CallExpr = {
+        kind: "call_expr",
+        callee: nestedPlan.transformedCallee,
+        typeArgs: nestedPlan.root.typeArgs,
+        args: signatureNestedArgs,
+        optional: nestedPlan.root.optional,
+        pos: nestedPlan.root.pos,
+        end: nestedPlan.root.end,
+      };
+      const plan = this.resolveOrdinaryCallPlan(signatureNestedCall, firstNestedAwait.awaitExpr, false, undefined);
+      if (plan === undefined) {
+        return undefined;
+      }
+      this.checkCallArgCount(nestedPlan.root.args.length, plan.params, plan.label, { pos: nestedPlan.root.pos });
+      this.assertNotVoid(plan.returnType, { pos: nestedPlan.root.pos }, "nested await call argument result");
+
+      let transformedCallee: Expr = signatureNestedCall.callee;
+      const firstNestedStep = stepForAwaitIndex(firstNestedAwaitIndex);
+      if (nestedPlan.awaitedReceiverIndex === undefined && nestedPlan.materializedReceiverNestedIndex === undefined) {
+        switch (plan.kind) {
+          case "class_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "interface_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "map_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "set_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "array_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "string_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          case "number_method": {
+            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
+            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
+            firstNestedStep.preAwaitReceiverTemps.push({
+              tempName: receiverTempName,
+              receiver: plan.receiver,
+              receiverType: plan.receiverType,
+            });
+            const receiverTempExpr: IdentExpr = {
+              kind: "ident",
+              name: receiverTempName,
+              pos: plan.receiver.pos,
+              end: plan.receiver.end,
+            };
+            transformedCallee = {
+              kind: "prop_access",
+              receiver: receiverTempExpr,
+              name: plan.methodName,
+              optional: false,
+              pos: plan.callee.pos,
+              end: plan.callee.end,
+            };
+            break;
+          }
+          default:
+            break;
+        }
+      }
+
+      const nestedArgTempByArg = new Map<number, IdentExpr>();
+      let nextNestedPreArgStart = 0;
+      for (const dependency of nestedPlan.awaitedArgDependencies) {
+        const awaitIndex = dependency.awaitIndex;
+        const ownerNestedArgIndex = dependency.argIndex;
+        const stepPlan = stepForAwaitIndex(awaitIndex);
+        for (let nestedArgIndex = nextNestedPreArgStart; nestedArgIndex < ownerNestedArgIndex; nestedArgIndex++) {
+          const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
+          const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
+          const objectArg = nestedPlan.transformedObjectArgs.get(nestedArgIndex);
+          const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
+          let arg: Expr = nestedPlan.root.args[nestedArgIndex];
+          if (directArg !== undefined) arg = directArg;
+          else if (binaryArg !== undefined) arg = binaryArg;
+          else if (objectArg !== undefined) arg = objectArg;
+          else if (childArg !== undefined) arg = childArg;
+          if (nestedArgIndex >= plan.params.length) {
+            return undefined;
+          }
+          const param = plan.params[nestedArgIndex];
+          const argType = param.type;
+          this.assertNotVoid(argType, { pos: arg.pos }, "nested await call pre-argument temporary");
+          const tempName = `${nestedPlan.resultTempName}_arg_${awaitIndex}_${nestedArgIndex}`;
+          this.scope.declareBinding(tempName, argType, /* isConst */ true, { pos: arg.pos });
+          stepPlan.preAwaitArgTemps.push({ tempName, arg, argType });
+          nestedArgTempByArg.set(nestedArgIndex, {
+            kind: "ident",
+            name: tempName,
+            pos: arg.pos,
+            end: arg.end,
+          });
+        }
+        nextNestedPreArgStart = ownerNestedArgIndex + 1;
+      }
+
+      const transformedNestedArgs: Array<Expr> = [];
+      for (let nestedArgIndex = 0; nestedArgIndex < nestedPlan.root.args.length; nestedArgIndex++) {
+        const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
+        const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
+        const objectArg = nestedPlan.transformedObjectArgs.get(nestedArgIndex);
+        const preArg = nestedArgTempByArg.get(nestedArgIndex);
+        const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
+        if (directArg !== undefined) transformedNestedArgs.push(directArg);
+        else if (binaryArg !== undefined) transformedNestedArgs.push(binaryArg);
+        else if (objectArg !== undefined) transformedNestedArgs.push(objectArg);
+        else if (preArg !== undefined) transformedNestedArgs.push(preArg);
+        else if (childArg !== undefined) transformedNestedArgs.push(childArg);
+        else transformedNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
+      }
+
+      nestedPlan.transformedCallee = transformedCallee;
+      nestedPlan.plan = plan;
+      nestedPlan.resultType = plan.returnType;
+      nestedPlan.transformedCall = {
+        kind: "call_expr",
+        callee: transformedCallee,
+        typeArgs: nestedPlan.root.typeArgs,
+        args: transformedNestedArgs,
+        optional: nestedPlan.root.optional,
+        pos: nestedPlan.root.pos,
+        end: nestedPlan.root.end,
+      };
+      this.scope.declareBinding(nestedPlan.resultTempName, plan.returnType, /* isConst */ true, {
+        pos: nestedPlan.root.pos,
+      });
+      nestedResultByArg.set(nestedPlan.argIndex, nestedPlan.resultTempExpr);
+    }
+
+    let lastAwaitEvent: AwaitExpr | undefined = undefined;
+    for (const event of callArgEvents) {
+      if (event.kind === "await") {
+        lastAwaitEvent = event.awaitExpr;
+        continue;
+      }
+      if (event.kind !== "materialize") continue;
+      if (lastAwaitEvent === undefined) {
+        return undefined;
+      }
+      const nestedPlan = nestedCallArgs[event.nestedIndex];
+      const transformedCall = nestedPlan.transformedCall;
+      if (transformedCall === undefined) {
+        return undefined;
+      }
+      const resultType = nestedPlan.resultType;
+      if (resultType === undefined) {
+        return undefined;
+      }
+      let materializeStep: MultiAwaitCallArgStepPlan | undefined = undefined;
+      for (const step of plannedSteps) {
+        if (step.awaitExpr.pos === lastAwaitEvent.pos && step.awaitExpr.end === lastAwaitEvent.end) {
+          materializeStep = step;
+          break;
+        }
+      }
+      if (materializeStep === undefined) {
+        return undefined;
+      }
+      materializeStep.postAwaitMaterializedTemps.push({
+        kind: "expr",
+        tempName: nestedPlan.resultTempName,
+        expr: transformedCall,
+        exprType: resultType,
+      });
+    }
+
+    return nestedResultByArg;
+  }
+
   private tryBuildMultiAwaitCallArgExpression(
     expr: Expr,
     tempPrefix: string,
@@ -7863,324 +8192,16 @@ class Emitter {
       });
     }
 
-    const nestedResultByArg = new Map<number, IdentExpr>();
     const argStepOffset = receiverAwaitStep === undefined ? 0 : 1;
-    const stepForAwaitIndex = (awaitIndex: number): MultiAwaitCallArgStepPlan => {
-      return plannedSteps[awaitIndex + argStepOffset];
-    };
-    for (let nestedIndex = nestedCallArgs.length - 1; nestedIndex >= 0; nestedIndex--) {
-      const nestedPlan = nestedCallArgs[nestedIndex];
-      const firstNestedAwaitIndex = nestedPlan.awaitedArgIndexes[0];
-      const firstNestedAwait = awaitedArgs[firstNestedAwaitIndex];
-
-      const signatureNestedArgs: Array<Expr> = [];
-      for (let nestedArgIndex = 0; nestedArgIndex < nestedPlan.root.args.length; nestedArgIndex++) {
-        const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
-        const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
-        const objectArg = nestedPlan.transformedObjectArgs.get(nestedArgIndex);
-        const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
-        if (directArg !== undefined) signatureNestedArgs.push(directArg);
-        else if (binaryArg !== undefined) signatureNestedArgs.push(binaryArg);
-        else if (objectArg !== undefined) signatureNestedArgs.push(objectArg);
-        else if (childArg !== undefined) signatureNestedArgs.push(childArg);
-        else signatureNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
-      }
-      const signatureNestedCall: CallExpr = {
-        kind: "call_expr",
-        callee: nestedPlan.transformedCallee,
-        typeArgs: nestedPlan.root.typeArgs,
-        args: signatureNestedArgs,
-        optional: nestedPlan.root.optional,
-        pos: nestedPlan.root.pos,
-        end: nestedPlan.root.end,
-      };
-      const plan = this.resolveOrdinaryCallPlan(signatureNestedCall, firstNestedAwait.awaitExpr, false, undefined);
-      if (plan === undefined) {
-        return undefined;
-      }
-      this.checkCallArgCount(nestedPlan.root.args.length, plan.params, plan.label, { pos: nestedPlan.root.pos });
-      this.assertNotVoid(plan.returnType, { pos: nestedPlan.root.pos }, "nested await call argument result");
-
-      let transformedCallee: Expr = signatureNestedCall.callee;
-      const firstNestedStep = stepForAwaitIndex(firstNestedAwaitIndex);
-      if (nestedPlan.awaitedReceiverIndex === undefined && nestedPlan.materializedReceiverNestedIndex === undefined) {
-        switch (plan.kind) {
-          case "class_method": {
-            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-            firstNestedStep.preAwaitReceiverTemps.push({
-              tempName: receiverTempName,
-              receiver: plan.receiver,
-              receiverType: plan.receiverType,
-            });
-            const receiverTempExpr: IdentExpr = {
-              kind: "ident",
-              name: receiverTempName,
-              pos: plan.receiver.pos,
-              end: plan.receiver.end,
-            };
-            transformedCallee = {
-              kind: "prop_access",
-              receiver: receiverTempExpr,
-              name: plan.methodName,
-              optional: false,
-              pos: plan.callee.pos,
-              end: plan.callee.end,
-            };
-            break;
-          }
-          case "interface_method": {
-            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-            firstNestedStep.preAwaitReceiverTemps.push({
-              tempName: receiverTempName,
-              receiver: plan.receiver,
-              receiverType: plan.receiverType,
-            });
-            const receiverTempExpr: IdentExpr = {
-              kind: "ident",
-              name: receiverTempName,
-              pos: plan.receiver.pos,
-              end: plan.receiver.end,
-            };
-            transformedCallee = {
-              kind: "prop_access",
-              receiver: receiverTempExpr,
-              name: plan.methodName,
-              optional: false,
-              pos: plan.callee.pos,
-              end: plan.callee.end,
-            };
-            break;
-          }
-          case "map_method": {
-            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-            firstNestedStep.preAwaitReceiverTemps.push({
-              tempName: receiverTempName,
-              receiver: plan.receiver,
-              receiverType: plan.receiverType,
-            });
-            const receiverTempExpr: IdentExpr = {
-              kind: "ident",
-              name: receiverTempName,
-              pos: plan.receiver.pos,
-              end: plan.receiver.end,
-            };
-            transformedCallee = {
-              kind: "prop_access",
-              receiver: receiverTempExpr,
-              name: plan.methodName,
-              optional: false,
-              pos: plan.callee.pos,
-              end: plan.callee.end,
-            };
-            break;
-          }
-          case "set_method": {
-            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-            firstNestedStep.preAwaitReceiverTemps.push({
-              tempName: receiverTempName,
-              receiver: plan.receiver,
-              receiverType: plan.receiverType,
-            });
-            const receiverTempExpr: IdentExpr = {
-              kind: "ident",
-              name: receiverTempName,
-              pos: plan.receiver.pos,
-              end: plan.receiver.end,
-            };
-            transformedCallee = {
-              kind: "prop_access",
-              receiver: receiverTempExpr,
-              name: plan.methodName,
-              optional: false,
-              pos: plan.callee.pos,
-              end: plan.callee.end,
-            };
-            break;
-          }
-          case "array_method": {
-            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-            firstNestedStep.preAwaitReceiverTemps.push({
-              tempName: receiverTempName,
-              receiver: plan.receiver,
-              receiverType: plan.receiverType,
-            });
-            const receiverTempExpr: IdentExpr = {
-              kind: "ident",
-              name: receiverTempName,
-              pos: plan.receiver.pos,
-              end: plan.receiver.end,
-            };
-            transformedCallee = {
-              kind: "prop_access",
-              receiver: receiverTempExpr,
-              name: plan.methodName,
-              optional: false,
-              pos: plan.callee.pos,
-              end: plan.callee.end,
-            };
-            break;
-          }
-          case "string_method": {
-            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-            firstNestedStep.preAwaitReceiverTemps.push({
-              tempName: receiverTempName,
-              receiver: plan.receiver,
-              receiverType: plan.receiverType,
-            });
-            const receiverTempExpr: IdentExpr = {
-              kind: "ident",
-              name: receiverTempName,
-              pos: plan.receiver.pos,
-              end: plan.receiver.end,
-            };
-            transformedCallee = {
-              kind: "prop_access",
-              receiver: receiverTempExpr,
-              name: plan.methodName,
-              optional: false,
-              pos: plan.callee.pos,
-              end: plan.callee.end,
-            };
-            break;
-          }
-          case "number_method": {
-            const receiverTempName = `${nestedPlan.resultTempName}_recv`;
-            this.scope.declareBinding(receiverTempName, plan.receiverType, /* isConst */ true, { pos: plan.receiver.pos });
-            firstNestedStep.preAwaitReceiverTemps.push({
-              tempName: receiverTempName,
-              receiver: plan.receiver,
-              receiverType: plan.receiverType,
-            });
-            const receiverTempExpr: IdentExpr = {
-              kind: "ident",
-              name: receiverTempName,
-              pos: plan.receiver.pos,
-              end: plan.receiver.end,
-            };
-            transformedCallee = {
-              kind: "prop_access",
-              receiver: receiverTempExpr,
-              name: plan.methodName,
-              optional: false,
-              pos: plan.callee.pos,
-              end: plan.callee.end,
-            };
-            break;
-          }
-          default:
-            break;
-        }
-      }
-
-      const nestedArgTempByArg = new Map<number, IdentExpr>();
-      let nextNestedPreArgStart = 0;
-      for (const dependency of nestedPlan.awaitedArgDependencies) {
-        const awaitIndex = dependency.awaitIndex;
-        const ownerNestedArgIndex = dependency.argIndex;
-        const stepPlan = stepForAwaitIndex(awaitIndex);
-        for (let nestedArgIndex = nextNestedPreArgStart; nestedArgIndex < ownerNestedArgIndex; nestedArgIndex++) {
-          const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
-          const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
-          const objectArg = nestedPlan.transformedObjectArgs.get(nestedArgIndex);
-          const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
-          let arg: Expr = nestedPlan.root.args[nestedArgIndex];
-          if (directArg !== undefined) arg = directArg;
-          else if (binaryArg !== undefined) arg = binaryArg;
-          else if (objectArg !== undefined) arg = objectArg;
-          else if (childArg !== undefined) arg = childArg;
-          if (nestedArgIndex >= plan.params.length) {
-            return undefined;
-          }
-          const param = plan.params[nestedArgIndex];
-          const argType = param.type;
-          this.assertNotVoid(argType, { pos: arg.pos }, "nested await call pre-argument temporary");
-          const tempName = `${nestedPlan.resultTempName}_arg_${awaitIndex}_${nestedArgIndex}`;
-          this.scope.declareBinding(tempName, argType, /* isConst */ true, { pos: arg.pos });
-          stepPlan.preAwaitArgTemps.push({ tempName, arg, argType });
-          nestedArgTempByArg.set(nestedArgIndex, {
-            kind: "ident",
-            name: tempName,
-            pos: arg.pos,
-            end: arg.end,
-          });
-        }
-        nextNestedPreArgStart = ownerNestedArgIndex + 1;
-      }
-
-      const transformedNestedArgs: Array<Expr> = [];
-      for (let nestedArgIndex = 0; nestedArgIndex < nestedPlan.root.args.length; nestedArgIndex++) {
-        const directArg = nestedPlan.transformedDirectArgs.get(nestedArgIndex);
-        const binaryArg = nestedPlan.transformedBinaryArgs.get(nestedArgIndex);
-        const objectArg = nestedPlan.transformedObjectArgs.get(nestedArgIndex);
-        const preArg = nestedArgTempByArg.get(nestedArgIndex);
-        const childArg = nestedPlan.transformedNestedCallArgs.get(nestedArgIndex);
-        if (directArg !== undefined) transformedNestedArgs.push(directArg);
-        else if (binaryArg !== undefined) transformedNestedArgs.push(binaryArg);
-        else if (objectArg !== undefined) transformedNestedArgs.push(objectArg);
-        else if (preArg !== undefined) transformedNestedArgs.push(preArg);
-        else if (childArg !== undefined) transformedNestedArgs.push(childArg);
-        else transformedNestedArgs.push(nestedPlan.root.args[nestedArgIndex]);
-      }
-
-      nestedPlan.transformedCallee = transformedCallee;
-      nestedPlan.plan = plan;
-      nestedPlan.resultType = plan.returnType;
-      nestedPlan.transformedCall = {
-        kind: "call_expr",
-        callee: transformedCallee,
-        typeArgs: nestedPlan.root.typeArgs,
-        args: transformedNestedArgs,
-        optional: nestedPlan.root.optional,
-        pos: nestedPlan.root.pos,
-        end: nestedPlan.root.end,
-      };
-      this.scope.declareBinding(nestedPlan.resultTempName, plan.returnType, /* isConst */ true, {
-        pos: nestedPlan.root.pos,
-      });
-      nestedResultByArg.set(nestedPlan.argIndex, nestedPlan.resultTempExpr);
-    }
-
-    let lastAwaitEvent: AwaitExpr | undefined = undefined;
-    for (const event of callArgEvents) {
-      if (event.kind === "await") {
-        lastAwaitEvent = event.awaitExpr;
-        continue;
-      }
-      if (event.kind !== "materialize") continue;
-      if (lastAwaitEvent === undefined) {
-        return undefined;
-      }
-      const nestedPlan = nestedCallArgs[event.nestedIndex];
-      const transformedCall = nestedPlan.transformedCall;
-      if (transformedCall === undefined) {
-        return undefined;
-      }
-      const resultType = nestedPlan.resultType;
-      if (resultType === undefined) {
-        return undefined;
-      }
-      let materializeStep: MultiAwaitCallArgStepPlan | undefined = undefined;
-      for (const step of plannedSteps) {
-        if (step.awaitExpr.pos === lastAwaitEvent.pos && step.awaitExpr.end === lastAwaitEvent.end) {
-          materializeStep = step;
-          break;
-        }
-      }
-      if (materializeStep === undefined) {
-        return undefined;
-      }
-      materializeStep.postAwaitMaterializedTemps.push({
-        kind: "expr",
-        tempName: nestedPlan.resultTempName,
-        expr: transformedCall,
-        exprType: resultType,
-      });
+    const nestedResultByArg = this.materializeNestedMultiAwaitCallArgPlans(
+      nestedCallArgs,
+      awaitedArgs,
+      callArgEvents,
+      plannedSteps,
+      argStepOffset,
+    );
+    if (nestedResultByArg === undefined) {
+      return undefined;
     }
 
     const signatureArgs: Array<Expr> = [];
@@ -8451,22 +8472,77 @@ class Emitter {
     if (rootMaybe.kind !== "array_lit") return undefined;
     const events = this.collectMultiAwaitArrayLiteralElements(rootMaybe);
     if (events === undefined) return undefined;
-    const awaitCount = events.filter((event) => event.kind === "await").length;
-    if (awaitCount < 2) return undefined;
 
     let transformedExpr: Expr = expr;
-    const steps: Array<MultiAwaitCallArgStepPlan> = [];
-    let pendingSnapshots: Array<AwaitSnapshotTemp> = [];
-    let snapshotIndex = 0;
+    const awaitedArgs: Array<MultiAwaitCallArgAwait> = [];
+    const callArgEvents: Array<MultiAwaitCallArgEvent> = [];
+    const nestedCallArgs: Array<MultiAwaitNestedCallArgPlan> = [];
     for (const event of events) {
       switch (event.kind) {
         case "pure":
           break;
         case "snapshot": {
-          const snapshotExpr = event.expr;
-          const exprType = this.inferType(snapshotExpr);
-          this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await array snapshot value");
-          if (steps.length < awaitCount) {
+          callArgEvents.push({ kind: "snapshot", argIndex: -1, expr: event.expr, nestedIndex: -1, nestedArgIndex: -1 });
+          break;
+        }
+        case "await": {
+          const awaitExpr = event.awaitExpr;
+          const tempName = `${tempPrefix}_${awaitedArgs.length}`;
+          awaitedArgs.push({
+            argIndex: -1,
+            awaitExpr,
+            binaryArg: false,
+            tempName,
+            owner: { kind: "outer_direct" },
+          });
+          callArgEvents.push({ kind: "await", argIndex: -1, awaitExpr, binaryArg: false });
+          break;
+        }
+        case "nested_call": {
+          const nestedIndex = nestedCallArgs.length;
+          const nestedPlan = this.tryBuildNestedMultiAwaitCallArgPlan(
+            event.expr,
+            -1,
+            nestedIndex,
+            tempPrefix,
+            awaitedArgs,
+            callArgEvents,
+            nestedCallArgs,
+            false,
+          );
+          if (nestedPlan === undefined) {
+            return undefined;
+          }
+          transformedExpr = this.replaceExactExprInExpr(transformedExpr, event.expr, nestedPlan.resultTempExpr);
+          callArgEvents.push({ kind: "materialize", argIndex: -1, nestedIndex });
+          break;
+        }
+      }
+    }
+    if (awaitedArgs.length < 2) return undefined;
+
+    const binarySnapshotsByAwait: Array<AwaitSnapshotsForAwait> = [];
+    let pendingSnapshots: Array<{
+      expr: Expr;
+      nestedIndex: number;
+      nestedArgIndex: number;
+    }> = [];
+    let snapshotIndex = 0;
+    for (const event of callArgEvents) {
+      switch (event.kind) {
+        case "snapshot":
+          pendingSnapshots.push({
+            expr: event.expr,
+            nestedIndex: event.nestedIndex,
+            nestedArgIndex: event.nestedArgIndex,
+          });
+          break;
+        case "await": {
+          const preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
+          for (const pendingSnapshot of pendingSnapshots) {
+            const snapshotExpr = pendingSnapshot.expr;
+            const exprType = this.inferType(snapshotExpr);
+            this.assertNotVoid(exprType, { pos: snapshotExpr.pos }, "await array snapshot value");
             const tempName = `${tempPrefix}_snapshot_${snapshotIndex}`;
             snapshotIndex++;
             this.scope.declareBinding(tempName, exprType, /* isConst */ true, { pos: snapshotExpr.pos });
@@ -8476,41 +8552,146 @@ class Emitter {
               pos: snapshotExpr.pos,
               end: snapshotExpr.end,
             };
-            transformedExpr = this.replaceExactExprInExpr(transformedExpr, snapshotExpr, tempExpr);
-            pendingSnapshots.push({ tempName, expr: snapshotExpr, exprType });
+            if (pendingSnapshot.nestedIndex >= 0) {
+              const nestedPlan = nestedCallArgs[pendingSnapshot.nestedIndex];
+              const transformedBinaryArg = nestedPlan.transformedBinaryArgs.get(pendingSnapshot.nestedArgIndex);
+              if (transformedBinaryArg === undefined) {
+                return undefined;
+              }
+              nestedPlan.transformedBinaryArgs.set(
+                pendingSnapshot.nestedArgIndex,
+                this.replaceExactExprInExpr(transformedBinaryArg, snapshotExpr, tempExpr),
+              );
+            } else {
+              transformedExpr = this.replaceExactExprInExpr(transformedExpr, snapshotExpr, tempExpr);
+            }
+            preAwaitSnapshotTemps.push({ tempName, expr: snapshotExpr, exprType });
           }
+          if (preAwaitSnapshotTemps.length > 0) {
+            binarySnapshotsByAwait.push({ awaitExpr: event.awaitExpr, temps: preAwaitSnapshotTemps });
+          }
+          const nextPendingSnapshots: Array<{
+            expr: Expr;
+            nestedIndex: number;
+            nestedArgIndex: number;
+          }> = [];
+          pendingSnapshots = nextPendingSnapshots;
           break;
         }
-        case "await": {
-          const awaitExpr = event.awaitExpr;
-          const operandInfo = this.resolveAwaitOperand(awaitExpr.operand, undefined);
-          if (operandInfo.awaitedType.kind === "void") return undefined;
-          const tempName = `${tempPrefix}_${steps.length}`;
-          this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaitExpr.pos });
-          const tempExpr: IdentExpr = {
-            kind: "ident",
-            name: tempName,
-            pos: awaitExpr.pos,
-            end: awaitExpr.end,
-          };
-          transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaitExpr, tempExpr);
-          const preAwaitSnapshotTemps = pendingSnapshots;
-          const nextPendingSnapshots: Array<AwaitSnapshotTemp> = [];
-          pendingSnapshots = nextPendingSnapshots;
-          steps.push({
-            awaitExpr,
-            operandInfo,
-            awaitedType: operandInfo.awaitedType,
-            tempName,
-            preAwaitReceiverTemps: [],
-            preAwaitIndexTemps: [],
-            preAwaitArgTemps: [],
-            preAwaitSnapshotTemps,
-            postAwaitMaterializedTemps: [],
+        case "materialize":
+          break;
+      }
+    }
+
+    const steps: Array<MultiAwaitCallArgStepPlan> = [];
+    for (const awaited of awaitedArgs) {
+      const operandInfo = this.resolveAwaitOperand(awaited.awaitExpr.operand, undefined);
+      if (awaited.binaryArg && operandInfo.awaitedType.kind === "void") {
+        return undefined;
+      }
+      const tempName = awaited.tempName;
+      if (operandInfo.awaitedType.kind !== "void") {
+        this.scope.declareBinding(tempName, operandInfo.awaitedType, /* isConst */ true, { pos: awaited.awaitExpr.pos });
+      }
+      const tempExpr: IdentExpr = {
+        kind: "ident",
+        name: tempName,
+        pos: awaited.awaitExpr.pos,
+        end: awaited.awaitExpr.end,
+      };
+      const postAwaitMaterializedTemps: Array<AwaitMaterializedTemp> = [];
+      let preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
+      let preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
+      const owner = awaited.owner;
+      switch (owner.kind) {
+        case "outer_direct":
+          transformedExpr = this.replaceAwaitExprInExpr(transformedExpr, awaited.awaitExpr, tempExpr);
+          break;
+        case "nested_receiver":
+          break;
+        case "nested_direct": {
+          const nestedPlan = nestedCallArgs[owner.nestedIndex];
+          nestedPlan.transformedDirectArgs.set(owner.nestedArgIndex, tempExpr);
+          break;
+        }
+        case "nested_binary": {
+          const nestedPlan = nestedCallArgs[owner.nestedIndex];
+          const transformedBinaryArg = nestedPlan.transformedBinaryArgs.get(owner.nestedArgIndex);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          nestedPlan.transformedBinaryArgs.set(
+            owner.nestedArgIndex,
+            this.replaceAwaitExprInExpr(transformedBinaryArg, awaited.awaitExpr, tempExpr),
+          );
+          break;
+        }
+        case "nested_assignment": {
+          const nestedPlan = nestedCallArgs[owner.nestedIndex];
+          const transformedBinaryArg = nestedPlan.transformedBinaryArgs.get(owner.nestedArgIndex);
+          if (transformedBinaryArg === undefined) {
+            return undefined;
+          }
+          const materialized = this.tryBuildAwaitedAssignmentLeaf(owner.expr, awaited.awaitExpr, tempExpr);
+          if (materialized === undefined) {
+            return undefined;
+          }
+          preAwaitReceiverTemps = materialized.preAwaitReceiverTemps;
+          preAwaitIndexTemps = materialized.preAwaitIndexTemps;
+          const materializedTempName = `${tempName}_assign`;
+          this.scope.declareBinding(materializedTempName, materialized.exprType, /* isConst */ true, {
+            pos: owner.expr.pos,
           });
+          const materializedTempExpr: IdentExpr = {
+            kind: "ident",
+            name: materializedTempName,
+            pos: owner.expr.pos,
+            end: owner.expr.end,
+          };
+          nestedPlan.transformedBinaryArgs.set(
+            owner.nestedArgIndex,
+            this.replaceExactExprInExpr(transformedBinaryArg, owner.expr, materializedTempExpr),
+          );
+          postAwaitMaterializedTemps.push(this.buildAwaitMaterializedTemp(materializedTempName, materialized));
+          break;
+        }
+        case "outer_binary":
+        case "outer_assignment":
+          return undefined;
+      }
+      let preAwaitSnapshotTemps: Array<AwaitSnapshotTemp> = [];
+      for (const snapshotEntry of binarySnapshotsByAwait) {
+        if (
+          snapshotEntry.awaitExpr.pos === awaited.awaitExpr.pos &&
+          snapshotEntry.awaitExpr.end === awaited.awaitExpr.end
+        ) {
+          preAwaitSnapshotTemps = snapshotEntry.temps;
           break;
         }
       }
+      steps.push({
+        awaitExpr: awaited.awaitExpr,
+        operandInfo,
+        awaitedType: operandInfo.awaitedType,
+        tempName,
+        preAwaitReceiverTemps,
+        preAwaitIndexTemps,
+        preAwaitArgTemps: [],
+        preAwaitSnapshotTemps,
+        postAwaitMaterializedTemps,
+      });
+    }
+
+    if (
+      this.materializeNestedMultiAwaitCallArgPlans(
+        nestedCallArgs,
+        awaitedArgs,
+        callArgEvents,
+        steps,
+        0,
+      ) === undefined
+    ) {
+      return undefined;
     }
 
     return { transformedExpr, steps };
@@ -8615,7 +8796,14 @@ class Emitter {
       }
       if (value.kind === "array_lit") {
         const arrayEvents: Array<MultiAwaitLeafEvent> = [];
-        if (!this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, /* allowSnapshots */ true)) {
+        if (
+          !this.collectMultiAwaitArrayLiteralLeaves(
+            value,
+            arrayEvents,
+            /* allowSnapshots */ true,
+            /* allowAwaitedSpreadCallSources */ false,
+          )
+        ) {
           return undefined;
         }
         for (const event of arrayEvents) {
@@ -8705,7 +8893,16 @@ class Emitter {
 
   private collectMultiAwaitArrayLiteralElements(expr: ArrayLitExpr): Array<MultiAwaitLeafEvent> | undefined {
     const events: Array<MultiAwaitLeafEvent> = [];
-    if (!this.collectMultiAwaitArrayLiteralLeaves(expr, events, /* allowSnapshots */ true)) return undefined;
+    if (
+      !this.collectMultiAwaitArrayLiteralLeaves(
+        expr,
+        events,
+        /* allowSnapshots */ true,
+        /* allowAwaitedSpreadCallSources */ true,
+      )
+    ) {
+      return undefined;
+    }
     return events;
   }
 
@@ -8713,18 +8910,26 @@ class Emitter {
     expr: ArrayLitExpr,
     out: Array<MultiAwaitLeafEvent>,
     allowSnapshots: boolean,
+    allowAwaitedSpreadCallSources: boolean,
   ): boolean {
     if (expr.elems.length === 0) return false;
     for (const elem of expr.elems) {
       if (elem.kind === "spread") {
         const source = this.unwrapParenExpr(elem.expr);
+        if (this.collectAwaitExprsInExpr(source).length > 0) {
+          if (!allowAwaitedSpreadCallSources || source.kind !== "call_expr") return false;
+          out.push({ kind: "nested_call", expr: source });
+          continue;
+        }
         if (!allowSnapshots || !this.isSafeMultiAwaitArraySpreadSource(source)) return false;
         out.push({ kind: "snapshot", expr: source });
         continue;
       }
       const value = this.unwrapParenExpr(elem.expr);
       if (value.kind === "array_lit") {
-        if (!this.collectMultiAwaitArrayLiteralLeaves(value, out, allowSnapshots)) return false;
+        if (!this.collectMultiAwaitArrayLiteralLeaves(value, out, allowSnapshots, allowAwaitedSpreadCallSources)) {
+          return false;
+        }
         continue;
       }
       if (value.kind === "await_expr") {
@@ -8785,7 +8990,17 @@ class Emitter {
       }
       if (value.kind === "array_lit") {
         const arrayEvents: Array<MultiAwaitLeafEvent> = [];
-        if (!allowPureLeaves || !this.collectMultiAwaitArrayLiteralLeaves(value, arrayEvents, allowSnapshots)) return false;
+        if (
+          !allowPureLeaves ||
+          !this.collectMultiAwaitArrayLiteralLeaves(
+            value,
+            arrayEvents,
+            allowSnapshots,
+            /* allowAwaitedSpreadCallSources */ false,
+          )
+        ) {
+          return false;
+        }
         for (const event of arrayEvents) {
           if (allowSnapshots || event.kind === "await") out.push(event);
         }

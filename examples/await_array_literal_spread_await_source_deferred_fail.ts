@@ -13,4 +13,6 @@ async function answer(): Promise<number> {
   return values[0];
 }
 
-answer();
+answer().then((value: number): void => {
+  console.log(value);
+});
