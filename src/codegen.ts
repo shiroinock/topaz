@@ -225,6 +225,8 @@ type AssignmentArrayElementTargetRef = {
   target: ElemAccessExpr;
   receiverTemp: AwaitCallReceiverTemp;
   indexTemp: AwaitIndexTemp;
+  receiverMaterialized: boolean;
+  indexMaterialized: boolean;
   arrayType: TopazType;
   elemType: TopazType;
 };
@@ -6124,18 +6126,27 @@ class Emitter {
     if (rootMaybe.kind !== "assign_expr") return undefined;
     const root = rootMaybe;
     const unwrappedTarget = this.unwrapParenExpr(root.target);
+    const materializedPropertyTarget =
+      unwrappedTarget.kind === "prop_access" && !this.isSafeLvalueBase(unwrappedTarget.receiver);
+    const materializedArrayTarget =
+      unwrappedTarget.kind === "elem_access" &&
+      (!this.isSafeLvalueBase(unwrappedTarget.receiver) || !this.isSafeArrayElementIndex(unwrappedTarget.index));
     if (
       root.op !== "=" &&
       this.isAwaitLowerableCompoundAssignmentOp(root.op) &&
-      unwrappedTarget.kind === "prop_access" &&
-      !this.isSafeLvalueBase(unwrappedTarget.receiver)
+      (materializedPropertyTarget || materializedArrayTarget)
     ) {
       if (this.collectAwaitExprsInExpr(root.target).length > 0) {
         throw new CodegenError({ pos: awaitExpr.pos }, this.unsupportedAwaitLoweringMessage());
       }
       if (!this.simpleAwaitReplacementSupported(root.value, awaitExpr)) return undefined;
       const targetRef = this.tryBuildAssignmentTargetRef(unwrappedTarget, awaitedTempName);
-      if (targetRef === undefined || (targetRef.kind !== "class_field" && targetRef.kind !== "interface_field")) {
+      if (
+        targetRef === undefined ||
+        (targetRef.kind !== "class_field" &&
+          targetRef.kind !== "interface_field" &&
+          targetRef.kind !== "array_element")
+      ) {
         return undefined;
       }
       const awaitedTempExpr: IdentExpr = {
@@ -6160,7 +6171,7 @@ class Emitter {
           end: root.end,
         },
         preAwaitReceiverTemps: this.assignmentTargetRefReceiverTemps(targetRef),
-        preAwaitIndexTemps: [],
+        preAwaitIndexTemps: this.assignmentTargetRefIndexTemps(targetRef),
         postAwaitMaterializedTemps: [this.buildAwaitMaterializedTemp(materializedTempName, materialized)],
         statementDiscardMaterializationType: materialized.exprType,
       };
@@ -6324,8 +6335,13 @@ class Emitter {
       };
     }
     if (target.kind === "elem_access") {
-      if (!this.isSafeLvalueBase(target.receiver)) return undefined;
-      if (!this.isSafeArrayElementIndex(target.index)) return undefined;
+      if (target.optional) return undefined;
+      if (this.collectAwaitExprsInExpr(target.receiver).length > 0) return undefined;
+      if (this.collectAwaitExprsInExpr(target.index).length > 0) return undefined;
+      const receiverMaterialized = !this.isSafeLvalueBase(target.receiver);
+      const indexMaterialized = !this.isSafeArrayElementIndex(target.index);
+      if (receiverMaterialized && this.unwrapParenExpr(target.receiver).kind !== "call_expr") return undefined;
+      if (indexMaterialized && this.unwrapParenExpr(target.index).kind !== "call_expr") return undefined;
       const arrayType = this.inferType(target.receiver);
       if (!isArrayType(arrayType)) return undefined;
       const elemType = arrayElem(arrayType);
@@ -6367,6 +6383,8 @@ class Emitter {
         },
         receiverTemp,
         indexTemp,
+        receiverMaterialized,
+        indexMaterialized,
         arrayType,
         elemType,
       };
@@ -8589,6 +8607,8 @@ class Emitter {
         if (targetRef.receiverMaterialized) snapshotTarget = targetRef.target;
       } else if (targetRef.kind === "interface_field") {
         if (targetRef.receiverMaterialized) snapshotTarget = targetRef.target;
+      } else if (targetRef.kind === "array_element") {
+        if (targetRef.receiverMaterialized || targetRef.indexMaterialized) snapshotTarget = targetRef.target;
       }
       const oldValueType = this.inferType(snapshotTarget);
       this.scope.declareBinding(oldValueTempName, oldValueType, /* isConst */ true, { pos: target.pos });
@@ -8601,6 +8621,10 @@ class Emitter {
         if (targetRef.receiverMaterialized) oldValueSnapshot.assignmentTargetRef = targetRef;
       } else if (targetRef.kind === "interface_field") {
         if (targetRef.receiverMaterialized) oldValueSnapshot.assignmentTargetRef = targetRef;
+      } else if (targetRef.kind === "array_element") {
+        if (targetRef.receiverMaterialized || targetRef.indexMaterialized) {
+          oldValueSnapshot.assignmentTargetRef = targetRef;
+        }
       }
       const firstSnapshots: Array<AwaitSnapshotTemp> = [oldValueSnapshot];
       for (const snapshot of firstStep.preAwaitSnapshotTemps) firstSnapshots.push(snapshot);
@@ -10045,8 +10069,12 @@ class Emitter {
             case "interface_field":
               expr = `${frameRef}->${targetRefMaybe.receiverTemp.tempName}.vt->get_${targetRefMaybe.fieldName}(${frameRef}->${targetRefMaybe.receiverTemp.tempName}.data)`;
               break;
+            case "array_element": {
+              const arrayName = arrayShortName(targetRefMaybe.arrayType);
+              expr = `topaz_array_${arrayName}_at(${frameRef}->${targetRefMaybe.receiverTemp.tempName}, ${frameRef}->${targetRefMaybe.indexTemp.tempName})`;
+              break;
+            }
             case "identifier":
-            case "array_element":
               expr = this.emitWithExpected(temp.expr, temp.exprType);
               break;
           }

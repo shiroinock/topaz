@@ -6,7 +6,7 @@ function nextIndex(): number {
 
 async function answer(): Promise<number> {
   const items: Array<number> = [0];
-  return (items[nextIndex()] += (await Promise.resolve(1)) + (await Promise.resolve(2)));
+  return (items[0 + nextIndex()] += (await Promise.resolve(1)) + (await Promise.resolve(2)));
 }
 
 answer();
