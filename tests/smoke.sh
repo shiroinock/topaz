@@ -3159,7 +3159,7 @@ run_case await_return_expr_deferred_fail "middle"
 run_case await_expression_statement_deferred_fail $'middle\n6'
 run_case await_binary_property_assignment_side_effect_deferred_fail $'2\n6'
 run_case await_binary_interface_assignment_side_effect_deferred_fail $'2\n6'
-run_fail_case await_binary_interface_assignment_side_effect_receiver_deferred_fail examples/await_binary_interface_assignment_side_effect_receiver_deferred_fail.ts "await expression lowering is deferred"
+run_case await_binary_interface_assignment_side_effect_receiver_deferred_fail ""
 run_case await_binary_array_element_assignment_side_effect_deferred_fail $'2\n6'
 run_case await_binary_array_element_assignment_side_effect_index_deferred_fail $'sync tail\nleft\nindex\nright one\nright two\n6\n5\n20\n1\nthen\n6'
 run_case await_binary_array_element_assignment_compound_deferred_fail $'3\n43'
@@ -3167,6 +3167,10 @@ run_case await_binary_array_element_assignment_compound_side_effect_index_deferr
 run_case await_binary_local_compound_assignment_side_effect_snapshot $'3\n43'
 run_case await_binary_class_field_compound_assignment_side_effect_deferred_fail $'3\n43'
 run_case await_binary_interface_field_compound_assignment_side_effect_deferred_fail $'3\n43'
+run_case await_snapshot_assignment_target_descriptors $'left class\nsync tail\nmake class\nrhs class\nright class\nleft iface\nmake iface\nas slot\nrhs iface\nright iface\nleft array\nmake array\nindex array\nrhs array\nright array\nleft compound\nmake compound\nindex compound\nrhs compound\nright compound\nthen\n88'
+run_fail_case await_snapshot_assignment_property_target_await_fail examples/await_snapshot_assignment_property_target_await_fail.ts "await expression lowering is deferred"
+run_fail_case await_snapshot_assignment_array_index_await_fail examples/await_snapshot_assignment_array_index_await_fail.ts "await expression lowering is deferred"
+run_fail_case await_snapshot_assignment_conditional_target_fail examples/await_snapshot_assignment_conditional_target_fail.ts "await expression lowering is deferred"
 run_case await_binary_prefix_update_side_effect_snapshot $'2\n2\n444'
 run_case await_binary_array_interface_prefix_update_snapshot $'2\n2\n9\n9\nleft\nright\n6\n8\n1114'
 run_case await_binary_postfix_update_side_effect_deferred_fail $'2\n2\n442'
