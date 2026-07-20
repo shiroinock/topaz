@@ -170,6 +170,7 @@ type AwaitSnapshotTemp = {
   expr: Expr;
   exprType: TopazType;
   assignmentTargetRef?: AssignmentTargetRef;
+  updateTargetRef?: UpdateTargetRef;
 };
 
 type AwaitMaterializedTemp = {
@@ -236,6 +237,50 @@ type AssignmentTargetRef =
   | AssignmentClassFieldTargetRef
   | AssignmentInterfaceFieldTargetRef
   | AssignmentArrayElementTargetRef;
+
+type UpdateIdentifierTargetRef = {
+  kind: "identifier";
+  target: IdentExpr;
+  targetName: string;
+  targetType: TopazType;
+};
+
+type UpdateClassFieldTargetRef = {
+  kind: "class_field";
+  target: PropAccessExpr;
+  receiverTemp: AwaitCallReceiverTemp;
+  receiverType: TopazType;
+  receiverMaterialized: boolean;
+  fieldName: string;
+  fieldType: TopazType;
+};
+
+type UpdateInterfaceFieldTargetRef = {
+  kind: "interface_field";
+  target: PropAccessExpr;
+  receiverTemp: AwaitCallReceiverTemp;
+  receiverType: TopazType;
+  receiverMaterialized: boolean;
+  fieldName: string;
+  fieldType: TopazType;
+};
+
+type UpdateArrayElementTargetRef = {
+  kind: "array_element";
+  target: ElemAccessExpr;
+  receiverTemp: AwaitCallReceiverTemp;
+  indexTemp: AwaitIndexTemp;
+  receiverMaterialized: boolean;
+  indexMaterialized: boolean;
+  arrayType: TopazType;
+  elemType: TopazType;
+};
+
+type UpdateTargetRef =
+  | UpdateIdentifierTargetRef
+  | UpdateClassFieldTargetRef
+  | UpdateInterfaceFieldTargetRef
+  | UpdateArrayElementTargetRef;
 
 type AwaitedAssignmentLeaf =
   | {
@@ -6434,6 +6479,92 @@ class Emitter {
     }
   }
 
+  private tryBuildUpdateTargetRef(
+    target: Expr,
+    awaitedTempName: string,
+    declareBindings: boolean,
+  ): UpdateTargetRef | undefined {
+    const assignmentTargetRef = this.tryBuildAssignmentTargetRef(target, awaitedTempName, declareBindings);
+    if (assignmentTargetRef === undefined) return undefined;
+    switch (assignmentTargetRef.kind) {
+      case "identifier":
+        return {
+          kind: "identifier",
+          target: assignmentTargetRef.target,
+          targetName: assignmentTargetRef.targetName,
+          targetType: assignmentTargetRef.targetType,
+        };
+      case "class_field":
+        return {
+          kind: "class_field",
+          target: assignmentTargetRef.target,
+          receiverTemp: assignmentTargetRef.receiverTemp,
+          receiverType: assignmentTargetRef.receiverType,
+          receiverMaterialized: assignmentTargetRef.receiverMaterialized,
+          fieldName: assignmentTargetRef.fieldName,
+          fieldType: assignmentTargetRef.fieldType,
+        };
+      case "interface_field":
+        return {
+          kind: "interface_field",
+          target: assignmentTargetRef.target,
+          receiverTemp: assignmentTargetRef.receiverTemp,
+          receiverType: assignmentTargetRef.receiverType,
+          receiverMaterialized: assignmentTargetRef.receiverMaterialized,
+          fieldName: assignmentTargetRef.fieldName,
+          fieldType: assignmentTargetRef.fieldType,
+        };
+      case "array_element":
+        return {
+          kind: "array_element",
+          target: assignmentTargetRef.target,
+          receiverTemp: assignmentTargetRef.receiverTemp,
+          indexTemp: assignmentTargetRef.indexTemp,
+          receiverMaterialized: assignmentTargetRef.receiverMaterialized,
+          indexMaterialized: assignmentTargetRef.indexMaterialized,
+          arrayType: assignmentTargetRef.arrayType,
+          elemType: assignmentTargetRef.elemType,
+        };
+    }
+  }
+
+  private updateTargetRefReceiverTemps(targetRef: UpdateTargetRef): Array<AwaitCallReceiverTemp> {
+    switch (targetRef.kind) {
+      case "identifier":
+        return [];
+      case "class_field":
+        return [targetRef.receiverTemp];
+      case "interface_field":
+        return [targetRef.receiverTemp];
+      case "array_element":
+        return [targetRef.receiverTemp];
+    }
+  }
+
+  private updateTargetRefIndexTemps(targetRef: UpdateTargetRef): Array<AwaitIndexTemp> {
+    switch (targetRef.kind) {
+      case "identifier":
+      case "class_field":
+      case "interface_field":
+        return [];
+      case "array_element":
+        return [targetRef.indexTemp];
+    }
+  }
+
+  private updateTargetRefExpr(targetRef: UpdateTargetRef): Expr {
+    switch (targetRef.kind) {
+      case "identifier":
+        return targetRef.target;
+      case "class_field":
+        return targetRef.target;
+      case "interface_field":
+        return targetRef.target;
+      case "array_element":
+        return targetRef.target;
+    }
+  }
+
   private tryBuildSnapshotAssignmentTargetRef(expr: Expr, tempName: string): AssignmentTargetRef | undefined {
     const root = this.unwrapParenExpr(expr);
     if (root.kind !== "assign_expr") return undefined;
@@ -6442,8 +6573,32 @@ class Emitter {
     return this.tryBuildAssignmentTargetRef(this.unwrapParenExpr(root.target), tempName, false);
   }
 
+  private tryBuildSnapshotUpdateTargetRef(expr: Expr, tempName: string): UpdateTargetRef | undefined {
+    const root = this.unwrapParenExpr(expr);
+    if (root.kind !== "prefix_op" || (root.op !== "++" && root.op !== "--")) return undefined;
+    if (this.collectAwaitExprsInExpr(root.operand).length > 0) return undefined;
+    return this.tryBuildUpdateTargetRef(this.unwrapParenExpr(root.operand), tempName, false);
+  }
+
   private buildAwaitSnapshotTemp(tempName: string, expr: Expr): AwaitSnapshotTemp {
     const root = this.unwrapParenExpr(expr);
+    if (root.kind === "prefix_op" && (root.op === "++" || root.op === "--")) {
+      const targetRef = this.tryBuildUpdateTargetRef(this.unwrapParenExpr(root.operand), tempName, true);
+      if (targetRef === undefined) {
+        throwInternalCodegenError("accepted snapshot prefix update target is missing its descriptor");
+      }
+      this.checkAssignTarget(this.updateTargetRefExpr(targetRef), { pos: root.pos });
+      const transformedExpr: PrefixOpExpr = {
+        kind: "prefix_op",
+        op: root.op,
+        operand: this.updateTargetRefExpr(targetRef),
+        pos: root.pos,
+        end: root.end,
+      };
+      const exprType = this.inferType(transformedExpr);
+      if (targetRef.kind === "identifier") return { tempName, expr, exprType };
+      return { tempName, expr, exprType, updateTargetRef: targetRef };
+    }
     if (root.kind !== "assign_expr") return { tempName, expr, exprType: this.inferType(expr) };
     const targetRef = this.tryBuildAssignmentTargetRef(this.unwrapParenExpr(root.target), tempName, true);
     if (targetRef === undefined) {
@@ -6463,16 +6618,21 @@ class Emitter {
     return { tempName, expr, exprType, assignmentTargetRef: targetRef };
   }
 
-  private appendSnapshotAssignmentTargetTemps(
+  private appendSnapshotTargetTemps(
     snapshots: Array<AwaitSnapshotTemp>,
     receiverTemps: Array<AwaitCallReceiverTemp>,
     indexTemps: Array<AwaitIndexTemp>,
   ): void {
     for (const snapshot of snapshots) {
       const targetRef = snapshot.assignmentTargetRef;
-      if (targetRef === undefined) continue;
-      for (const receiverTemp of this.assignmentTargetRefReceiverTemps(targetRef)) receiverTemps.push(receiverTemp);
-      for (const indexTemp of this.assignmentTargetRefIndexTemps(targetRef)) indexTemps.push(indexTemp);
+      if (targetRef !== undefined) {
+        for (const receiverTemp of this.assignmentTargetRefReceiverTemps(targetRef)) receiverTemps.push(receiverTemp);
+        for (const indexTemp of this.assignmentTargetRefIndexTemps(targetRef)) indexTemps.push(indexTemp);
+      }
+      const updateTargetRef = snapshot.updateTargetRef;
+      if (updateTargetRef === undefined) continue;
+      for (const receiverTemp of this.updateTargetRefReceiverTemps(updateTargetRef)) receiverTemps.push(receiverTemp);
+      for (const indexTemp of this.updateTargetRefIndexTemps(updateTargetRef)) indexTemps.push(indexTemp);
     }
   }
 
@@ -8355,7 +8515,7 @@ class Emitter {
           break;
         }
       }
-      this.appendSnapshotAssignmentTargetTemps(preAwaitSnapshotTemps, preAwaitReceiverTemps, preAwaitIndexTemps);
+      this.appendSnapshotTargetTemps(preAwaitSnapshotTemps, preAwaitReceiverTemps, preAwaitIndexTemps);
       plannedSteps.push({
         awaitExpr: awaited.awaitExpr,
         operandInfo,
@@ -8630,7 +8790,7 @@ class Emitter {
           pendingSnapshots = nextPendingSnapshots;
           const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
           const preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
-          this.appendSnapshotAssignmentTargetTemps(
+          this.appendSnapshotTargetTemps(
             preAwaitSnapshotTemps,
             preAwaitReceiverTemps,
             preAwaitIndexTemps,
@@ -8797,7 +8957,7 @@ class Emitter {
           pendingSnapshots = nextPendingSnapshots;
           const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
           const preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
-          this.appendSnapshotAssignmentTargetTemps(
+          this.appendSnapshotTargetTemps(
             preAwaitSnapshotTemps,
             preAwaitReceiverTemps,
             preAwaitIndexTemps,
@@ -9035,7 +9195,7 @@ class Emitter {
           break;
         }
       }
-      this.appendSnapshotAssignmentTargetTemps(preAwaitSnapshotTemps, preAwaitReceiverTemps, preAwaitIndexTemps);
+      this.appendSnapshotTargetTemps(preAwaitSnapshotTemps, preAwaitReceiverTemps, preAwaitIndexTemps);
       steps.push({
         awaitExpr: awaited.awaitExpr,
         operandInfo,
@@ -9127,7 +9287,7 @@ class Emitter {
           pendingSnapshots = nextPendingSnapshots;
           const preAwaitReceiverTemps: Array<AwaitCallReceiverTemp> = [];
           const preAwaitIndexTemps: Array<AwaitIndexTemp> = [];
-          this.appendSnapshotAssignmentTargetTemps(
+          this.appendSnapshotTargetTemps(
             preAwaitSnapshotTemps,
             preAwaitReceiverTemps,
             preAwaitIndexTemps,
@@ -9489,15 +9649,7 @@ class Emitter {
       return this.tryBuildSnapshotAssignmentTargetRef(expr, "__topaz_snapshot_probe") !== undefined;
     }
     if (expr.kind === "prefix_op" && (expr.op === "++" || expr.op === "--")) {
-      const target = this.unwrapParenExpr(expr.operand);
-      if (target.kind === "ident") return true;
-      if (target.kind === "prop_access") {
-        return (
-          this.isClassFieldSnapshotAssignmentTarget(target) ||
-          this.isInterfaceFieldSnapshotAssignmentTarget(target)
-        );
-      }
-      return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
+      return this.tryBuildSnapshotUpdateTargetRef(expr, "__topaz_snapshot_probe") !== undefined;
     }
     if (expr.kind === "postfix_op" && (expr.op === "++" || expr.op === "--")) {
       const target = this.unwrapParenExpr(expr.operand);
@@ -10110,7 +10262,14 @@ class Emitter {
         const temp = snapshotTemps[snapshotIndex];
         let expr: string = "";
         const targetRefMaybe = temp.assignmentTargetRef;
-        if (targetRefMaybe === undefined) {
+        const updateTargetRefMaybe = temp.updateTargetRef;
+        if (updateTargetRefMaybe !== undefined) {
+          const snapshotExpr = this.unwrapParenExpr(temp.expr);
+          if (snapshotExpr.kind !== "prefix_op" || (snapshotExpr.op !== "++" && snapshotExpr.op !== "--")) {
+            throwInternalCodegenError("snapshot update descriptor is attached to a non-prefix expression");
+          }
+          expr = this.emitSnapshotPrefixUpdateStoreValue(snapshotExpr, updateTargetRefMaybe, frameRef);
+        } else if (targetRefMaybe === undefined) {
           expr = this.emitWithExpected(temp.expr, temp.exprType);
         } else {
           const snapshotExpr = this.unwrapParenExpr(temp.expr);
@@ -10139,6 +10298,51 @@ class Emitter {
         snapshotIndex++;
       }
     }
+  }
+
+  private emitSnapshotPrefixUpdateStoreValue(
+    expr: PrefixOpExpr,
+    targetRef: UpdateTargetRef,
+    frameRef: string,
+  ): string {
+    if (targetRef.kind === "identifier") {
+      throwInternalCodegenError("identifier snapshot prefix update unexpectedly uses a descriptor store");
+    }
+    let valueType: TopazType = T_NUMBER;
+    let oldExpr: string = "";
+    let storePrefix: string = "";
+    let storeSuffix: string = "";
+    switch (targetRef.kind) {
+      case "class_field":
+        valueType = targetRef.fieldType;
+        oldExpr = `${frameRef}->${targetRef.receiverTemp.tempName}->${targetRef.fieldName}`;
+        storePrefix = `${oldExpr} = `;
+        break;
+      case "interface_field": {
+        valueType = targetRef.fieldType;
+        const receiver = `${frameRef}->${targetRef.receiverTemp.tempName}`;
+        oldExpr = `${receiver}.vt->get_${targetRef.fieldName}(${receiver}.data)`;
+        storePrefix = `${receiver}.vt->set_${targetRef.fieldName}(${receiver}.data, `;
+        storeSuffix = ")";
+        break;
+      }
+      case "array_element": {
+        valueType = targetRef.elemType;
+        const receiver = `${frameRef}->${targetRef.receiverTemp.tempName}`;
+        const index = `${frameRef}->${targetRef.indexTemp.tempName}`;
+        const arrayName = arrayShortName(targetRef.arrayType);
+        oldExpr = `topaz_array_${arrayName}_at(${receiver}, ${index})`;
+        storePrefix = `topaz_array_${arrayName}_set(${receiver}, ${index}, `;
+        storeSuffix = ")";
+        break;
+      }
+    }
+    const id = this.tmpCounter++;
+    const valueC = cTypeName(valueType);
+    const oldTemp = `__topaz_snapshot_update_old_${id}`;
+    const resultTemp = `__topaz_snapshot_update_next_${id}`;
+    const nextExpr = this.emitPrefixUpdateNextExpression(expr.op, oldTemp, { pos: expr.pos });
+    return `({ ${valueC} ${oldTemp} = ${oldExpr}; ${valueC} ${resultTemp} = ${nextExpr}; ${storePrefix}${resultTemp}${storeSuffix}; ${resultTemp}; })`;
   }
 
   private emitSnapshotAssignmentStoreValue(
