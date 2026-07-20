@@ -3180,6 +3180,9 @@ run_case await_binary_interface_postfix_update_deferred_fail $'1\n2\n5\n4\n3\n3\
 run_case await_binary_array_element_prefix_update_side_effect_index_deferred_fail ""
 run_case await_binary_interface_prefix_update_side_effect_receiver_deferred_fail ""
 run_case await_snapshot_postfix_update_target_descriptors $'sync tail\nclass receiver\nright class\n11\ninterface receiver\nright interface\n19\narray receiver\narray index\nright array\n31\n22\n43\n68\n1\n1\n1\n1\n11\n19\n31\nthen\n133'
+run_case async_await_transparent_block $'function prefix\nfunction block before\narrow before\nmethod before\nexpression before\nsync tail\narrow after\n20\nmethod after\n30\nexpression after\n40\nfunction nested\n7\narrow then\n43\nmethod then\n44\nexpression then\n45\nfunction block after\n17\nfunction suffix\nfunction then\n42'
+run_fail_case async_await_transparent_block_scope_fail examples/async_await_transparent_block_scope_fail.ts "unknown identifier 'local'"
+run_fail_case async_await_transparent_block_loop_fail examples/async_await_transparent_block_loop_fail.ts "await expression lowering is deferred"
 run_fail_case await_snapshot_prefix_update_target_await_fail examples/await_snapshot_prefix_update_target_await_fail.ts "await expression lowering is deferred"
 run_fail_case await_snapshot_prefix_update_optional_target_fail examples/await_snapshot_prefix_update_optional_target_fail.ts "await expression lowering is deferred"
 run_fail_case await_snapshot_prefix_update_conditional_target_fail examples/await_snapshot_prefix_update_conditional_target_fail.ts "await expression lowering is deferred"

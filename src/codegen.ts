@@ -133,6 +133,7 @@ type AwaitBindingInfo = {
   stmt: VarDeclStmt;
   awaitExpr: AwaitExpr;
   index: number;
+  path: Array<number>;
   pc: number;
   operandType: TopazType;
   sourcePromiseType: TopazType;
@@ -150,6 +151,7 @@ type AwaitReturnInfo = {
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
   index: number;
+  path: Array<number>;
   pc: number;
   operandType: TopazType;
   sourcePromiseType: TopazType;
@@ -376,6 +378,7 @@ type AwaitInitializerInfo = {
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
   index: number;
+  path: Array<number>;
   pc: number;
   operandType: TopazType;
   sourcePromiseType: TopazType;
@@ -397,6 +400,7 @@ type AwaitStatementInfo = {
   preAwaitSnapshotTemps: Array<AwaitSnapshotTemp>;
   postAwaitMaterializedTemps: Array<AwaitMaterializedTemp>;
   index: number;
+  path: Array<number>;
   pc: number;
   operandType: TopazType;
   sourcePromiseType: TopazType;
@@ -491,11 +495,19 @@ type AsyncLocalCapture = {
   type: TopazType;
   isConst: boolean;
   index: number;
+  path: Array<number>;
+};
+
+type AsyncStatementCursor = {
+  stmt: Stmt;
+  index: number;
+  path: Array<number>;
 };
 
 type AsyncAwaitFrameInfo = {
   steps: Array<AsyncSuspensionStep>;
   localCaptures: Array<AsyncLocalCapture>;
+  cursors: Array<AsyncStatementCursor>;
 };
 
 type SyntheticCallKind =
@@ -4505,7 +4517,6 @@ class Emitter {
       const awaitFrame = this.findAsyncAwaitFrame(block, payloadType);
       if (awaitFrame !== undefined) {
         return this.emitAsyncFunctionBodyWithAwaitFrame(
-          block,
           payloadType,
           params,
           awaitFrame,
@@ -5499,7 +5510,7 @@ class Emitter {
     return this.withSfString(sf, () => {
       const awaitFrame = this.findAsyncAwaitFrame(block, payloadType);
       if (awaitFrame !== undefined) {
-        return this.emitAsyncFunctionBodyWithAwaitFrame(block, payloadType, sig.params, awaitFrame);
+        return this.emitAsyncFunctionBodyWithAwaitFrame(payloadType, sig.params, awaitFrame);
       }
       const lines: string[] = [];
       lines.push("{");
@@ -5527,11 +5538,45 @@ class Emitter {
     });
   }
 
+  private collectAsyncStatementCursors(block: BlockStmt): Array<AsyncStatementCursor> {
+    const cursors: Array<AsyncStatementCursor> = [];
+    this.appendAsyncStatementCursors(block.stmts, [], cursors, 0);
+    return cursors;
+  }
+
+  private appendAsyncStatementCursors(
+    stmts: Array<Stmt>,
+    path: Array<number>,
+    cursors: Array<AsyncStatementCursor>,
+    nextBlockId: number,
+  ): number {
+    let nextId = nextBlockId;
+    for (const stmt of stmts) {
+      if (stmt.kind === "block_stmt") {
+        const nestedPath = path.slice();
+        nestedPath.push(nextId);
+        nextId++;
+        nextId = this.appendAsyncStatementCursors(stmt.stmts, nestedPath, cursors, nextId);
+      } else {
+        cursors.push({ stmt, index: cursors.length, path: path.slice() });
+      }
+    }
+    return nextId;
+  }
+
+  private commonAsyncPathDepth(left: Array<number>, right: Array<number>): number {
+    let depth = 0;
+    while (depth < left.length && depth < right.length && left[depth] === right[depth]) depth++;
+    return depth;
+  }
+
   private findAsyncAwaitFrame(block: BlockStmt, payloadType: TopazType): AsyncAwaitFrameInfo | undefined {
+    const cursors = this.collectAsyncStatementCursors(block);
     let awaitCount = 0;
     let hasAwaitAnchor = false;
     let awaitAnchorPos = block.pos;
-    for (const s of block.stmts) {
+    for (const cursor of cursors) {
+      const s = cursor.stmt;
       const found = this.collectAwaitExprsInStmt(s);
       if (found.length > 0 && !hasAwaitAnchor) {
         for (const first of found) {
@@ -5544,7 +5589,8 @@ class Emitter {
     }
     if (awaitCount === 0) return undefined;
     const awaitAnchor: { pos: number } = { pos: awaitAnchorPos };
-    for (const s of block.stmts) {
+    for (const cursor of cursors) {
+      const s = cursor.stmt;
       if (this.stmtHasAwaitInsideTry(s)) {
         throw new CodegenError(awaitAnchor, "await inside try/catch/finally is deferred");
       }
@@ -5553,8 +5599,14 @@ class Emitter {
     const localCaptures: Array<AsyncLocalCapture> = [];
     const supportedAwaitExprs = new Set<AwaitExpr>();
     this.scope.push();
-    for (let i = 0; i < block.stmts.length; i++) {
-      const s = block.stmts[i];
+    let activePath: Array<number> = [];
+    for (let i = 0; i < cursors.length; i++) {
+      const cursor = cursors[i];
+      const sharedDepth = this.commonAsyncPathDepth(activePath, cursor.path);
+      for (let depth = activePath.length; depth > sharedDepth; depth--) this.scope.pop();
+      for (let depth = sharedDepth; depth < cursor.path.length; depth++) this.scope.push();
+      activePath = cursor.path;
+      const s = cursor.stmt;
       if (s.kind === "var_decl") {
         const initMaybe = s.init;
         if (initMaybe !== undefined) {
@@ -5586,6 +5638,7 @@ class Emitter {
               stmt: s,
               awaitExpr: init,
               index: i,
+              path: cursor.path,
               pc: steps.length,
               operandType: operandInfo.operandType,
               sourcePromiseType: operandInfo.sourcePromiseType,
@@ -5667,6 +5720,7 @@ class Emitter {
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                     index: i,
+                    path: cursor.path,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
                     sourcePromiseType: planned.operandInfo.sourcePromiseType,
@@ -5745,6 +5799,7 @@ class Emitter {
                 preAwaitSnapshotTemps: [],
                 postAwaitMaterializedTemps: [],
                 index: i,
+                path: cursor.path,
                 pc: steps.length,
                 operandType: operandInfo.operandType,
                 sourcePromiseType: operandInfo.sourcePromiseType,
@@ -5762,6 +5817,7 @@ class Emitter {
                 type: localType,
                 isConst: s.declKind === "const",
                 index: i,
+                path: cursor.path,
               });
               this.scope.declareBinding(s.name, localType, s.declKind === "const", { pos: s.pos });
             }
@@ -5784,6 +5840,7 @@ class Emitter {
             preAwaitSnapshotTemps: [],
             postAwaitMaterializedTemps: [],
             index: i,
+            path: cursor.path,
             pc: steps.length,
             operandType: operandInfo.operandType,
             sourcePromiseType: operandInfo.sourcePromiseType,
@@ -5855,6 +5912,7 @@ class Emitter {
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                     index: i,
+                    path: cursor.path,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
                     sourcePromiseType: planned.operandInfo.sourcePromiseType,
@@ -5874,6 +5932,7 @@ class Emitter {
                     preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                     postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                     index: i,
+                    path: cursor.path,
                     pc: steps.length,
                     operandType: planned.operandInfo.operandType,
                     sourcePromiseType: planned.operandInfo.sourcePromiseType,
@@ -5929,6 +5988,7 @@ class Emitter {
               preAwaitSnapshotTemps: [],
               postAwaitMaterializedTemps,
               index: i,
+              path: cursor.path,
               pc: steps.length,
               operandType: operandInfo.operandType,
               sourcePromiseType: operandInfo.sourcePromiseType,
@@ -5940,7 +6000,7 @@ class Emitter {
             supportedAwaitExprs.add(awaitExpr);
           }
         }
-      } else if (s.kind === "return_stmt" && i === block.stmts.length - 1) {
+      } else if (s.kind === "return_stmt" && cursor.path.length === 0 && i === cursors.length - 1) {
         const valueMaybe = s.value;
         if (valueMaybe !== undefined) {
           const value = this.unwrapParenExpr(valueMaybe);
@@ -5998,6 +6058,7 @@ class Emitter {
                   preAwaitSnapshotTemps: planned.preAwaitSnapshotTemps,
                   postAwaitMaterializedTemps: planned.postAwaitMaterializedTemps,
                   index: i,
+                  path: cursor.path,
                   pc: steps.length,
                   operandType: planned.operandInfo.operandType,
                   sourcePromiseType: planned.operandInfo.sourcePromiseType,
@@ -6064,6 +6125,7 @@ class Emitter {
               preAwaitSnapshotTemps: [],
               postAwaitMaterializedTemps: [],
               index: i,
+              path: cursor.path,
               pc: steps.length,
               operandType: operandInfo.operandType,
               sourcePromiseType: operandInfo.sourcePromiseType,
@@ -6078,6 +6140,7 @@ class Emitter {
       }
       this.applyCarryNarrowing(s);
     }
+    for (let depth = activePath.length; depth > 0; depth--) this.scope.pop();
     this.scope.pop();
     if (steps.length === 0) {
       throw new CodegenError(
@@ -6085,7 +6148,8 @@ class Emitter {
         this.unsupportedAwaitLoweringMessage(),
       );
     }
-    for (const s of block.stmts) {
+    for (const cursor of cursors) {
+      const s = cursor.stmt;
       for (const found of this.collectAwaitExprsInStmt(s)) {
         if (!supportedAwaitExprs.has(found)) {
           throw new CodegenError(
@@ -6098,7 +6162,7 @@ class Emitter {
     const firstAwaitIndex = steps[0].index;
     const lastAwaitIndex = steps[steps.length - 1].index;
     for (let i = 0; i < firstAwaitIndex; i++) {
-      const s = block.stmts[i];
+      const s = cursors[i].stmt;
       if (s.kind === "var_destr_decl") {
         throw new CodegenError(
           { pos: s.pos },
@@ -6107,7 +6171,7 @@ class Emitter {
       }
     }
     for (let i = firstAwaitIndex + 1; i < lastAwaitIndex; i++) {
-      const s = block.stmts[i];
+      const s = cursors[i].stmt;
       if (s.kind === "var_destr_decl") {
         throw new CodegenError(
           { pos: s.pos },
@@ -6119,7 +6183,7 @@ class Emitter {
       // Keep payloadType threaded here so type-checking work above mirrors the
       // no-await path; void async functions are otherwise handled by return lowering.
     }
-    return { steps, localCaptures };
+    return { steps, localCaptures, cursors };
   }
 
   private inferVarDeclTypeForAsyncFrame(decl: VarDeclStmt): TopazType {
@@ -6148,7 +6212,7 @@ class Emitter {
   }
 
   private unsupportedAwaitLoweringMessage(): string {
-    return "await expression lowering is deferred; only top-level await bindings, top-level expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal return expression await, narrow multi-await binary/array literals in initializers/returns/expression statements, narrow contextual multi-await object literals in initializers/returns, and narrow multi-await binary call arguments are supported";
+    return "await expression lowering is deferred; only async-body or transparent lexical-block await bindings, expression-statement await, assignment statement await with direct/simple RHS await, local identifier, class field, interface field, or array element compound assignment statement await, call-expression statement await, initializer expression await, descriptor-backed call-argument await with direct/simple awaited arguments, one terminal async-body return expression await, narrow multi-await binary/array literals in initializers/returns/expression statements, narrow contextual multi-await object literals in initializers/returns, and narrow multi-await binary call arguments are supported";
   }
 
   private isAwaitLowerableCompoundAssignmentOp(op: string): boolean {
@@ -10110,7 +10174,6 @@ class Emitter {
   }
 
   private emitAsyncFunctionBodyWithAwaitFrame(
-    block: BlockStmt,
     payloadType: TopazType,
     params: Array<ParamInfo>,
     frame: AsyncAwaitFrameInfo,
@@ -10125,13 +10188,13 @@ class Emitter {
     const runnerName = `__topaz_async_await_${id}_runner`;
     const sourceVar = `__topaz_await_source_${id}`;
     const frameVar = `__topaz_await_frame_${id}`;
+    const ignorePathEnter = (_path: Array<number>, _indent: string): void => {};
     this.recordAsyncAwaitRunner(
       ctxName,
       runnerName,
       payloadType,
       params,
       frame,
-      block.stmts,
       runnerCaptureContext,
       runnerThisContext,
     );
@@ -10144,12 +10207,17 @@ class Emitter {
     lines.push("  topaz_try_push(&__topaz_async_frame);");
     lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
     this.liveTryFrames++;
-    const prefix = block.stmts.slice(0, firstAwaitIndex);
-    for (const s of prefix) {
-      lines.push(this.emitStatement(s, 2));
-      this.applyCarryNarrowing(s);
-    }
-    this.emitAsyncLocalCaptureStores(frame, firstAwaitIndex, frameVar, lines, "    ");
+    let activePath = this.emitAsyncCursorRange(
+      frame,
+      0,
+      firstAwaitIndex,
+      firstStep.path,
+      lines,
+      2,
+      [],
+      ignorePathEnter,
+    );
+    this.emitAsyncLocalCaptureStores(frame, firstAwaitIndex, firstStep.path, frameVar, lines, "    ");
     this.emitAwaitStepPreArgStores(firstStep, frameVar, lines, "    ");
     const operandExpr = this.emitAwaitSourceExpression(
       firstStep.awaitExpr.operand,
@@ -10170,6 +10238,7 @@ class Emitter {
     this.liveTryFrames--;
     lines.push(`    topaz_try_pop();`);
     lines.push(`    return topaz_promise_then_into(${sourceVar}, ${runnerName}, ${frameVar}, ${frameVar}->output);`);
+    this.transitionAsyncCursorPath(activePath, [], lines, 2, ignorePathEnter);
     lines.push("  } else {");
     lines.push(`    topaz_promise_reject_with(${frameVar}->output, topaz_throw_value);`);
     lines.push(`    return ${frameVar}->output;`);
@@ -10766,14 +10835,114 @@ class Emitter {
   private emitAsyncLocalCaptureStores(
     frame: AsyncAwaitFrameInfo,
     beforeIndex: number,
+    targetPath: Array<number>,
     frameRef: string,
     lines: string[],
     indent: string,
   ): void {
     for (const capture of frame.localCaptures) {
-      if (capture.index < beforeIndex) {
-        lines.push(`${indent}${frameRef}->${capture.stmt.name} = ${capture.stmt.name};`);
+      if (capture.index < beforeIndex && this.asyncPathIsPrefix(capture.path, targetPath)) {
+        lines.push(`${indent}${frameRef}->${this.asyncFrameLocalField(capture.index, capture.stmt.name)} = ${capture.stmt.name};`);
       }
+    }
+  }
+
+  private asyncFrameLocalField(index: number, name: string): string {
+    return `__topaz_local_${index}_${name}`;
+  }
+
+  private asyncPathsEqual(left: Array<number>, right: Array<number>): boolean {
+    if (left.length !== right.length) return false;
+    return this.commonAsyncPathDepth(left, right) === left.length;
+  }
+
+  private asyncPathIsPrefix(prefix: Array<number>, path: Array<number>): boolean {
+    return prefix.length <= path.length && this.commonAsyncPathDepth(prefix, path) === prefix.length;
+  }
+
+  private asyncFrameIndent(level: number): string {
+    let indent = "";
+    for (let i = 0; i < level; i++) indent += "  ";
+    return indent;
+  }
+
+  private transitionAsyncCursorPath(
+    activePath: Array<number>,
+    targetPath: Array<number>,
+    lines: string[],
+    baseIndentLevel: number,
+    onEnter: (path: Array<number>, indent: string) => void,
+  ): Array<number> {
+    const sharedDepth = this.commonAsyncPathDepth(activePath, targetPath);
+    for (let depth = activePath.length; depth > sharedDepth; depth--) {
+      this.scope.pop();
+      lines.push(`${this.asyncFrameIndent(baseIndentLevel + depth - 1)}}`);
+    }
+    const nextPath = activePath.slice(0, sharedDepth);
+    for (let depth = sharedDepth; depth < targetPath.length; depth++) {
+      lines.push(`${this.asyncFrameIndent(baseIndentLevel + depth)}{`);
+      this.scope.push();
+      nextPath.push(targetPath[depth]);
+      onEnter(nextPath.slice(), this.asyncFrameIndent(baseIndentLevel + depth + 1));
+    }
+    return targetPath.slice();
+  }
+
+  private emitAsyncCursorRange(
+    frame: AsyncAwaitFrameInfo,
+    start: number,
+    end: number,
+    targetPath: Array<number>,
+    lines: string[],
+    baseIndentLevel: number,
+    initialPath: Array<number>,
+    onEnter: (path: Array<number>, indent: string) => void,
+  ): Array<number> {
+    let activePath = initialPath;
+    for (let i = start; i < end; i++) {
+      const cursor = frame.cursors[i];
+      activePath = this.transitionAsyncCursorPath(activePath, cursor.path, lines, baseIndentLevel, onEnter);
+      lines.push(this.emitStatement(cursor.stmt, baseIndentLevel + activePath.length));
+      this.applyCarryNarrowing(cursor.stmt);
+    }
+    return this.transitionAsyncCursorPath(activePath, targetPath, lines, baseIndentLevel, onEnter);
+  }
+
+  private emitAsyncFrameLocalRestoresAtPath(
+    frame: AsyncAwaitFrameInfo,
+    current: AsyncSuspensionStep,
+    path: Array<number>,
+    lines: string[],
+    indent: string,
+  ): void {
+    for (const prior of frame.steps) {
+      if (prior.pc >= current.pc || !this.asyncPathsEqual(prior.path, path)) continue;
+      if (prior.index === current.index && this.asyncStepDefersStatementCompletion(prior)) {
+        this.emitAsyncStepTempRestores(prior, lines, indent, true);
+        continue;
+      }
+      if (prior.kind === "binding") {
+        this.scope.declareBinding(prior.stmt.name, prior.bindingType, prior.stmt.declKind === "const", { pos: prior.stmt.pos });
+        if (prior.bindingType.kind !== "void") {
+          const field = this.asyncFrameLocalField(prior.index, prior.stmt.name);
+          lines.push(`${indent}${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${field};`);
+          lines.push(`${indent}(void)${prior.stmt.name};`);
+        }
+      } else if (prior.kind === "initializer" && !this.asyncStepDefersStatementCompletion(prior)) {
+        this.scope.declareBinding(prior.stmt.name, prior.bindingType, prior.stmt.declKind === "const", { pos: prior.stmt.pos });
+        if (prior.bindingType.kind !== "void") {
+          const field = this.asyncFrameLocalField(prior.index, prior.stmt.name);
+          lines.push(`${indent}${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${field};`);
+          lines.push(`${indent}(void)${prior.stmt.name};`);
+        }
+      }
+    }
+    for (const capture of frame.localCaptures) {
+      if (capture.index >= current.index || !this.asyncPathsEqual(capture.path, path)) continue;
+      this.scope.declareBinding(capture.stmt.name, capture.type, capture.isConst, { pos: capture.stmt.pos });
+      const field = this.asyncFrameLocalField(capture.index, capture.stmt.name);
+      lines.push(`${indent}${cTypeName(capture.type)} ${capture.stmt.name} = ctx->${field};`);
+      lines.push(`${indent}(void)${capture.stmt.name};`);
     }
   }
 
@@ -10889,7 +11058,6 @@ class Emitter {
     payloadType: TopazType,
     params: Array<ParamInfo>,
     frame: AsyncAwaitFrameInfo,
-    stmts: Array<Stmt>,
     runnerCaptureContext?: CaptureContext,
     runnerThisContext?: AsyncFrameThisContext,
   ): void {
@@ -10904,14 +11072,14 @@ class Emitter {
     }
     for (const p of params) fields.push(`  ${cTypeName(p.type)} ${p.name};`);
     for (const capture of frame.localCaptures) {
-      fields.push(`  ${cTypeName(capture.type)} ${capture.stmt.name};`);
+      fields.push(`  ${cTypeName(capture.type)} ${this.asyncFrameLocalField(capture.index, capture.stmt.name)};`);
     }
     for (const binding of frame.steps) {
       if (binding.kind === "binding") {
-        if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+        if (binding.bindingType.kind !== "void") fields.push(`  ${cTypeName(binding.bindingType)} ${this.asyncFrameLocalField(binding.index, binding.stmt.name)};`);
       } else if (binding.kind === "initializer") {
         if (!this.asyncStepDefersStatementCompletion(binding) && binding.bindingType.kind !== "void") {
-          fields.push(`  ${cTypeName(binding.bindingType)} ${binding.stmt.name};`);
+          fields.push(`  ${cTypeName(binding.bindingType)} ${this.asyncFrameLocalField(binding.index, binding.stmt.name)};`);
         }
         for (const receiverTemp of binding.preAwaitReceiverTemps) {
           fields.push(`  ${cTypeName(receiverTemp.receiverType)} ${receiverTemp.tempName};`);
@@ -11000,7 +11168,7 @@ class Emitter {
           lines.push("      (void)source;");
         } else {
           const awaitC = cTypeName(step.bindingType);
-          lines.push(`      ctx->${step.stmt.name} = *(${awaitC} const *)topaz_promise_fulfilled_payload(source);`);
+          lines.push(`      ctx->${this.asyncFrameLocalField(step.index, step.stmt.name)} = *(${awaitC} const *)topaz_promise_fulfilled_payload(source);`);
         }
       } else if (step.kind === "initializer") {
         if (step.awaitedType.kind === "void") {
@@ -11037,65 +11205,30 @@ class Emitter {
     lines.push("  if (setjmp(__topaz_async_frame.env) == 0) {");
     this.liveTryFrames++;
     lines.push("    switch (ctx->__topaz_pc) {");
+    const ignorePathEnter = (_path: Array<number>, _indent: string): void => {};
     for (let i = 0; i < frame.steps.length; i++) {
       const current = frame.steps[i];
       const hasNextStep = i + 1 < frame.steps.length;
       const segmentStart = current.index + 1;
-      let segmentEnd = stmts.length;
+      let segmentEnd = frame.cursors.length;
       if (hasNextStep) {
         const nextForSegment = frame.steps[i + 1];
         segmentEnd = nextForSegment.index;
       }
       lines.push(`      case ${current.pc}: {`);
       this.scope.push();
-      const currentStmt = stmts[current.index];
+      const currentStmt = frame.cursors[current.index].stmt;
       for (const p of params) {
         this.scope.declareBinding(p.name, p.type, /* isConst */ false, { pos: currentStmt.pos });
         lines.push(`        ${cTypeName(p.type)} ${p.name} = ctx->${p.name};`);
         lines.push(`        (void)${p.name};`);
       }
-      for (const prior of frame.steps) {
-        if (prior.pc >= current.pc) continue;
-        if (prior.index === current.index && this.asyncStepDefersStatementCompletion(prior)) {
-          this.emitAsyncStepTempRestores(prior, lines, "        ", true);
-          continue;
-        }
-        if (prior.kind === "binding") {
-          this.scope.declareBinding(
-            prior.stmt.name,
-            prior.bindingType,
-            prior.stmt.declKind === "const",
-            { pos: prior.stmt.pos },
-          );
-          if (prior.bindingType.kind !== "void") {
-            lines.push(`        ${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${prior.stmt.name};`);
-            lines.push(`        (void)${prior.stmt.name};`);
-          }
-        } else if (prior.kind === "initializer") {
-          if (this.asyncStepDefersStatementCompletion(prior)) continue;
-          this.scope.declareBinding(
-            prior.stmt.name,
-            prior.bindingType,
-            prior.stmt.declKind === "const",
-            { pos: prior.stmt.pos },
-          );
-          if (prior.bindingType.kind !== "void") {
-            lines.push(`        ${cTypeName(prior.bindingType)} ${prior.stmt.name} = ctx->${prior.stmt.name};`);
-            lines.push(`        (void)${prior.stmt.name};`);
-          }
-        }
-      }
-      for (const capture of frame.localCaptures) {
-        if (capture.index >= current.index) continue;
-        this.scope.declareBinding(
-          capture.stmt.name,
-          capture.type,
-          capture.isConst,
-          { pos: capture.stmt.pos },
-        );
-        lines.push(`        ${cTypeName(capture.type)} ${capture.stmt.name} = ctx->${capture.stmt.name};`);
-        lines.push(`        (void)${capture.stmt.name};`);
-      }
+      this.emitAsyncFrameLocalRestoresAtPath(frame, current, [], lines, "        ");
+      const restoreAtPath = (path: Array<number>, indent: string): void => {
+        this.emitAsyncFrameLocalRestoresAtPath(frame, current, path, lines, indent);
+      };
+      const rootPath: Array<number> = [];
+      let activePath = this.transitionAsyncCursorPath(rootPath, current.path, lines, 4, restoreAtPath);
       const currentDefersStatement = this.asyncStepDefersStatementCompletion(current);
       if (current.kind === "return" && !currentDefersStatement) {
         const returnExpr = current.returnExpr;
@@ -11161,7 +11294,8 @@ class Emitter {
             { pos: current.stmt.pos },
           );
           if (current.bindingType.kind !== "void") {
-            lines.push(`        ${cTypeName(current.bindingType)} ${current.stmt.name} = ctx->${current.stmt.name};`);
+            const field = this.asyncFrameLocalField(current.index, current.stmt.name);
+            lines.push(`        ${cTypeName(current.bindingType)} ${current.stmt.name} = ctx->${field};`);
             lines.push(`        (void)${current.stmt.name};`);
           }
         } else if (current.kind === "initializer" && !currentDefersStatement) {
@@ -11195,7 +11329,7 @@ class Emitter {
             current.stmt.declKind === "const",
             { pos: current.stmt.pos },
           );
-          lines.push(`        ctx->${current.stmt.name} = ${current.stmt.name};`);
+          lines.push(`        ctx->${this.asyncFrameLocalField(current.index, current.stmt.name)} = ${current.stmt.name};`);
           lines.push(`        (void)${current.stmt.name};`);
         } else if (current.kind === "statement" && !currentDefersStatement) {
           const transformedExpr = current.transformedExpr;
@@ -11238,10 +11372,18 @@ class Emitter {
         } else if (!currentDefersStatement) {
           throwInternalCodegenError("unknown non-return async suspension step");
         }
-        for (const s of stmts.slice(segmentStart, segmentEnd)) {
-          lines.push(this.emitStatement(s, 4));
-          this.applyCarryNarrowing(s);
-        }
+        let segmentTargetPath: Array<number> = [];
+        if (hasNextStep) segmentTargetPath = frame.steps[i + 1].path;
+        activePath = this.emitAsyncCursorRange(
+          frame,
+          segmentStart,
+          segmentEnd,
+          segmentTargetPath,
+          lines,
+          4,
+          activePath,
+          restoreAtPath,
+        );
         if (hasNextStep) {
           const next = frame.steps[i + 1];
           const nextSourceVar = `__topaz_await_next_${i}`;
@@ -11272,7 +11414,7 @@ class Emitter {
                 break;
             }
           }
-          this.emitAsyncLocalCaptureStores(frame, next.index, "ctx", lines, "        ");
+          this.emitAsyncLocalCaptureStores(frame, next.index, next.path, "ctx", lines, "        ");
           this.emitAwaitStepPreArgStores(next, "ctx", lines, "        ");
           const operandExpr = this.emitAwaitSourceExpression(
             next.awaitExpr.operand,
@@ -11284,6 +11426,7 @@ class Emitter {
           lines.push("        topaz_try_pop();");
           lines.push(`        topaz_promise_then_into(${nextSourceVar}, ${runnerName}, ctx, target);`);
           lines.push("        return;");
+          this.transitionAsyncCursorPath(activePath, [], lines, 4, ignorePathEnter);
         }
       }
       this.scope.pop();
@@ -12732,7 +12875,7 @@ class Emitter {
       const awaitFrame = this.findAsyncAwaitFrame(blk, payloadType);
       if (awaitFrame !== undefined) {
         const captureContext = this.captureContext;
-        return this.emitAsyncFunctionBodyWithAwaitFrame(blk, payloadType, params, awaitFrame, captureContext);
+        return this.emitAsyncFunctionBodyWithAwaitFrame(payloadType, params, awaitFrame, captureContext);
       }
     }
     const lines: string[] = [];
