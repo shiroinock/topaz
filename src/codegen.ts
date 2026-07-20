@@ -6575,9 +6575,20 @@ class Emitter {
 
   private tryBuildSnapshotUpdateTargetRef(expr: Expr, tempName: string): UpdateTargetRef | undefined {
     const root = this.unwrapParenExpr(expr);
-    if (root.kind !== "prefix_op" || (root.op !== "++" && root.op !== "--")) return undefined;
-    if (this.collectAwaitExprsInExpr(root.operand).length > 0) return undefined;
-    return this.tryBuildUpdateTargetRef(this.unwrapParenExpr(root.operand), tempName, false);
+    switch (root.kind) {
+      case "prefix_op": {
+        if (root.op !== "++" && root.op !== "--") return undefined;
+        if (this.collectAwaitExprsInExpr(root.operand).length > 0) return undefined;
+        return this.tryBuildUpdateTargetRef(this.unwrapParenExpr(root.operand), tempName, false);
+      }
+      case "postfix_op": {
+        if (root.op !== "++" && root.op !== "--") return undefined;
+        if (this.collectAwaitExprsInExpr(root.operand).length > 0) return undefined;
+        return this.tryBuildUpdateTargetRef(this.unwrapParenExpr(root.operand), tempName, false);
+      }
+      default:
+        return undefined;
+    }
   }
 
   private buildAwaitSnapshotTemp(tempName: string, expr: Expr): AwaitSnapshotTemp {
@@ -6590,6 +6601,23 @@ class Emitter {
       this.checkAssignTarget(this.updateTargetRefExpr(targetRef), { pos: root.pos });
       const transformedExpr: PrefixOpExpr = {
         kind: "prefix_op",
+        op: root.op,
+        operand: this.updateTargetRefExpr(targetRef),
+        pos: root.pos,
+        end: root.end,
+      };
+      const exprType = this.inferType(transformedExpr);
+      if (targetRef.kind === "identifier") return { tempName, expr, exprType };
+      return { tempName, expr, exprType, updateTargetRef: targetRef };
+    }
+    if (root.kind === "postfix_op" && (root.op === "++" || root.op === "--")) {
+      const targetRef = this.tryBuildUpdateTargetRef(this.unwrapParenExpr(root.operand), tempName, true);
+      if (targetRef === undefined) {
+        throwInternalCodegenError("accepted snapshot postfix update target is missing its descriptor");
+      }
+      this.checkAssignTarget(this.updateTargetRefExpr(targetRef), { pos: root.pos });
+      const transformedExpr: PostfixOpExpr = {
+        kind: "postfix_op",
         op: root.op,
         operand: this.updateTargetRefExpr(targetRef),
         pos: root.pos,
@@ -9652,52 +9680,13 @@ class Emitter {
       return this.tryBuildSnapshotUpdateTargetRef(expr, "__topaz_snapshot_probe") !== undefined;
     }
     if (expr.kind === "postfix_op" && (expr.op === "++" || expr.op === "--")) {
-      const target = this.unwrapParenExpr(expr.operand);
-      if (target.kind === "ident") return true;
-      if (target.kind === "prop_access") {
-        return (
-          this.isClassFieldSnapshotAssignmentTarget(target) ||
-          this.isInterfaceFieldSnapshotAssignmentTarget(target)
-        );
-      }
-      return target.kind === "elem_access" && this.isArrayElementSnapshotAssignmentTarget(target);
+      return this.tryBuildSnapshotUpdateTargetRef(expr, "__topaz_snapshot_probe") !== undefined;
     }
     if (expr.kind !== "call_expr") return false;
     if (expr.optional) return false;
     if (this.firstSpreadArg(expr.args) !== undefined) return false;
     const callee = expr.callee;
     if (callee.kind === "prop_access" && callee.optional) return false;
-    return true;
-  }
-
-  private isClassFieldSnapshotAssignmentTarget(target: PropAccessExpr): boolean {
-    if (target.optional) return false;
-    if (!this.isSafeLvalueBase(target.receiver)) return false;
-    const receiverType = this.inferType(target.receiver);
-    if (!isClassType(receiverType)) return false;
-    const className = classNameOf(receiverType);
-    if (className === undefined) return false;
-    const cls = this.classes.get(className);
-    return cls !== undefined && cls.fields.has(target.name);
-  }
-
-  private isInterfaceFieldSnapshotAssignmentTarget(target: PropAccessExpr): boolean {
-    if (target.optional) return false;
-    if (!this.isSafeLvalueBase(target.receiver)) return false;
-    const receiverType = this.inferType(target.receiver);
-    if (!isInterfaceType(receiverType)) return false;
-    const interfaceName = interfaceNameOf(receiverType);
-    if (interfaceName === undefined) return false;
-    const iface = this.interfaces.get(interfaceName);
-    return iface !== undefined && iface.fields.has(target.name);
-  }
-
-  private isArrayElementSnapshotAssignmentTarget(target: ElemAccessExpr): boolean {
-    if (!this.isSafeLvalueBase(target.receiver)) return false;
-    if (!this.isSafeArrayElementIndex(target.index)) return false;
-    const receiverType = this.inferType(target.receiver);
-    if (!isArrayType(receiverType)) return false;
-    this.expectType(target.index, T_NUMBER);
     return true;
   }
 
@@ -10265,10 +10254,13 @@ class Emitter {
         const updateTargetRefMaybe = temp.updateTargetRef;
         if (updateTargetRefMaybe !== undefined) {
           const snapshotExpr = this.unwrapParenExpr(temp.expr);
-          if (snapshotExpr.kind !== "prefix_op" || (snapshotExpr.op !== "++" && snapshotExpr.op !== "--")) {
-            throwInternalCodegenError("snapshot update descriptor is attached to a non-prefix expression");
+          if (snapshotExpr.kind === "prefix_op" && (snapshotExpr.op === "++" || snapshotExpr.op === "--")) {
+            expr = this.emitSnapshotPrefixUpdateStoreValue(snapshotExpr, updateTargetRefMaybe, frameRef);
+          } else if (snapshotExpr.kind === "postfix_op" && (snapshotExpr.op === "++" || snapshotExpr.op === "--")) {
+            expr = this.emitSnapshotPostfixUpdateStoreValue(snapshotExpr, updateTargetRefMaybe, frameRef);
+          } else {
+            throwInternalCodegenError("snapshot update descriptor is attached to a non-update expression");
           }
-          expr = this.emitSnapshotPrefixUpdateStoreValue(snapshotExpr, updateTargetRefMaybe, frameRef);
         } else if (targetRefMaybe === undefined) {
           expr = this.emitWithExpected(temp.expr, temp.exprType);
         } else {
@@ -10343,6 +10335,51 @@ class Emitter {
     const resultTemp = `__topaz_snapshot_update_next_${id}`;
     const nextExpr = this.emitPrefixUpdateNextExpression(expr.op, oldTemp, { pos: expr.pos });
     return `({ ${valueC} ${oldTemp} = ${oldExpr}; ${valueC} ${resultTemp} = ${nextExpr}; ${storePrefix}${resultTemp}${storeSuffix}; ${resultTemp}; })`;
+  }
+
+  private emitSnapshotPostfixUpdateStoreValue(
+    expr: PostfixOpExpr,
+    targetRef: UpdateTargetRef,
+    frameRef: string,
+  ): string {
+    if (targetRef.kind === "identifier") {
+      throwInternalCodegenError("identifier snapshot postfix update unexpectedly uses a descriptor store");
+    }
+    let valueType: TopazType = T_NUMBER;
+    let oldExpr: string = "";
+    let storePrefix: string = "";
+    let storeSuffix: string = "";
+    switch (targetRef.kind) {
+      case "class_field":
+        valueType = targetRef.fieldType;
+        oldExpr = `${frameRef}->${targetRef.receiverTemp.tempName}->${targetRef.fieldName}`;
+        storePrefix = `${oldExpr} = `;
+        break;
+      case "interface_field": {
+        valueType = targetRef.fieldType;
+        const receiver = `${frameRef}->${targetRef.receiverTemp.tempName}`;
+        oldExpr = `${receiver}.vt->get_${targetRef.fieldName}(${receiver}.data)`;
+        storePrefix = `${receiver}.vt->set_${targetRef.fieldName}(${receiver}.data, `;
+        storeSuffix = ")";
+        break;
+      }
+      case "array_element": {
+        valueType = targetRef.elemType;
+        const receiver = `${frameRef}->${targetRef.receiverTemp.tempName}`;
+        const index = `${frameRef}->${targetRef.indexTemp.tempName}`;
+        const arrayName = arrayShortName(targetRef.arrayType);
+        oldExpr = `topaz_array_${arrayName}_at(${receiver}, ${index})`;
+        storePrefix = `topaz_array_${arrayName}_set(${receiver}, ${index}, `;
+        storeSuffix = ")";
+        break;
+      }
+    }
+    const id = this.tmpCounter++;
+    const valueC = cTypeName(valueType);
+    const oldTemp = `__topaz_snapshot_update_old_${id}`;
+    const nextTemp = `__topaz_snapshot_update_next_${id}`;
+    const nextExpr = this.emitPrefixUpdateNextExpression(expr.op, oldTemp, { pos: expr.pos });
+    return `({ ${valueC} ${oldTemp} = ${oldExpr}; ${valueC} ${nextTemp} = ${nextExpr}; ${storePrefix}${nextTemp}${storeSuffix}; ${oldTemp}; })`;
   }
 
   private emitSnapshotAssignmentStoreValue(
