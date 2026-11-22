@@ -4,7 +4,7 @@
   "description": "TypeScript-syntax AOT native compiler",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.34.9",
+  "packageManager": "pnpm@12.21.0",
   "bin": {
     "topaz": "./dist/cli.js"
   },
