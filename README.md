@@ -1,5 +1,7 @@
 # Topaz
 
+[![dept](https://raw.githubusercontent.com/shiroinock/topaz/dept-badge/dept.svg)](https://github.com/shiroinock/topaz/blob/dept-badge/dept.md)
+
 Topaz is an AOT native compiler for a deliberately small TypeScript-syntax
 language. It uses TypeScript syntax as the frontend, but it does not try to
 preserve JavaScript semantics: unsupported syntax, module shapes, and package
