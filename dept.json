@@ -1,0 +1,49 @@
+{
+  "lockfile": "./pnpm-lock.yaml",
+  "format": "pnpm-lock.yaml",
+  "weights": {
+    "major": 30,
+    "minor": 3,
+    "patch": 1
+  },
+  "total": 339,
+  "lag": {
+    "major": 5,
+    "minor": 29,
+    "patch": 102
+  },
+  "packages": 2,
+  "outdated": 2,
+  "errors": 0,
+  "libyear": 0.9162147945344385,
+  "rows": [
+    {
+      "name": "@types/node",
+      "package": "@types/node",
+      "kind": "dev",
+      "current": "22.20.5",
+      "latest": "26.6.7",
+      "lag": {
+        "major": 3,
+        "minor": 29,
+        "patch": 101
+      },
+      "score": 278,
+      "libyear": 0.14749540522726695
+    },
+    {
+      "name": "typescript",
+      "package": "typescript",
+      "kind": "prod",
+      "current": "5.9.3",
+      "latest": "7.0.2",
+      "lag": {
+        "major": 2,
+        "minor": 0,
+        "patch": 1
+      },
+      "score": 61,
+      "libyear": 0.7687193893071717
+    }
+  ]
+}
